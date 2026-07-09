@@ -17,6 +17,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 
 import { burstSpacingForModels, staggerStart } from "./staggerStart.js";
 import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { takePendingToolTrace } from "./toolCallTranscript.js";
 import { describeSdkError } from "./sdkError.js";
 import { userEntryVisibleTo } from "./chatReceipt.js";
 import {
@@ -121,6 +122,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
     if (this.transcriptFrozen) return;
     const { finalText, thoughts, toolCalls } = stripAgentText(text);
     const summary = summarizeAgentResponse(finalText);
+    const toolTrace = takePendingToolTrace(this.pendingToolTraceByAgent, agent.id);
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "agent",
@@ -131,6 +133,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
       ...(summary ? { summary } : {}),
       ...(thoughts.length > 0 ? { thoughts } : {}),
       ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      ...(toolTrace ? { toolTrace } : {}),
     };
     this.transcript.push(entry);
     this.opts.emit({ type: "transcript_append", entry });
@@ -139,6 +142,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.resetState(cfg);
+    this.transcriptFrozen = false;
 
     const { destPath, ready: spawnedLlm } = await this.initCloneAndSpawn(cfg, {
       preset: "council",
@@ -155,6 +159,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
       (agent, text) => this.appendCouncilAgent(agent, text),
       (e) => this.opts.emit(e as SwarmEvent),
       (entry) => this.opts.logDiag?.(entry as any),
+      this.pendingToolTraceByAgent,
     );
 
     // Gather project context
@@ -236,18 +241,28 @@ export class CouncilRunner extends DiscussionRunnerBase {
   }
 
   /**
-   * Hard stop: enter closing immediately, write summary, kill agents.
-   * (Soft drain is `drain()`.)
+   * Cut off transcript + streaming immediately on user stop. Close-out may still
+   * wait for in-flight workers before writing summary / killAll.
    */
-  async stop(): Promise<void> {
-    if (this.stopInFlight) return this.stopInFlight;
+  private enterImmediateShutdown(): void {
+    this.transcriptFrozen = true;
     this.stopping = true;
     if (this.state) this.state.stopping = true;
+    this.opts.manager.beginRunShutdown();
     try {
       this.stopAbortController?.abort(new Error("user stop"));
     } catch {
       // best-effort
     }
+  }
+
+  /**
+   * Hard stop: enter closing immediately, write summary, kill agents.
+   * (Soft drain is `drain()`.)
+   */
+  async stop(): Promise<void> {
+    if (this.stopInFlight) return this.stopInFlight;
+    this.enterImmediateShutdown();
     this.stopInFlight = this.awaitLoopThenCloseOut({ immediate: true });
     return this.stopInFlight;
   }
@@ -305,22 +320,18 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private async closeOutStopped(opts: { immediate: boolean }): Promise<void> {
     if (this.summaryWritten && (this.phase === "stopped" || this.phase === "completed")) return;
 
-    this.stopping = true;
-    if (this.state) this.state.stopping = true;
+    if (opts.immediate) {
+      this.enterImmediateShutdown();
+    } else {
+      this.stopping = true;
+      if (this.state) this.state.stopping = true;
+    }
     this.setPhase("stopping");
     this.stopCapWatchdog();
 
     const unblockDrain = this.drainResolve;
     this.drainResolve = undefined;
     unblockDrain?.();
-
-    if (opts.immediate) {
-      try {
-        this.stopAbortController?.abort(new Error("user stop"));
-      } catch {
-        // best-effort
-      }
-    }
 
     const cfg = this.active;
     if (cfg?.runId && this.state?.todoQueue) {

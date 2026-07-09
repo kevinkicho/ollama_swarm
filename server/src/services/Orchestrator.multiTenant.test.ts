@@ -54,7 +54,7 @@ test("Orchestrator: terminal-phase runs are reaped before cap check", () => {
   // user who runs 4 then never explicitly stops would be stuck).
   assert.match(
     SRC,
-    /for \(const \[id, run\] of \[\.\.\.this\.runs\.entries\(\)\]\) \{[\s\S]*?if \(!run\.isRunning\(\)\)/,
+    /cleanupStaleRuns[\s\S]*?phase === "stopped"[\s\S]*?run\.dispose\(\)/,
   );
 });
 

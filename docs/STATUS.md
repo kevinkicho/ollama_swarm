@@ -78,7 +78,7 @@ Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cl
 | Parse-salvage | Rule-based JSON extract → repair → auditor salvage → sibling-retry (no in-run brain). `auditor-salvage` chip on transcript entries. | `shared/src/parseAgentJson.ts`, `blackboard/parseSalvage.ts`, `plannerRecovery.ts` |
 | Cap watchdog (5s tick) | Wall-clock + commits + todos caps fire promptly during any phase | `BlackboardRunner.startCapWatchdog` (#305) |
 | `runs/` retention | `node scripts/prune-runs.mjs --apply` keeps last N + last 7 days | `scripts/prune-runs.mjs` |
-| `logs/` retention | `node scripts/prune-logs.mjs --apply` (current.jsonl rotations + per-run debug*.jsonl) | `scripts/prune-logs.mjs` (new) |
+| `logs/` retention | `npm run prune-logs` (dry-run) / `npm run prune-logs:apply` (caps at 50 run dirs + archive trim) | `scripts/prune-logs.mjs` |
 | CI | GitHub Actions runs npm test + type-check on push/PR | `.github/workflows/ci.yml` |
 
 ---

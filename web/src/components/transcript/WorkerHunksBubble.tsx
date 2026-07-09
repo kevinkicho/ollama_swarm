@@ -4,8 +4,10 @@ import {
   BubbleToggleRow,
   PromptContentPanel,
   ThinkingContentPanel,
+  ToolTraceContentPanel,
   type ResolvedPrompt,
   type ResolvedThinking,
+  type ResolvedToolTraceEntry,
 } from "./AgentThinking";
 import { extractFirstBalancedJson } from "../../../../shared/src/extractJson";
 
@@ -71,6 +73,7 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
   style,
   thinking,
   prompt,
+  toolTrace,
 }: {
   summary: string;
   rawJson: string;
@@ -79,10 +82,12 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
   style?: React.CSSProperties;
   thinking?: ResolvedThinking | null;
   prompt?: ResolvedPrompt | null;
+  toolTrace?: ResolvedToolTraceEntry[] | null;
 }) {
   const [showRaw, setShowRaw] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
+  const [showToolTrace, setShowToolTrace] = useState(false);
   // 2026-04-27 (UI Phase 3 follow-up per Kevin): collapsed by default,
   // matching the "Posted N todos" / Contract bubble summary-then-expand
   // pattern. Pre-fix, hunks rendered inline (capped via maxHeight) and
@@ -101,6 +106,7 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
         json={rawJson}
         thinking={thinking}
         prompt={prompt}
+        toolTrace={toolTrace}
       />
     );
   }
@@ -121,10 +127,13 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
         <BubbleToggleRow
           thinking={thinking}
           prompt={prompt}
+          toolTrace={toolTrace}
           showThinking={showThinking}
           showPrompt={showPrompt}
+          showToolTrace={showToolTrace}
           onToggleThinking={() => setShowThinking((v) => !v)}
           onTogglePrompt={() => setShowPrompt((v) => !v)}
+          onToggleToolTrace={() => setShowToolTrace((v) => !v)}
         >
           <button
             onClick={() => setExpanded((v) => !v)}
@@ -141,6 +150,7 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
         </BubbleToggleRow>
       </div>
       {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
+      {showToolTrace && toolTrace?.length ? <ToolTraceContentPanel trace={toolTrace} /> : null}
       {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       <div className="flex items-baseline gap-2 mb-2 text-[11px]">
         <div className="text-ink-400 flex-1 min-w-0 truncate">{summary}</div>

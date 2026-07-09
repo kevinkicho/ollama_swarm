@@ -119,6 +119,17 @@ export type ChatStreamingSurface = {
   activity: { kind: string; label: string };
   /** When set, registers an AbortController so stop()/drain() can cancel provider HTTP. */
   abort?: ChatStreamingAbort;
+  /**
+   * Stream length guard for one-shot pre-passes (goal/research/literature).
+   * After the model invokes at least one tool, the cap is lifted — file reads
+   * and web fetches legitimately grow the turn transcript.
+   */
+  streamGuard?: {
+    /** Max cumulative stream chars before any tool call. Default 500_000. */
+    maxCharsBeforeTools?: number;
+    /** Max after tools (default: unlimited). */
+    maxCharsAfterTools?: number;
+  };
 };
 
 function mergeAbortSignals(
@@ -161,7 +172,11 @@ export async function chatOnceWithStreaming(
   const priorOnChunk = chatOpts.onChunk;
   const priorOnTool = chatOpts.onTool;
   const loopDetector = createIntraStreamLoopDetector();
+  let toolsSeen = 0;
+  const maxCharsBeforeTools = surface.streamGuard?.maxCharsBeforeTools ?? 500_000;
+  const maxCharsAfterTools = surface.streamGuard?.maxCharsAfterTools;
   const onToolLive = (info: { tool: string; ok: boolean; preview: string }) => {
+    toolsSeen++;
     emitStreaming();
     const toolLabel = info.ok ? info.tool : `${info.tool} (error)`;
     surface.manager.emitAgentActivity(agent.id, agent.index, "streaming", {
@@ -170,7 +185,6 @@ export async function chatOnceWithStreaming(
     });
     priorOnTool?.(info);
   };
-  const maxStreamChars = 80_000;
   const controller = new AbortController();
   const abortCtx = surface.abort;
   if (abortCtx) abortCtx.activeAborts.add(controller);
@@ -184,9 +198,13 @@ export async function chatOnceWithStreaming(
         if (loopVerdict.detected) {
           throw new Error(`intra-stream loop detected: ${loopVerdict.reason}`);
         }
-        if (cumulativeText.length > maxStreamChars) {
+        const streamCap = toolsSeen > 0
+          ? (maxCharsAfterTools ?? Number.POSITIVE_INFINITY)
+          : maxCharsBeforeTools;
+        if (cumulativeText.length > streamCap) {
+          const phase = toolsSeen > 0 ? "after tool use" : "before any tool call";
           throw new Error(
-            `research stream exceeded ${maxStreamChars.toLocaleString()} chars without completing — aborting think-only runaway`,
+            `pre-pass stream exceeded ${streamCap.toLocaleString()} chars ${phase} without completing — aborting runaway stream`,
           );
         }
         emitStreaming();

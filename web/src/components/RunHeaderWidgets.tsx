@@ -43,12 +43,24 @@ export function PhasePill() {
   }
 
   const tooltip = [
-    `Status: ${label}`,
-    phase !== label ? `Runner phase: ${phase}` : null,
+    "Run status pill — simplified lifecycle for the run you're viewing.",
+    `Status: ${label}${phase !== label ? ` (runner phase: ${phase})` : ""}`,
+    label === "running"
+      ? "Agents may still be prompting, executing todos, or discussing."
+      : label === "failed"
+        ? "Run ended with an error — check transcript and run summary."
+        : label === "stopped"
+          ? "Run was stopped by user or cap before natural completion."
+          : label === "completed"
+            ? "Run finished normally — see summary for commits and contract outcomes."
+            : "No run in progress.",
     round > 0 ? `Round: ${round}` : null,
-    total > 0 ? `Todos: ${committed}/${total} committed` : null,
-    agentList.length > 0 ? `Agents: ${agentList.length}` : null,
-  ].filter(Boolean).join("\n");
+    total > 0 ? `Todos committed: ${committed}/${total}` : null,
+    thinkingAgents > 0 ? `Agents thinking now: ${thinkingAgents}` : null,
+    agentList.length > 0 ? `Agents spawned: ${agentList.length}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <span
@@ -101,7 +113,7 @@ function ProviderQueueChip() {
   return (
     <span
       className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-amber-900/30 text-amber-200 border border-amber-700/40"
-      title="Waiting for shared provider capacity"
+      title="Provider queue — LLM requests waiting for shared API capacity (Ollama/Anthropic/OpenAI gateway). Clears as slots free up."
     >
       queue {queueDepth}
     </span>
@@ -161,7 +173,11 @@ export function RuntimeTicker() {
           "text-xs font-mono tabular-nums " +
           (isTerminal ? "text-ink-400" : "text-ink-300")
         }
-        title={`Run started ${new Date(startedAt).toLocaleString()}`}
+        title={[
+          "Wall-clock elapsed since run_started.",
+          `Started: ${new Date(startedAt).toLocaleString()}`,
+          isTerminal ? "Frozen at run end." : "Updates every second while running.",
+        ].join("\n")}
       >
         {formatRuntime(elapsedMs)}
       </span>

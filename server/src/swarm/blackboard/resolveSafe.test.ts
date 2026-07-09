@@ -156,6 +156,17 @@ describe("resolveSafe — Windows / cross-platform path robustness", () => {
     );
   });
 
+  it("accepts an absolute path that points inside the clone root", async () => {
+    const abs = await resolveSafe(clone, cloneReal);
+    assert.equal(abs, cloneReal);
+  });
+
+  it("accepts an absolute path to a file inside the clone", async () => {
+    const fileAbs = path.join(cloneReal, "src", "ok.ts");
+    const abs = await resolveSafe(clone, fileAbs);
+    assert.equal(abs, fileAbs);
+  });
+
   it("accepts relative path with backslashes that stays inside clone", async () => {
     const abs = await resolveSafe(clone, "src\\new\\file.ts");
     assert.equal(abs, path.join(cloneReal, "src", "new", "file.ts"));

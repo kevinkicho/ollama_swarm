@@ -1,23 +1,26 @@
 #!/usr/bin/env node
-// Simple retention for logs/ directory.
+// Retention for repo-root logs/ directory.
 //
-// Targets the two main sources of large files:
+// Targets:
 //   - logs/current.jsonl + rotated events-*.jsonl (global event stream)
-//   - logs/<runId>/debug*.jsonl (per-run verbose debug)
+//   - logs/<runId>/debug*.jsonl and other per-run artifacts
 //
 // Policy (tunable via flags):
 //   - Keep everything from the last KEEP_DAYS (default 14).
-//   - For older files: keep at most KEEP_N_ARCHIVES of the rotated event/debug files.
-//   - Also trims very old per-run debug directories if their run is ancient.
+//   - For older rotated archives: keep at most KEEP_N_ARCHIVES (default 20).
+//   - Cap per-run log directories at MAX_RUN_DIRS (default 50, matches
+//     startupHealthCheck warning threshold). Oldest dirs beyond the cap are
+//     removed once outside the KEEP_DAYS window; if still over cap, oldest
+//     dirs are removed anyway (logged as [force]).
 //
-// This complements scripts/prune-runs.mjs (which handles clone dirs).
+// Complements scripts/prune-runs.mjs (clone dirs under runs/).
 //
 // Usage:
-//   node scripts/prune-logs.mjs                 # dry-run
-//   node scripts/prune-logs.mjs --apply
-//   node scripts/prune-logs.mjs --keep-days=7 --keep-n=10 --apply
+//   npm run prune-logs                 # dry-run
+//   npm run prune-logs:apply           # delete
+//   node scripts/prune-logs.mjs --keep-days=7 --max-run-dirs=40 --apply
 
-import { readdirSync, statSync, rmSync, renameSync } from "node:fs";
+import { readdirSync, statSync, rmSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -32,6 +35,7 @@ const ROOT = path.resolve(args.root ?? process.cwd());
 const LOG_DIR = path.join(ROOT, "logs");
 const KEEP_DAYS = Number(args["keep-days"] ?? 14);
 const KEEP_N_ARCHIVES = Number(args["keep-n"] ?? 20);
+const MAX_RUN_DIRS = Number(args["max-run-dirs"] ?? 50);
 const APPLY = args.apply === true;
 
 const cutoffMs = Date.now() - KEEP_DAYS * 24 * 60 * 60 * 1000;
@@ -40,6 +44,24 @@ function bytesHuman(bytes) {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function dirSize(dir) {
+  let total = 0;
+  const stack = [dir];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    let names;
+    try { names = readdirSync(cur); } catch { continue; }
+    for (const name of names) {
+      const full = path.join(cur, name);
+      let st;
+      try { st = statSync(full); } catch { continue; }
+      if (st.isDirectory()) stack.push(full);
+      else total += st.size;
+    }
+  }
+  return total;
 }
 
 function listFiles(dir, pattern) {
@@ -72,69 +94,106 @@ function listRunDirs() {
   return out;
 }
 
+function deleteRunDir(run, tag) {
+  const sz = dirSize(run.path);
+  const ageDays = ((Date.now() - run.mtime) / (24 * 60 * 60 * 1000)).toFixed(1);
+  console.log(`  [${tag}] ${run.name}/ (${bytesHuman(sz)}, ${ageDays}d old)`);
+  if (APPLY) {
+    try {
+      rmSync(run.path, { recursive: true, force: true });
+      return { bytes: sz, count: 1 };
+    } catch {}
+  }
+  return { bytes: sz, count: 1 };
+}
+
+/** Drop oldest run dirs until count <= max. Prefer dirs outside keep-days. */
+function selectRunDirsToCap(runDirs, max) {
+  if (runDirs.length <= max) return [];
+  const sorted = [...runDirs].sort((a, b) => a.mtime - b.mtime); // oldest first
+  const toDelete = [];
+  let remaining = runDirs.length;
+
+  for (const run of sorted) {
+    if (remaining <= max) break;
+    if (run.mtime >= cutoffMs) continue;
+    toDelete.push({ run, force: false });
+    remaining -= 1;
+  }
+
+  if (remaining > max) {
+    for (const run of sorted) {
+      if (remaining <= max) break;
+      if (toDelete.some((d) => d.run.path === run.path)) continue;
+      toDelete.push({ run, force: true });
+      remaining -= 1;
+    }
+  }
+
+  return toDelete;
+}
+
 console.log(`Pruning logs under ${LOG_DIR}`);
-console.log(`Policy: keep last ${KEEP_DAYS} days + at most ${KEEP_N_ARCHIVES} old archives per type. Apply=${APPLY}\n`);
+console.log(
+  `Policy: keep-days=${KEEP_DAYS}, keep-n-archives=${KEEP_N_ARCHIVES}, ` +
+  `max-run-dirs=${MAX_RUN_DIRS}, apply=${APPLY}\n`,
+);
 
 let totalFreed = 0;
 let deletedCount = 0;
 
-// 1. Handle global rotated event logs (events-*.jsonl)
+// 1. Global rotated event logs (events-*.jsonl)
 const eventArchives = listFiles(LOG_DIR, /^events-.*\.jsonl$/);
 eventArchives.sort((a, b) => b.mtime - a.mtime);
 
-const toDeleteEvents = [];
 for (let i = 0; i < eventArchives.length; i++) {
   const f = eventArchives[i];
   if (f.mtime < cutoffMs && i >= KEEP_N_ARCHIVES) {
-    toDeleteEvents.push(f);
+    console.log(`  [archive] ${f.name} (${bytesHuman(f.size)}, ${new Date(f.mtime).toISOString().slice(0, 10)})`);
+    if (APPLY) {
+      try { rmSync(f.path); totalFreed += f.size; deletedCount++; } catch {}
+    } else {
+      totalFreed += f.size;
+      deletedCount++;
+    }
   }
 }
 
-for (const f of toDeleteEvents) {
-  const sz = f.size;
-  console.log(`  [archive] ${f.name} (${bytesHuman(sz)}, ${new Date(f.mtime).toISOString().slice(0,10)})`);
-  if (APPLY) {
-    try { rmSync(f.path); totalFreed += sz; deletedCount++; } catch {}
-  }
-}
-
-// 2. Per-run debug files + dirs
-const runDirs = listRunDirs();
+// 2. Per-run debug files inside each run dir
+let runDirs = listRunDirs();
 for (const run of runDirs) {
   const debugFiles = listFiles(run.path, /^debug.*\.jsonl$/);
   debugFiles.sort((a, b) => b.mtime - a.mtime);
 
-  const oldDebugs = debugFiles.filter(f => f.mtime < cutoffMs);
-  // Keep only the newest KEEP_N_ARCHIVES old debug files inside this run dir
+  const oldDebugs = debugFiles.filter((f) => f.mtime < cutoffMs);
   const toDeleteDebug = oldDebugs.slice(KEEP_N_ARCHIVES);
 
   for (const f of toDeleteDebug) {
     console.log(`  [debug] ${run.name}/${f.name} (${bytesHuman(f.size)})`);
     if (APPLY) {
       try { rmSync(f.path); totalFreed += f.size; deletedCount++; } catch {}
-    }
-  }
-
-  // If the whole run dir is ancient and contains only old debug stuff, consider removing the dir
-  // (conservative: only if all its files are old and beyond keep window)
-  if (run.mtime < cutoffMs && debugFiles.length > 0) {
-    const remaining = listFiles(run.path, /./); // anything left?
-    if (remaining.length === 0 || (remaining.every(r => r.mtime < cutoffMs) && debugFiles.length <= KEEP_N_ARCHIVES)) {
-      console.log(`  [run-dir] ${run.name}/ (ancient debug dir)`);
-      if (APPLY) {
-        try {
-          const sz = remaining.reduce((s, r) => s + r.size, 0);
-          rmSync(run.path, { recursive: true, force: true });
-          totalFreed += sz;
-          deletedCount++;
-        } catch {}
-      }
+    } else {
+      totalFreed += f.size;
+      deletedCount++;
     }
   }
 }
 
-// 3. Optionally compress old archives (future improvement hook)
-console.log(`\nDone. ${APPLY ? "Deleted" : "Would delete"} ${deletedCount} files, freed ~${bytesHuman(totalFreed)}.`);
+// 3. Cap per-run log directories (matches startup health check threshold)
+runDirs = listRunDirs();
+const capDeletes = selectRunDirsToCap(runDirs, MAX_RUN_DIRS);
+for (const { run, force } of capDeletes) {
+  const tag = force ? "run-dir-force" : "run-dir";
+  const result = deleteRunDir(run, tag);
+  totalFreed += result.bytes;
+  deletedCount += result.count;
+}
+
+console.log(
+  `\nDone. ${APPLY ? "Deleted" : "Would delete"} ${deletedCount} item(s), ` +
+  `freed ~${bytesHuman(totalFreed)}. ` +
+  `${runDirs.length - capDeletes.length} run dir(s) would remain.`,
+);
 if (!APPLY) {
-  console.log("Pass --apply to actually delete.");
+  console.log("Run npm run prune-logs:apply (or pass --apply) to actually delete.");
 }

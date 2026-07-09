@@ -34,7 +34,7 @@ import {
 import { assertAllowedClonePath } from "./clonePathGuard.js";
 import { resolveLegacyActiveRunId } from "./legacyRunResolve.js";
 import { scanForRunDigests } from "../services/RunsScanner.js";
-import type { Orchestrator } from "../services/Orchestrator.js";
+import { WorkspaceBusyError, type Orchestrator } from "../services/Orchestrator.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { deriveCloneDir, RepoService } from "../services/RepoService.js";
 import { normalizeWslPath } from "../services/pathNormalize.js";
@@ -362,21 +362,6 @@ export function swarmRouter(orch: Orchestrator): Router {
     startLog.info('start request received', {
       preset: parsed.data.preset,
     });
-    // Task #147: force-restart path. When the caller sets force=true, we
-    // pre-emptively stop any existing runner so the new start always gets
-    // a clean slot. Recovers from the "stuck-orchestrator" state observed
-    // in smoke tour 2026-04-25 (map-reduce's spawn took >60s, the script's
-    // curl gave up, but the server-side runner kept holding the slot,
-    // cascading "A swarm is already running" to every subsequent preset).
-    // Best-effort: stop errors are swallowed since the new start will
-    // surface its own error if the orchestrator is truly broken.
-    if (parsed.data.force === true) {
-      try {
-        await orch.stopAll();
-      } catch (err) {
-        startLog.warn('force-stop-ignored', { error: err instanceof Error ? err.message : String(err) });
-      }
-    }
     // ModelConfig consolidation (2026-05-17): replace scattered ?? chains
     // with a single resolveModels() call. 31 decision points → 1 function.
     const resolvedModels = resolveModels(
@@ -485,6 +470,19 @@ export function swarmRouter(orch: Orchestrator): Router {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(400).json({ error: msg });
       return;
+    }
+    // Task #147: force-restart — stop only runs on THIS workspace, not every
+    // concurrent run. Resume / Run-again used to call stopAll() and killed
+    // unrelated active runs (stopReason=user).
+    if (parsed.data.force === true) {
+      try {
+        const stopped = await orch.stopRunsOnClonePath(localPath);
+        if (stopped.length > 0) {
+          startLog.info('force-stop-scoped', { localPath, stopped });
+        }
+      } catch (err) {
+        startLog.warn('force-stop-ignored', { error: err instanceof Error ? err.message : String(err) });
+      }
     }
     // R12 wiring (2026-05-04): pre-flight disk check at the parent
     // dir (the clone dir may not exist yet). Refuse if < 2 GB free —
@@ -682,8 +680,18 @@ export function swarmRouter(orch: Orchestrator): Router {
         status: orch.statusForRun(newRunId) ?? orch.status(),
       });
     } catch (err) {
+      if (err instanceof WorkspaceBusyError) {
+        res.status(409).json({
+          error: err.message,
+          code: err.code,
+          activeRunId: err.activeRunId,
+          localPath: err.localPath,
+        });
+        return;
+      }
       const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
+      const status = msg.includes("Concurrent-run cap reached") ? 409 : 500;
+      res.status(status).json({ error: msg });
     }
   });
 

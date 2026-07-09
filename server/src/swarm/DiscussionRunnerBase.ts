@@ -37,7 +37,11 @@ import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
 import type { RunAgentOpts } from "./postRoundCritiqueTypes.js";
 import { discussionReaderProfile } from "./discussionToolProfile.js";
-import { makeWebToolHandler } from "./toolCallTranscript.js";
+import {
+  makeBufferedToolHandler,
+  takePendingToolTrace,
+  type ToolTraceEntry,
+} from "./toolCallTranscript.js";
 import { tokenTracker, snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
@@ -69,6 +73,8 @@ export abstract class DiscussionRunnerBase {
   protected earlyStopDetail?: string;
   protected startedAt?: number;
   protected stats = new AgentStatsCollector();
+  /** Buffered onTool callbacks; attached to the next agent transcript entry. */
+  protected pendingToolTraceByAgent = new Map<string, ToolTraceEntry[]>();
 
   constructor(protected readonly opts: RunnerOpts) {}
 
@@ -210,6 +216,7 @@ export abstract class DiscussionRunnerBase {
     this.summaryWritten = false;
     this.earlyStopDetail = undefined;
     this.stats.reset();
+    this.pendingToolTraceByAgent.clear();
   }
 
   /** Write the run summary to disk. Guards against double-write.
@@ -379,11 +386,12 @@ export abstract class DiscussionRunnerBase {
         agentName,
         webToolsConfig: this.active,
         mcpServers: this.active?.mcpServers,
-        onTool: makeWebToolHandler((text, summary) => this.appendSystem(text, summary), agent.id),
+        onTool: makeBufferedToolHandler(this.pendingToolTraceByAgent, agent.id),
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         logDiag: this.opts.logDiag,
         runId: this.active?.runId,
         describeError: describeSdkError,
+        intraStreamLoop: true,
         ...(opts.modelOverride && opts.modelOverride !== agent.model
           ? { modelOverride: opts.modelOverride }
           : {}),
@@ -441,7 +449,7 @@ export abstract class DiscussionRunnerBase {
         signal: controller.signal,
         webToolsConfig: this.active,
         mcpServers: this.active?.mcpServers,
-        onTool: makeWebToolHandler((text, summary) => this.appendSystem(text, summary), agent.id),
+        onTool: makeBufferedToolHandler(this.pendingToolTraceByAgent, agent.id),
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         ...(opts.modelOverride && opts.modelOverride !== agent.model
           ? { modelOverride: opts.modelOverride }
@@ -467,6 +475,7 @@ export abstract class DiscussionRunnerBase {
           ? opts.enrichSummary(stripped.finalText)
           : opts.enrichSummary;
 
+      const toolTrace = takePendingToolTrace(this.pendingToolTraceByAgent, agent.id);
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",
@@ -477,6 +486,7 @@ export abstract class DiscussionRunnerBase {
         ...(summary ? { summary } : {}),
         ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
         ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
+        ...(toolTrace ? { toolTrace } : {}),
       };
 
       // Hook for multiWriter collection or other post-entry logic

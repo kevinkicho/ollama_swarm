@@ -53,6 +53,7 @@ import { tryRenderCouncilMarkers } from "./CouncilCycleDivider";
 import { ExecutionStatusBubble } from "./ExecutionStatusBubble";
 import { CouncilDraftBubble } from "./CouncilDraftBubble";
 import { CouncilSynthesisBubble } from "./CouncilSynthesisBubble";
+import { PlannerBriefBubble } from "./PlannerBriefBubble";
 import { CompactPipelineStatusLine } from "./CompactPipelineStatusLine";
 import { isCompactPipelineStatus } from "./compactPipelineStatus";
 
@@ -402,6 +403,20 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
     // the body behind "View JSON" which incorrectly buries the actual
     // draft / debate-turn content. Render the prose directly with the
     // structural label as a small header chip instead.
+    if (entry.summary.kind === "planner_brief") {
+      return (
+        <PlannerBriefBubble
+          entry={entry}
+          summary={entry.summary}
+          header={header}
+          className={className}
+          style={style}
+          thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
+        />
+      );
+    }
     if (entry.summary.kind === "council_draft") {
       const label = formatServerSummary(entry.summary);
       const chipColor =
@@ -434,7 +449,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           className={className}
           style={style}
           header={chipHeader}
-          text={entry.text}
+          text={displayText}
           thinking={thinking}
           prompt={prompt}
           toolTrace={toolTrace}
@@ -609,6 +624,7 @@ function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
           rawJson={entry.text}
           thinking={thinking}
           prompt={prompt}
+          toolTrace={toolTrace}
         />
       );
     }
@@ -719,6 +735,7 @@ function AgentClientFallback({
         rawJson={entry.text}
         thinking={thinking}
         prompt={prompt}
+        toolTrace={toolTrace}
       />
     );
   }

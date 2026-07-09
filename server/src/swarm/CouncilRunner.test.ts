@@ -224,6 +224,16 @@ test("CouncilRunner.stop — hard stop enters stopping, writes summary, kills ag
   );
   assert.match(
     COUNCIL_SRC,
+    /enterImmediateShutdown/,
+    "hard stop must freeze transcript and suppress streaming before close-out waits",
+  );
+  assert.match(
+    COUNCIL_SRC,
+    /beginRunShutdown/,
+    "hard stop must abort in-flight provider work immediately",
+  );
+  assert.match(
+    COUNCIL_SRC,
     /setPhase\("stopping"\)/,
     "hard stop must enter stopping phase immediately (not draining)",
   );

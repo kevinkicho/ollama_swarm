@@ -149,6 +149,32 @@ describe("scanForRunParents — discovers logs/{runId}/ directories with summary
 // prompts) and MoA (same gap). The 7 other discussion runners use the
 // [HUMAN] formatter on the transcript path so they were unaffected.
 
+test("Orchestrator: cleanupStaleRuns disposes terminal runs without stop()", () => {
+  assert.match(
+    ORCHESTRATOR_SRC,
+    /if \(run\.isRunning\(\)\) continue;\s*const phase = run\.runner\.status/,
+    "skip active runs — do not stop booting idle-phase runs",
+  );
+  assert.match(
+    ORCHESTRATOR_SRC,
+    /if \(!terminal\) continue;\s*run\.dispose\(\)/,
+    "terminal cleanup must dispose, not stop() — stop() marks user-stopped",
+  );
+});
+
+test("Orchestrator: stopRunsOnClonePath scopes force-restart to one clone", () => {
+  assert.match(ORCHESTRATOR_SRC, /async stopRunsOnClonePath\(localPath: string\)/);
+  assert.match(
+    ORCHESTRATOR_SRC,
+    /stopRunsOnClonePath[\s\S]*?nodePath\.resolve\(run\.cfg\.localPath\) !== target/,
+  );
+});
+
+test("Orchestrator: WorkspaceBusyError for same-clone concurrent start", () => {
+  assert.match(ORCHESTRATOR_SRC, /export class WorkspaceBusyError/);
+  assert.match(ORCHESTRATOR_SRC, /throw new WorkspaceBusyError\(otherId/);
+});
+
 test("Orchestrator.injectUser — dual-writes to runner.transcript AND amendments buffer", () => {
   // 2026-05-02 (chat lever #2): signature now accepts an optional opts
   // param with intent + targetAgent. Default intent === "steer" preserves

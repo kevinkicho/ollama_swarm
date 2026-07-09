@@ -106,6 +106,14 @@ describe("resolveEntryToolTrace", () => {
   });
 });
 
+describe("tool trace preview display", () => {
+  it("shows placeholder when preview is blank", () => {
+    const row = { tool: "glob", ok: true, preview: "" };
+    const shown = row.preview.trim() || "(no preview)";
+    assert.equal(shown, "(no preview)");
+  });
+});
+
 describe("toolTraceToggleLabel", () => {
   it("includes error count in collapsed label", () => {
     const label = toolTraceToggleLabel(

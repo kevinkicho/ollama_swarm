@@ -280,6 +280,14 @@ export type TranscriptEntrySummary =
       ok: boolean;
       preview: string;
     }
+  // Blackboard planner pre-pass: goal analysis or web research brief (prose, not JSON).
+  | {
+      kind: "planner_brief";
+      variant: "goal_analysis" | "research_brief";
+      chars: number;
+      sections: number;
+      title?: string;
+    }
   // Council autonomous loop: cycle header (discussion vs execution-only).
   | {
       kind: "council_cycle";

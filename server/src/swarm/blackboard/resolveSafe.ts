@@ -19,8 +19,28 @@ export async function resolveSafe(clone: string, relPath: string): Promise<strin
   // - UNC paths (\\server or //server) — models may emit host-OS paths
   const isWinDrive = /^[a-zA-Z]:[\/\\]/.test(relPath) || /^[a-zA-Z]:[\/]/.test(normalizedRel);
   const isUNC = relPath.startsWith("\\\\") || normalizedRel.startsWith("//");
-  if (path.isAbsolute(normalizedRel) || isWinDrive || isUNC) {
+  const looksAbsolute = path.isAbsolute(normalizedRel) || isWinDrive || isUNC;
+  // UNC shares are never inside a local clone workspace.
+  if (isUNC) {
     throw new Error(`absolute path not allowed: ${relPath}`);
+  }
+  if (looksAbsolute) {
+    // Models often pass the full clone path from the prompt (e.g.
+    // C:\Users\…\kyahoofinance032926). Accept absolutes that resolve inside
+    // the clone; still reject paths outside it (C:\evil\secret.txt).
+    const cloneReal = await fs.realpath(clone);
+    const absCandidate = path.resolve(relPath);
+    let relFromClone: string;
+    try {
+      relFromClone = path.relative(cloneReal, await fs.realpath(absCandidate));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      relFromClone = path.relative(cloneReal, absCandidate);
+    }
+    if (relFromClone.startsWith("..") || path.isAbsolute(relFromClone)) {
+      throw new Error(`absolute path not allowed: ${relPath}`);
+    }
+    relPath = relFromClone || ".";
   }
 
   // Lexical check first — cheap, and catches the obvious `../` cases without

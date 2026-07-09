@@ -148,5 +148,10 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
   if (s.kind === "web_tool") {
     return `${s.tool} ${s.ok ? "ok" : "error"}: ${s.preview}`;
   }
+  if (s.kind === "planner_brief") {
+    const label = s.variant === "goal_analysis" ? "Goal analysis" : "Research brief";
+    const sec = s.sections === 1 ? "1 section" : `${s.sections} sections`;
+    return `${label} · ${s.chars.toLocaleString()} chars · ${sec}`;
+  }
   return `Unknown summary kind`;
 }

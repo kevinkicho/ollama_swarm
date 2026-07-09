@@ -1,4 +1,5 @@
 import { memo, useEffect, useState, useMemo, useContext } from "react";
+import { useParams } from "react-router-dom";
 import { useSwarm, SwarmStoreContext, swarmSingletonStore } from "../state/store";
 // Phase 10: previous special composite/phase guards removed.
 import { AgentPanel } from "./AgentPanel";
@@ -27,6 +28,7 @@ import { buildResumeStartPayload } from "../lib/resumeRun";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
 import { resolveBrainAgentId } from "@ollama-swarm/shared/brainAlias";
 import { applyStatusSnapshotToStore } from "../state/swarmStoreHydrate";
+import { stopControlsDisabled } from "../lib/stopControls";
 
 
 type Tab =
@@ -54,8 +56,10 @@ export const SwarmView = memo(function SwarmView() {
   // low-pressure consideration; "ask" = inline answer + no direction
   // change. The server's /api/swarm/say schema validates these.
   const [sayIntent, setSayIntent] = useState<"suggest" | "steer" | "ask">("steer");
-  const [busy, setBusy] = useState(false);
+  /** Run id for an in-flight stop/drain/resume — scoped so concurrent runs stay controllable. */
+  const [actionRunId, setActionRunId] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("transcript");
+  const { runId: routeRunId } = useParams<{ runId?: string }>();
 
   // React-scan auto in key live-run tabs (transcript, metrics, board) when ?scan=1 or #scan or window enable called.
   // Helps diagnose re-renders during long runs (e.g. blackboard) without manual button every time.
@@ -86,7 +90,13 @@ export const SwarmView = memo(function SwarmView() {
   // not yet set — happens during the brief window between
   // /api/swarm/start returning and the first run_started event landing.
   const activeRunId = useSwarm((s) => s.runId);
+  const viewRunId = activeRunId ?? routeRunId;
+  const stopBusy = actionRunId != null && actionRunId === viewRunId;
   const navigate = useNavigate();
+
+  useEffect(() => {
+    setActionRunId(null);
+  }, [viewRunId]);
   const stopUrl = activeRunId
     ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/stop`
     : "/api/swarm/stop";
@@ -198,7 +208,9 @@ export const SwarmView = memo(function SwarmView() {
 
   const onStop = async () => {
     if (!confirm("Stop the swarm IMMEDIATELY? All spawned opencode processes will be terminated and any worker mid-commit will lose its work.")) return;
-    setBusy(true);
+    const targetRunId = viewRunId;
+    if (!targetRunId) return;
+    setActionRunId(targetRunId);
     try {
       const res = await fetch(stopUrl, { method: "POST" });
       // Show closing phase immediately; rehydrate will sync summary + terminal state.
@@ -210,7 +222,7 @@ export const SwarmView = memo(function SwarmView() {
       setError(err instanceof Error ? err.message : String(err));
       setPhaseScoped("stopped", (useSwarm.getState().round || 0) as any);
     } finally {
-      setBusy(false);
+      setActionRunId((cur) => (cur === targetRunId ? null : cur));
       // re-hydrate status so UI reflects backend (especially useful for
       // review/per-run views where phase might be stale)
       fetch(statusUrl).then(r => r.ok ? r.json() : null).then(applyStatusSnapshot).catch(() => {});
@@ -222,13 +234,13 @@ export const SwarmView = memo(function SwarmView() {
   // to hard stop. Backstopped at 3 min on the server side.
   const onDrain = async () => {
     if (!confirm("Drain & Stop: workers finish their current claim (no new claims), then the swarm exits. Hung prompts abort after ~90s; full backstop 3 min. OK to proceed?")) return;
+    const targetRunId = viewRunId;
+    if (!targetRunId) return;
     setPhaseScoped("draining", (useSwarm.getState().round || 0) as any);
-    setBusy(true);
+    setActionRunId(targetRunId);
     try {
-      const drainUrl = activeRunId
-        ? `/api/swarm/drain`
-        : "/api/swarm/drain";
-      const body = activeRunId ? JSON.stringify({ runId: activeRunId }) : undefined;
+      const drainUrl = viewRunId ? `/api/swarm/drain` : "/api/swarm/drain";
+      const body = viewRunId ? JSON.stringify({ runId: viewRunId }) : undefined;
       const res = await fetch(drainUrl, {
         method: "POST",
         headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -242,7 +254,7 @@ export const SwarmView = memo(function SwarmView() {
       setError(err instanceof Error ? err.message : String(err));
       setPhaseScoped("stopped", (useSwarm.getState().round || 0) as any);
     } finally {
-      setBusy(false);
+      setActionRunId((cur) => (cur === targetRunId ? null : cur));
       // re-hydrate status so UI reflects backend (especially useful for
       // review/per-run views where phase might be stale)
       fetch(statusUrl).then(r => r.ok ? r.json() : null).then(applyStatusSnapshot).catch(() => {});
@@ -262,7 +274,8 @@ export const SwarmView = memo(function SwarmView() {
       );
       if (!proceed) return;
     }
-    setBusy(true);
+    const targetRunId = viewRunId ?? "resume";
+    setActionRunId(targetRunId);
     try {
       const res = await fetch("/api/swarm/start", {
         method: "POST",
@@ -282,7 +295,7 @@ export const SwarmView = memo(function SwarmView() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false);
+      setActionRunId((cur) => (cur === targetRunId ? null : cur));
     }
   };
 
@@ -320,6 +333,7 @@ export const SwarmView = memo(function SwarmView() {
   // Show stop/drain controls for any run that has not yet reached a terminal phase.
   // isTerminal logic accounts for composite runs with sub phases.
   const canStop = !isTerminal && phase !== "stopping";
+  const stopDisabled = stopControlsDisabled(actionRunId, viewRunId, canStop);
 
   // Per-preset role labels. Each preset has its own spawn contract:
   //   - blackboard: agent-1=planner, mid=workers, N+1=auditor (Unit 58)
@@ -428,11 +442,11 @@ export const SwarmView = memo(function SwarmView() {
           {isTerminal ? (
             <button
               onClick={onResume}
-              disabled={busy}
+              disabled={stopBusy}
               className="text-xs px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
               title="Start a new run with the same workspace, preset, models, and agent topology"
             >
-              {busy ? "Starting…" : "Run again"}
+              {stopBusy ? "Starting…" : "Run again"}
             </button>
           ) : (
             <div className="flex gap-1">
@@ -442,7 +456,7 @@ export const SwarmView = memo(function SwarmView() {
                   structure has nothing analogous to drain). */}
               <button
                 onClick={onDrain}
-                disabled={busy || !canStop}
+                disabled={stopDisabled}
                 className="text-xs px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-amber-100 font-medium transition-colors disabled:bg-ink-600 disabled:text-ink-300 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-ink-800"
                 title="Soft stop: workers finish their current claim, then swarm exits. Up to 3 min. Preserves in-flight commits. (Discussion presets: same as Stop — no in-flight work to preserve.)"
               >
@@ -450,7 +464,7 @@ export const SwarmView = memo(function SwarmView() {
               </button>
               <button
                 onClick={onStop}
-                disabled={busy || !canStop}
+                disabled={stopDisabled}
                 className="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-red-100 font-medium transition-colors disabled:bg-ink-600 disabled:text-ink-300 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-ink-800"
                 title="Hard stop: aborts every in-flight prompt immediately and kills all opencode processes. Worker mid-commit loses its work. Use to escalate during a stuck Drain."
               >

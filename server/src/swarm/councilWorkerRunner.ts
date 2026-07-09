@@ -18,7 +18,7 @@ import { chatOnce } from "./chatOnce.js";
 import { extractText } from "./extractText.js";
 import { isWebToolsEnabled, resolveToolProfile } from "./toolProfiles.js";
 import { effectiveToolProfileId } from "../../../shared/src/toolProfiles.js";
-import { makeWebToolHandler } from "./toolCallTranscript.js";
+import { makeBufferedToolHandler } from "./toolCallTranscript.js";
 import { withSiblingRetry } from "./blackboard/siblingRetry.js";
 import {
   councilWorkerFallbackModel,
@@ -124,7 +124,7 @@ async function runCouncilLiteratureResearch(
       runId: cfg.runId,
       mcpServers: cfg.mcpServers,
       signal,
-      onTool: makeWebToolHandler(appendSystem, agent.id),
+      onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
     });
     const text = extractText(res)?.trim();
     if (text && text.length >= 80) {
@@ -283,6 +283,7 @@ async function executeCouncilBuildTodo(
         webToolsConfig: state.cfg,
         runId: state.cfg.runId,
         mcpServers: state.cfg.mcpServers,
+        onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
       });
       const text = extractText(res)?.trim();
       if (text) {
@@ -474,6 +475,7 @@ async function tryWorkerPrompt(
       agentName: workerProfile,
       signal: controller.signal,
       intraStreamLoop: true,
+      onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
     }, state.cfg.providerFailover);
 
     const res = extractProviderText(raw);
@@ -519,6 +521,7 @@ async function tryWorkerPrompt(
             manager: state.manager as any,
             agentName: workerProfile,
             signal: controller.signal,
+            onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
           }, state.cfg.providerFailover);
           const repairText = extractProviderText(repairRaw);
           if (repairText) {

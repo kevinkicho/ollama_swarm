@@ -260,6 +260,7 @@ const TEST_FILES = [
   "../web/src/components/PlannerThinkingPanel.test.ts",
   "../web/src/hooks/useReplayState.test.ts",
   "../web/src/lib/costBreakdown.test.ts",
+  "../web/src/lib/stopControls.test.ts",
   "../web/src/state/store.test.ts",
   "../web/src/state/transcriptMerge.test.ts",
   "../web/src/state/swarmStoreHydrate.test.ts",
@@ -267,6 +268,7 @@ const TEST_FILES = [
   "../web/src/components/useSegmentSplitter.test.ts",
   "../web/src/components/transcript/JsonBubbles.test.ts",
   "../web/src/components/transcript/AgentThinking.test.ts",
+
   "../web/src/components/transcript/compactPipelineStatus.test.ts",
   "../web/src/components/transcript/streamDisplayMetrics.test.ts",
   "../web/src/components/transcript/councilSynthesisParse.test.ts",

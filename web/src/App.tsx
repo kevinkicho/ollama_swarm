@@ -224,7 +224,7 @@ function AppMain() {
 
       {/* Main content: SetupForm or SwarmView */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        {effectiveShowSetup ? <SetupForm /> : <SwarmView />}
+        {effectiveShowSetup ? <SetupForm /> : <SwarmView key={routeRunId ?? storeRunId ?? "singleton"} />}
       </div>
     </SystemWrapper>
   );

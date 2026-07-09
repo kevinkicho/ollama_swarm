@@ -230,6 +230,99 @@ export async function runFirstPassContract(
   );
 }
 
+/** Narrow deps for council per-agent contract drafts (blackboard + CouncilRunner). */
+export interface CouncilContractDraftDeps {
+  getStopping: () => boolean;
+  getActive: () => RunConfig | undefined;
+  appendSystem: (msg: string) => void;
+  appendAgent: (agent: Agent, text: string) => void;
+  manager: AgentManager;
+  emitAgentState: (s: import("../../types.js").AgentState) => void;
+  promptPlannerSafely: ContractContext["promptPlannerSafely"];
+}
+
+/**
+ * Two-phase council draft: explore the clone with repo tools, then emit JSON.
+ * Mirrors the single-agent `runPlannerEmitRecovery` explore→emit split so drafts
+ * are grounded in actual file reads, not filename pattern-matching.
+ */
+export async function runCouncilContractDraftForAgent(
+  deps: CouncilContractDraftDeps,
+  agent: Agent,
+  seed: PlannerSeed,
+): Promise<{ agent: Agent; text: string } | null> {
+  const exploreProfile = resolveToolProfile("planner", deps.getActive());
+  const emitProfile = "swarm-read" as import("../../tools/ToolDispatcher.js").ProfileName;
+  const explorePrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(
+    seed,
+    agent.model,
+  )}`;
+
+  emitAgentActivity(agent, deps.manager, deps.emitAgentState, {
+    kind: "contract",
+    label: "contract explore",
+    attempt: 1,
+    maxAttempts: 2,
+    mode: "explore",
+  });
+  deps.appendSystem(
+    `Council contract: Agent ${agent.index} exploring repo before draft…`,
+  );
+
+  const { response: exploreResponse, agentUsed: exploreAgent } =
+    await deps.promptPlannerSafely(
+      agent,
+      explorePrompt,
+      exploreProfile,
+      undefined,
+      { kind: "contract", label: "contract explore" },
+    );
+  if (deps.getStopping()) return null;
+  deps.appendAgent(exploreAgent, exploreResponse);
+
+  const parsedExplore = parseFirstPassContractResponse(exploreResponse);
+  const exploreGroundingError = parsedExplore.ok
+    ? validateContractGrounding(parsedExplore.contract, seed.repoFiles)
+    : undefined;
+  if (parsedExplore.ok && !exploreGroundingError) {
+    deps.appendSystem(
+      `Council contract: Agent ${exploreAgent.index} draft parsed from explore — skipping redundant emit.`,
+    );
+    return { agent: exploreAgent, text: exploreResponse };
+  }
+
+  const emitRepairReason = parsedExplore.ok
+    ? (exploreGroundingError ?? "grounding failed")
+    : parsedExplore.reason;
+
+  emitAgentActivity(exploreAgent, deps.manager, deps.emitAgentState, {
+    kind: "contract",
+    label: "contract draft",
+    attempt: 2,
+    maxAttempts: 2,
+    mode: "emit",
+  });
+  deps.appendSystem(
+    `Council contract: Agent ${exploreAgent.index} emitting contract JSON…`,
+  );
+
+  const emitPrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractRepairPrompt(
+    exploreResponse,
+    emitRepairReason,
+  )}`;
+  const { response: emitResponse, agentUsed: emitAgent } =
+    await deps.promptPlannerSafely(
+      exploreAgent,
+      emitPrompt,
+      emitProfile,
+      CONTRACT_JSON_SCHEMA,
+      { kind: "contract", label: "contract draft" },
+    );
+  if (deps.getStopping()) return null;
+  deps.appendAgent(emitAgent, emitResponse);
+  return { agent: emitAgent, text: emitResponse };
+}
+
 export async function runFirstPassContractOrchestrator(
   ctx: ContractContext,
   planner: Agent,
@@ -258,35 +351,34 @@ export async function tryCouncilContract(
   seed: PlannerSeed,
 ): Promise<ParsedContract | null> {
   const allAgents = [planner, ...workers];
-  const draftPrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(
-    seed,
-    planner.model,
-  )}`;
+  const draftDeps: CouncilContractDraftDeps = {
+    getStopping: ctx.getStopping,
+    getActive: ctx.getActive,
+    appendSystem: ctx.appendSystem,
+    appendAgent: ctx.appendAgent,
+    manager: ctx.manager,
+    emitAgentState: ctx.emitAgentState,
+    promptPlannerSafely: (
+      agent,
+      promptText,
+      agentName,
+      ollamaFormat,
+      activity,
+    ) => ctx.promptPlannerSafely(agent, promptText, agentName, ollamaFormat, activity),
+  };
 
   ctx.appendSystem(
-    `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts.`,
+    `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts (explore → emit, with repo tools).`,
   );
 
   const { burstSpacingForModels, staggerStart } = await import("../staggerStart.js");
   let draftsCompleted = 0;
   const draftSpacing = burstSpacingForModels(allAgents);
   const draftResults = await staggerStart(allAgents, async (a) => {
-    emitAgentActivity(a, ctx.manager, ctx.emitAgentState, {
-      kind: "contract",
-      label: "contract draft",
-      attempt: 1,
-      maxAttempts: 1,
-    });
-    ctx.appendSystem(
-      `Council contract: Agent ${a.index} drafting first-pass contract…`,
-    );
     try {
-      const text = await ctx.promptAgent(a, draftPrompt, "swarm", "json", CONTRACT_JSON_SCHEMA, {
-        kind: "contract",
-        label: "contract draft",
-      });
-      ctx.appendAgent(a, text);
-      return { agent: a, text };
+      const result = await runCouncilContractDraftForAgent(draftDeps, a, seed);
+      if (!result) return null;
+      return result;
     } finally {
       draftsCompleted++;
       if (draftsCompleted < allAgents.length) {
@@ -309,6 +401,7 @@ export async function tryCouncilContract(
       );
       continue;
     }
+    if (!r.value) continue;
     const parsed = parseFirstPassContractResponse(r.value.text);
     if (!parsed.ok) {
       ctx.appendSystem(

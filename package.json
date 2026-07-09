@@ -23,6 +23,10 @@
     "test:shared": "npm -w shared run test",
     "typecheck": "npm -w shared run typecheck && npm -w server run typecheck && npm -w web run typecheck",
     "verify-ci": "node scripts/verify-ci.mjs",
+    "prune-logs": "node scripts/prune-logs.mjs",
+    "prune-logs:apply": "node scripts/prune-logs.mjs --apply",
+    "prune-runs": "node scripts/prune-runs.mjs",
+    "prune-runs:apply": "node scripts/prune-runs.mjs --apply",
     "setup-git-hooks": "node scripts/install-git-hooks.mjs",
     "prepare": "node scripts/install-git-hooks.mjs || echo 'Git hook setup skipped (no .git or non-fatal error)'"
   },

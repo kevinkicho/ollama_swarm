@@ -4,13 +4,14 @@ import type { ExitContract, ExitCriterion, Todo as BoardTodo } from "./blackboar
 import { TodoQueue, type PostTodoInput } from "./blackboard/TodoQueue.js";
 import { FindingsLog } from "./blackboard/FindingsLog.js";
 import { groundExpectedFiles } from "./blackboard/contractGrounding.js";
+import { parseFirstPassContractResponse } from "./blackboard/prompts/firstPassContract.js";
 import {
-  buildFirstPassContractUserPrompt,
-  parseFirstPassContractResponse,
-  FIRST_PASS_CONTRACT_SYSTEM_PROMPT,
-} from "./blackboard/prompts/firstPassContract.js";
-import { buildContract, type ContractContext } from "./blackboard/contractBuilder.js";
-import { buildSeed } from "./blackboard/contractBuilder.js";
+  buildContract,
+  buildSeed,
+  runCouncilContractDraftForAgent,
+  type ContractContext,
+  type CouncilContractDraftDeps,
+} from "./blackboard/contractBuilder.js";
 import type { TranscriptEntry } from "../types.js";
 import type { PlannerSeed } from "./blackboard/prompts/planner.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
@@ -18,6 +19,7 @@ import { canonicalizeExpectedFiles } from "./councilPathCanonicalize.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractProviderText, createTimeoutController } from "./councilUtils.js";
 import { burstSpacingForModels, staggerStart } from "./staggerStart.js";
+import { makeBufferedToolHandler, type ToolTraceEntry } from "./toolCallTranscript.js";
 
 /** Wall-clock cap per contract draft. Covers provider cold-start (p95
  *  can exceed 90s on :cloud) without blocking the whole batch forever. */
@@ -60,6 +62,8 @@ export interface CouncilAdapterState {
   appendAgent: (agent: Agent, text: string) => void;
   emit: (e: unknown) => void;
   logDiag: (entry: Record<string, unknown>) => void;
+  /** Shared with CouncilRunner — tool invocations attach to the next appendAgent bubble. */
+  pendingToolTraceByAgent: Map<string, ToolTraceEntry[]>;
 }
 
 export function buildCouncilAdapterState(
@@ -71,6 +75,7 @@ export function buildCouncilAdapterState(
   appendAgent: (agent: Agent, text: string) => void,
   emit: (e: unknown) => void,
   logDiag: (entry: Record<string, unknown>) => void,
+  pendingToolTraceByAgent: Map<string, ToolTraceEntry[]>,
 ): CouncilAdapterState {
   return {
     cfg,
@@ -92,6 +97,7 @@ export function buildCouncilAdapterState(
     appendAgent,
     emit,
     logDiag,
+    pendingToolTraceByAgent,
   };
 }
 
@@ -104,6 +110,7 @@ export async function promptAgent(
   providerFailover?: readonly string[],
   signal?: AbortSignal,
   activity?: { kind?: string; label?: string },
+  pendingToolTraceByAgent?: Map<string, ToolTraceEntry[]>,
 ): Promise<string> {
   const raw = await promptWithFailoverAuto(agent, prompt, {
     manager: manager as any,
@@ -111,6 +118,9 @@ export async function promptAgent(
     formatExpect,
     signal: signal ?? new AbortController().signal,
     ...(activity ? { activity: { kind: activity.kind ?? "council", label: activity.label } } : {}),
+    ...(pendingToolTraceByAgent
+      ? { onTool: makeBufferedToolHandler(pendingToolTraceByAgent, agent.id) }
+      : {}),
   }, providerFailover);
   const text = extractProviderText(raw);
   return text ?? "";
@@ -124,6 +134,7 @@ export async function promptPlannerSafely(
   providerFailover?: readonly string[],
   activity?: { kind?: string; label?: string },
   signal?: AbortSignal,
+  pendingToolTraceByAgent?: Map<string, ToolTraceEntry[]>,
 ): Promise<{ response: string; agentUsed: Agent }> {
   const raw = await promptWithFailoverAuto(agent, promptText, {
     manager: manager as any,
@@ -131,6 +142,9 @@ export async function promptPlannerSafely(
     formatExpect: "json",
     signal: signal ?? new AbortController().signal,
     ...(activity ? { activity: { kind: activity.kind ?? "council", label: activity.label } } : {}),
+    ...(pendingToolTraceByAgent
+      ? { onTool: makeBufferedToolHandler(pendingToolTraceByAgent, agent.id) }
+      : {}),
   }, providerFailover);
   const text = extractProviderText(raw);
   return { response: text ?? "", agentUsed: agent };
@@ -169,9 +183,28 @@ function councilBuildSeedContext(
     getPlannerFallbackModel: () => undefined,
     updateAgentModel: () => {},
     promptPlannerSafely: (agent, promptText, agentName) =>
-      promptPlannerSafely(agent, promptText, agentName, state.manager, state.cfg.providerFailover),
+      promptPlannerSafely(
+        agent,
+        promptText,
+        agentName,
+        state.manager,
+        state.cfg.providerFailover,
+        undefined,
+        undefined,
+        state.pendingToolTraceByAgent,
+      ),
     promptAgent: (agent, prompt, agentName, formatExpect) =>
-      promptAgent(agent, prompt, agentName, formatExpect, state.manager, state.cfg.providerFailover),
+      promptAgent(
+        agent,
+        prompt,
+        agentName,
+        formatExpect,
+        state.manager,
+        state.cfg.providerFailover,
+        undefined,
+        undefined,
+        state.pendingToolTraceByAgent,
+      ),
     emit: state.emit,
     getTranscript,
     getPlanner: () => planner,
@@ -202,33 +235,35 @@ export async function runContractDerivation(
     state.appendSystem("Council contract: no LLM lead agent — proceeding without contract.");
     return;
   }
-  const draftPrompt = `${FIRST_PASS_CONTRACT_SYSTEM_PROMPT}\n\n${buildFirstPassContractUserPrompt(seed)}`;
-
   state.appendSystem(
-    `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts.`,
+    `Council contract: prompting ${allAgents.length} agents for independent first-pass drafts (explore → emit, with repo tools).`,
   );
 
   let draftsCompleted = 0;
   const draftSpacing = burstSpacingForModels(allAgents);
   const draftResults = await staggerStart(allAgents, async (a) => {
-    state.manager.markStatus(a.id, "thinking", {
-      activityKind: "contract",
-      activityLabel: "contract draft",
-    });
-    state.appendSystem(
-      `Council contract: Agent ${a.index} drafting first-pass contract…`,
-    );
     const { controller, cleanup } = createTimeoutController(CONTRACT_DRAFT_TIMEOUT_MS);
     try {
-      const text = await promptAgent(
-        a, draftPrompt, "swarm", "json", state.manager, state.cfg.providerFailover, controller.signal,
-        { kind: "contract", label: "contract draft" },
-      );
-      // Post each draft to the transcript immediately — do not wait for the
-      // slowest agent in the parallel batch (provider cold-start can lag one
-      // agent while others already finished streaming).
-      state.appendAgent(a, text);
-      return { agent: a, text };
+      const draftDeps: CouncilContractDraftDeps = {
+        getStopping: () => state.stopping,
+        getActive: () => state.cfg,
+        appendSystem: state.appendSystem,
+        appendAgent: state.appendAgent,
+        manager: state.manager,
+        emitAgentState: (s) => state.emit({ type: "agent_state", agent: s }),
+        promptPlannerSafely: (agent, promptText, agentName, ollamaFormat, activity) =>
+          promptPlannerSafely(
+            agent,
+            promptText,
+            agentName,
+            state.manager,
+            state.cfg.providerFailover,
+            activity,
+            controller.signal,
+            state.pendingToolTraceByAgent,
+          ),
+      };
+      return await runCouncilContractDraftForAgent(draftDeps, a, seed);
     } finally {
       cleanup();
       state.manager.markStatus(a.id, "ready");
@@ -250,6 +285,7 @@ export async function runContractDerivation(
       state.appendSystem(`Council draft from ${agent.id} failed (${msg}).`);
       continue;
     }
+    if (!r.value) continue;
     const parsed = parseFirstPassContractResponse(r.value.text);
     if (!parsed.ok) continue;
     if (parsed.dropped.length > 0) {

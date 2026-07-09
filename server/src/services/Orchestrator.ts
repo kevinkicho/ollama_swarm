@@ -38,6 +38,20 @@ import { RunEventHub } from "./RunEventHub.js";
 import { prepareResearchConfig, isResearchRun } from "../swarm/researchHelpers.js";
 import { BrainIntegration } from "./BrainIntegration.js";
 
+/** Thrown when a second start targets a clone that already has an active run. */
+export class WorkspaceBusyError extends Error {
+  readonly code = "workspace_busy" as const;
+  constructor(
+    readonly activeRunId: string,
+    readonly localPath: string,
+  ) {
+    super(
+      `Another run ${activeRunId} is already active on this workspace (${localPath}). ` +
+      `Stop it first, or start the second run from a different parent path for true concurrency.`,
+    );
+    this.name = "WorkspaceBusyError";
+  }
+}
 
 export interface OrchestratorOpts {
   /** Mint one AgentManager per run so concurrent runs don't share
@@ -331,15 +345,19 @@ export class Orchestrator {
     return [...paths];
   }
 
-  /** Cleanup any runs that have terminated naturally but weren't
-   *  explicitly stopped. Prevents stale runs from counting against
-   *  the concurrent-run cap. */
+  /** Drop runs that reached a terminal phase but remain in the map.
+   *  Must NOT call stop() — that rewrites the summary as user-stopped
+   *  and used to kill booting runs (phase idle) when a second start ran
+   *  cleanup before runner.start() advanced phase. */
   private async cleanupStaleRuns(): Promise<void> {
     for (const [id, run] of [...this.runs.entries()]) {
-      if (!run.isRunning()) {
-        await run.stop();
-        this.runs.delete(id);
-      }
+      if (run.isRunning()) continue;
+      const phase = run.runner.status?.().phase ?? "idle";
+      const terminal =
+        phase === "stopped" || phase === "completed" || phase === "failed";
+      if (!terminal) continue;
+      run.dispose();
+      this.runs.delete(id);
     }
   }
 
@@ -1032,12 +1050,11 @@ export class Orchestrator {
     // it to disk where the history dropdown reads digests from.
     cfg.runId = runId;
     this.brain.registerClonePath(cfg.localPath);
-    // Prevent concurrent runs on same clone even in same process (in-memory)
+    // One active writer per clone (git + lock). Other workspaces may run concurrently.
+    const resolvedLocal = nodePath.resolve(cfg.localPath);
     for (const [otherId, otherRun] of this.runs.entries()) {
-      if (otherRun.cfg.localPath === cfg.localPath) {
-        throw new Error(
-          `Another run ${otherId} is already active on this clone path ${cfg.localPath}. Stop it first.`,
-        );
+      if (nodePath.resolve(otherRun.cfg.localPath) === resolvedLocal) {
+        throw new WorkspaceBusyError(otherId, cfg.localPath);
       }
     }
     // R8 wiring (2026-05-04): acquire the cross-process clone lock.
@@ -1146,7 +1163,6 @@ export class Orchestrator {
     // Cache parent dir so /api/swarm/runs can keep showing historical
     // runs in this folder even after this run terminates. Persisted
     // to /tmp so a dev-server restart doesn't lose it.
-    const resolvedLocal = nodePath.resolve(cfg.localPath);
     const parentOfLocal = nodePath.dirname(resolvedLocal);
     this.lastParentPath = parentOfLocal;
     writePersistedLastParent(this.lastParentPath);
@@ -1252,6 +1268,18 @@ export class Orchestrator {
     for (const id of ids) {
       await this.stopRun(id);
     }
+  }
+
+  /** Stop active runs on one clone only — used by force-restart on resume. */
+  async stopRunsOnClonePath(localPath: string): Promise<string[]> {
+    const target = nodePath.resolve(localPath);
+    const stopped: string[] = [];
+    for (const [id, run] of [...this.runs.entries()]) {
+      if (nodePath.resolve(run.cfg.localPath) !== target) continue;
+      await this.stopRun(id);
+      stopped.push(id);
+    }
+    return stopped;
   }
 
   async stop(): Promise<void> {

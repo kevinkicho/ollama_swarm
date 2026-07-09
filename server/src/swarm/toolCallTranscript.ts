@@ -7,6 +7,52 @@ export type ToolTraceEntry = {
   ts: number;
 };
 
+const TOOL_PREVIEW_MAX = 200;
+
+function summarizeToolArgs(tool: string, args: Record<string, unknown>): string {
+  switch (tool) {
+    case "read":
+    case "list":
+      return String(args.path ?? ".").trim();
+    case "glob":
+      return String(args.pattern ?? "").trim();
+    case "grep": {
+      const pattern = String(args.pattern ?? "").trim();
+      const scope = String(args.path ?? "").trim();
+      return scope && scope !== "." ? `${pattern} in ${scope}` : pattern;
+    }
+    case "bash":
+      return String(args.command ?? "").trim().slice(0, 80);
+    case "web_fetch":
+      return String(args.url ?? "").trim();
+    case "web_search":
+      return String(args.query ?? "").trim().slice(0, 100);
+    default:
+      if (tool.includes(":")) return tool;
+      return "";
+  }
+}
+
+/** Human-readable one-liner for tool trace UI (includes args when output is empty). */
+export function formatToolInvokePreview(
+  tool: string,
+  args: Record<string, unknown>,
+  result: { ok: true; output: string } | { ok: false; error: string },
+): string {
+  const argHint = summarizeToolArgs(tool, args);
+  if (result.ok) {
+    const out = result.output.replace(/\s+/g, " ").trim();
+    if (out.length > 0) {
+      const clipped = out.length > TOOL_PREVIEW_MAX ? `${out.slice(0, TOOL_PREVIEW_MAX)}…` : out;
+      return argHint ? `${argHint} → ${clipped}` : clipped;
+    }
+    return argHint ? `${argHint} → (no output)` : "(no output)";
+  }
+  const err = (result.error || "unknown error").replace(/\s+/g, " ").trim();
+  const clipped = err.length > TOOL_PREVIEW_MAX ? `${err.slice(0, TOOL_PREVIEW_MAX)}…` : err;
+  return argHint ? `${argHint} → ${clipped}` : clipped;
+}
+
 export function toolInvokeSummary(
   tool: string,
   ok: boolean,

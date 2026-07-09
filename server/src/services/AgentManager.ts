@@ -310,8 +310,64 @@ export class AgentManager {
   // used to call `this.onState(s)` directly now calls this.
   private setAgentState(s: AgentState): void {
     if (this.killed) return;
+    if (this.runShutdownStarted && (s.status === "thinking" || s.status === "retrying")) return;
     this.agentStates.set(s.id, s);
     this.onState(s);
+  }
+
+  /**
+   * Immediate run shutdown: stop streaming to the UI and abort in-flight provider
+   * HTTP before killAll() tears down processes. Idempotent — safe to call from
+   * stop() and again from close-out.
+   */
+  beginRunShutdown(): void {
+    if (this.runShutdownStarted) return;
+    this.runShutdownStarted = true;
+    this.runStreamingSuppressed = true;
+
+    for (const a of this.agents.values()) {
+      const stopped: AgentState = {
+        id: a.id,
+        index: a.index,
+        sessionId: a.sessionId,
+        model: a.model,
+        status: "stopped",
+      };
+      this.agentStates.set(a.id, stopped);
+      this.onState(stopped);
+      this.endStreamingUi(a.id);
+      this.promptActivityByAgent.delete(a.id);
+    }
+
+    for (const session of this.sessions.values()) {
+      try {
+        session.abortController.abort(new Error("run shutdown"));
+      } catch {
+        // best-effort
+      }
+    }
+
+    for (const stream of this.streamingByAgent.values()) {
+      if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);
+      stream.reject(new Error("run shutdown"));
+    }
+    this.streamingByAgent.clear();
+
+    for (const timer of this.streamingFlushTimers.values()) clearTimeout(timer);
+    this.streamingFlushTimers.clear();
+    this.latestStreamingText.clear();
+    this.partialStreams.clear();
+    this.partsByAgent.clear();
+    this.messageRoles.clear();
+  }
+
+  private endStreamingUi(agentId: string): void {
+    const flushTimer = this.streamingFlushTimers.get(agentId);
+    if (flushTimer) clearTimeout(flushTimer);
+    this.streamingFlushTimers.delete(agentId);
+    this.latestStreamingText.delete(agentId);
+    this.partialStreams.delete(agentId);
+    this.onEvent({ type: "agent_streaming_end", agentId });
   }
 
   // E3 Phase 3 (slice): construct an Agent without spawning an opencode
@@ -334,6 +390,8 @@ export class AgentManager {
       model: opts.model,
     };
     this.killed = false;
+    this.runShutdownStarted = false;
+    this.runStreamingSuppressed = false;
     this.sessions.set(session.id, session);
     this.setAgentState(stateBase);
     const agent: Agent = {
@@ -462,6 +520,7 @@ export class AgentManager {
   markStatus(id: string, status: AgentState["status"], extra: Partial<AgentState> = {}): void {
     const a = this.agents.get(id);
     if (!a) return;
+    if (this.runShutdownStarted && (status === "thinking" || status === "retrying")) return;
     const patch: Partial<AgentState> = { ...extra };
     // Unit 39: callers often markStatus("thinking") without thinkingSince.
     // Auto-fill so REST /status + sidebar elapsed ticker stay in sync.
@@ -632,6 +691,9 @@ export class AgentManager {
   // X ready on port Y" system message that already signals readiness.
   // Set by warmupAgent for the duration of the warmup prompt only.
   private suppressStreamingFor = new Set<string>();
+  /** True from beginRunShutdown() until the next spawn — blocks streaming/UI churn during close-out. */
+  private runShutdownStarted = false;
+  private runStreamingSuppressed = false;
 
   recordPromptComplete(
     agentId: string,
@@ -715,6 +777,7 @@ export class AgentManager {
   }
 
   async killAll(): Promise<KillAllResult> {
+    this.beginRunShutdown();
     // Broadcast "stopped" state for each agent BEFORE setting killed=true.
     // The killed guard in setAgentState discards events after killed is set,
     // so these intentional "stopped" transitions must fire first for the
@@ -883,6 +946,7 @@ export class AgentManager {
   // to mirror it into the existing per-agent buffers + trigger a UI
   // emit (throttled, same as the SSE path).
   recordStreamingText(agentId: string, agentIndex: number, cumulativeText: string): void {
+    if (this.runStreamingSuppressed) return;
     const agent = this.agents.get(agentId) ?? ({ id: agentId, index: agentIndex } as Agent);
     const isFirstByte = !this.partialStreams.has(agentId);
     this.partialStreams.set(agentId, { text: cumulativeText, updatedAt: Date.now() });
@@ -926,6 +990,7 @@ export class AgentManager {
   private emitStreamingChunk(agent: Agent, text?: string): void {
     const latest = text ?? this.latestStreamingText.get(agent.id);
     if (latest === undefined) return;
+    if (this.runStreamingSuppressed) return;
     if (this.suppressStreamingFor.has(agent.id)) return;
     this.onEvent({
       type: "agent_streaming",

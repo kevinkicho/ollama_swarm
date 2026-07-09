@@ -5,6 +5,7 @@
 import type { ChatResult as OllamaChatResult } from "../services/OllamaClient.js";
 import type { ChatOpts, ChatResult } from "./SessionProvider.js";
 import { TOOL_SCHEMAS } from "./AnthropicProvider.js";
+import { formatToolInvokePreview } from "../swarm/toolCallTranscript.js";
 
 const DEFAULT_MAX_TOOL_TURNS = 10;
 
@@ -117,9 +118,7 @@ export async function chatWithOllamaToolLoop(
           tool: tc.name as Parameters<NonNullable<ChatOpts["dispatcher"]>["dispatch"]>[0]["tool"],
           args: tc.arguments,
         });
-        const preview = dispatchResult.ok
-          ? dispatchResult.output.slice(0, 80).replace(/\n/g, " ")
-          : dispatchResult.error.slice(0, 80);
+        const preview = formatToolInvokePreview(tc.name, tc.arguments, dispatchResult);
         opts.onTool?.({ tool: tc.name, ok: dispatchResult.ok, preview });
         messages.push({
           role: "tool",

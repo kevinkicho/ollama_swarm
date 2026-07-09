@@ -85,6 +85,33 @@ test("ToolDispatcher — read rejects path traversal", async () => {
   }
 });
 
+test("ToolDispatcher — list accepts absolute clone root path", async () => {
+  const root = await makeFixtureClone();
+  try {
+    const d = new ToolDispatcher("swarm-read", root);
+    const r = await d.dispatch({ tool: "list", args: { path: root } });
+    assert.equal(r.ok, true);
+    if (r.ok) assert.match(r.output, /README\.md/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ToolDispatcher — read on directory returns listing instead of EISDIR", async () => {
+  const root = await makeFixtureClone();
+  try {
+    const d = new ToolDispatcher("swarm-read", root);
+    const r = await d.dispatch({ tool: "read", args: { path: "src" } });
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.match(r.output, /directory/);
+      assert.match(r.output, /a\.ts/);
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 test("ToolDispatcher — list shows entries with directory suffix", async () => {
   const root = await makeFixtureClone();
   try {

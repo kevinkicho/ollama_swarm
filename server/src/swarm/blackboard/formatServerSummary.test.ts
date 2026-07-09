@@ -389,6 +389,13 @@ describe("formatServerSummary — exhaustiveness", () => {
         bytes: 1024,
         sectionTitles: ["a", "b"],
       },
+      {
+        kind: "planner_brief",
+        variant: "goal_analysis",
+        chars: 11_194,
+        sections: 6,
+        title: "Research Brief",
+      },
     ];
     for (const s of samples) {
       const out = formatServerSummary(s);

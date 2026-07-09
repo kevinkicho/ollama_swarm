@@ -14,6 +14,7 @@ import {
 } from "./boardWireCompat.js";
 import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
+import { parsePlannerBrief } from "../../../../shared/src/plannerBriefParse.js";
 import { summarizeAgentResponse } from "./transcriptSummary.js";
 import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
 import { takePendingToolTrace, type ToolTraceEntry } from "../toolCallTranscript.js";
@@ -147,8 +148,12 @@ export function directiveWithAmendments(ctx: RunnerUtilContext): string | undefi
 
 export type AgentAssistKind = "auditor-salvage" | "auditor-diagnostic";
 
+export type PlannerBriefKind = "goal_analysis" | "research_brief";
+
 export interface AppendAgentOptions {
   assistKind?: AgentAssistKind;
+  /** Tags planner pre-pass output for PlannerBriefBubble rendering. */
+  briefKind?: PlannerBriefKind;
 }
 
 export function appendAgent(
@@ -158,7 +163,17 @@ export function appendAgent(
   options?: AppendAgentOptions,
 ): void {
   const { finalText, thoughts, toolCalls } = stripAgentText(text);
-  const summary = summarizeAgentResponse(finalText);
+  let summary = summarizeAgentResponse(finalText);
+  if (options?.briefKind) {
+    const parsed = parsePlannerBrief(finalText);
+    summary = {
+      kind: "planner_brief",
+      variant: options.briefKind,
+      chars: finalText.length,
+      sections: parsed.sections.length || (parsed.title ? 1 : 0),
+      ...(parsed.title ? { title: parsed.title } : {}),
+    };
+  }
 
   const pending = ctx.pendingPromptByAgent?.get(agent.id);
   if (pending) ctx.pendingPromptByAgent?.delete(agent.id);

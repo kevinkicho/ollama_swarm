@@ -176,7 +176,7 @@ export interface LifecycleContext {
   // --- methods ---
   setPhase(phase: SwarmPhase): void;
   appendSystem(text: string, summary?: TranscriptEntrySummary): void;
-  appendAgent(agent: Agent, text: string): void;
+  appendAgent(agent: Agent, text: string, options?: import("./runnerUtil.js").AppendAgentOptions): void;
   pendingToolTraceByAgent: Map<string, import("../toolCallTranscript.js").ToolTraceEntry[]>;
   discoverLocalOllamaTags(): Promise<void>;
   clearStateSnapshotScheduler(): void;
@@ -532,7 +532,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
       {
         cfg,
         onTool: makeBufferedToolHandler(ctx.pendingToolTraceByAgent, planner.id),
-        onAgentOutput: (text) => ctx.appendAgent(planner, text),
+        onAgentOutput: (text) => ctx.appendAgent(planner, text, { briefKind: "goal_analysis" }),
         streaming: lifecycleChatSurface(ctx, { kind: "seeding", label: "goal analysis" }),
       },
     );
@@ -626,7 +626,7 @@ export async function planAndExecute(
           (text) => ctx.appendSystem(text),
           {
             onTool: makeBufferedToolHandler(ctx.pendingToolTraceByAgent, planner.id),
-            onAgentOutput: (text) => ctx.appendAgent(planner, text),
+            onAgentOutput: (text) => ctx.appendAgent(planner, text, { briefKind: "research_brief" }),
             streaming: lifecycleChatSurface(ctx, { kind: "planning", label: "web research" }),
           },
         );

@@ -5,8 +5,11 @@ import {
   BubbleToggleRow,
   PromptContentPanel,
   ThinkingContentPanel,
+  ToolTraceContentPanel,
+  resolveAgentDisplayText,
   resolveEntryPrompt,
   resolveEntryThinking,
+  resolveEntryToolTrace,
 } from "./AgentThinking";
 import { CollapsibleBlock, JSON_COLLAPSE_THRESHOLD, tryPrettyJson } from "./JsonBubbles";
 import type { TranscriptEntry } from "../../types";
@@ -29,14 +32,17 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
   const [showJson, setShowJson] = useState(false);
   const [showThinking, setShowThinking] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
+  const [showToolTrace, setShowToolTrace] = useState(false);
   const [showIssues, setShowIssues] = useState(false);
   const [issuesListExpanded, setIssuesListExpanded] = useState(false);
   const [jsonExpanded, setJsonExpanded] = useState(false);
 
-  const issues = useMemo(() => parseCouncilIssues(entry.text), [entry.text]);
-  const prettyJson = useMemo(() => tryPrettyJson(entry.text), [entry.text]);
+  const displayText = useMemo(() => resolveAgentDisplayText(entry), [entry]);
+  const issues = useMemo(() => parseCouncilIssues(displayText), [displayText]);
+  const prettyJson = useMemo(() => tryPrettyJson(displayText), [displayText]);
   const thinking = useMemo(() => resolveEntryThinking(entry), [entry]);
   const prompt = useMemo(() => resolveEntryPrompt(entry), [entry]);
+  const toolTrace = useMemo(() => resolveEntryToolTrace(entry), [entry]);
 
   const chipHeader = (
     <div>
@@ -53,9 +59,10 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
         className={className}
         style={style}
         header={chipHeader}
-        text={entry.text}
+        text={displayText}
         thinking={thinking}
         prompt={prompt}
+        toolTrace={toolTrace}
       />
     );
   }
@@ -64,40 +71,46 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
     ? `${issues.length} issue${issues.length === 1 ? "" : "s"} flagged`
     : "Structured response";
 
-  const jsonBody = prettyJson ?? entry.text;
+  const jsonBody = prettyJson ?? displayText;
   const jsonTooLong = jsonBody.length > JSON_COLLAPSE_THRESHOLD;
   const shownJson =
     !jsonTooLong || jsonExpanded ? jsonBody : jsonBody.slice(0, JSON_COLLAPSE_THRESHOLD).trimEnd() + "…";
 
   return (
     <div className={className} style={style}>
-      <div className="flex items-start justify-between gap-2 mb-1">
-        <div className="flex-1">{chipHeader}</div>
-        <BubbleToggleRow
-          thinking={thinking}
-          prompt={prompt}
-          showThinking={showThinking}
-          showPrompt={showPrompt}
-          onToggleThinking={() => setShowThinking((v) => !v)}
-          onTogglePrompt={() => setShowPrompt((v) => !v)}
-        >
-          {issues ? (
+      <div className="mb-2">
+        {chipHeader}
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-ink-800/50 bg-ink-950/35 px-2 py-1">
+          <BubbleToggleRow
+            thinking={thinking}
+            prompt={prompt}
+            toolTrace={toolTrace}
+            showThinking={showThinking}
+            showPrompt={showPrompt}
+            showToolTrace={showToolTrace}
+            onToggleThinking={() => setShowThinking((v) => !v)}
+            onTogglePrompt={() => setShowPrompt((v) => !v)}
+            onToggleToolTrace={() => setShowToolTrace((v) => !v)}
+          >
+            {issues ? (
+              <button
+                onClick={() => setShowIssues((v) => !v)}
+                className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
+              >
+                {showIssues ? "Hide issues" : `Show issues (${issues.length})`}
+              </button>
+            ) : null}
             <button
-              onClick={() => setShowIssues((v) => !v)}
+              onClick={() => setShowJson((v) => !v)}
               className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
             >
-              {showIssues ? "Hide issues" : `Show issues (${issues.length})`}
+              {showJson ? "Hide JSON" : "View JSON"}
             </button>
-          ) : null}
-          <button
-            onClick={() => setShowJson((v) => !v)}
-            className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
-          >
-            {showJson ? "Hide JSON" : "View JSON"}
-          </button>
-        </BubbleToggleRow>
+          </BubbleToggleRow>
+        </div>
       </div>
       {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
+      {showToolTrace && toolTrace?.length ? <ToolTraceContentPanel trace={toolTrace} /> : null}
       <div className="text-[11px] text-ink-400 mb-1">{summaryLine}</div>
       {issues && showIssues ? (
         <div className="mb-2">

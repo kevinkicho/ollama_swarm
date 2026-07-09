@@ -20,6 +20,12 @@ test("councilWorkerRunner — literature research + web tools profile", () => {
   assert.match(SRC, /researchNotes/, "must pass research notes into worker prompt");
 });
 
+test("councilWorkerRunner — buffers tool trace on agent bubbles (not per-call system lines)", () => {
+  assert.match(SRC, /makeBufferedToolHandler/, "must buffer tool invocations");
+  assert.doesNotMatch(SRC, /makeWebToolHandler/, "must not emit per-tool transcript spam");
+  assert.match(SRC, /state\.pendingToolTraceByAgent/, "must share pending trace map with CouncilRunner");
+});
+
 test("councilWorkerRunner — preserves worker skip reason", () => {
   assert.match(SRC, /skip\(todo\.id, result\.reason\)/, "must store actual skip reason on todo");
 });

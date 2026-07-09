@@ -175,6 +175,17 @@ async function readTool(clone: string, args: Record<string, unknown>, unrestrict
   if (!p) return { ok: false, error: "read: missing `path` arg" };
   try {
     const abs = await resolveSafe(clone, p);
+    const st = await fs.stat(abs);
+    if (st.isDirectory()) {
+      const cloneReal = await fs.realpath(clone);
+      const rel = path.relative(cloneReal, abs).replace(/\\/g, "/") || ".";
+      const listing = await listTool(clone, { path: rel });
+      if (!listing.ok) return listing;
+      return {
+        ok: true,
+        output: `(read: "${p}" is a directory — listing contents)\n${listing.output}`,
+      };
+    }
     const text = await fs.readFile(abs, "utf8");
     // Cap output at 200 KB so a misclick doesn't dump a giant file
     // into the model's context.
@@ -194,6 +205,9 @@ async function listTool(clone: string, args: Record<string, unknown>): Promise<T
     const lines = entries
       .filter((e) => !e.name.startsWith(".git"))
       .map((e) => (e.isDirectory() ? `${e.name}/` : e.name));
+    if (lines.length === 0) {
+      return { ok: true, output: `(empty directory: ${p})` };
+    }
     return { ok: true, output: lines.join("\n") };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -220,6 +234,9 @@ async function globTool(clone: string, args: Record<string, unknown>, unrestrict
       }
     };
     await walk("");
+    if (matches.length === 0) {
+      return { ok: true, output: `(no files matched pattern: ${pattern})` };
+    }
     return { ok: true, output: matches.join("\n") };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -278,6 +295,10 @@ async function grepTool(clone: string, args: Record<string, unknown>, unrestrict
       }
     };
     await walk(root);
+    if (hits.length === 0) {
+      const scope = subdir && subdir !== "." ? ` in ${subdir}` : "";
+      return { ok: true, output: `(no matches for pattern "${pattern}"${scope})` };
+    }
     return { ok: true, output: hits.join("\n") };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

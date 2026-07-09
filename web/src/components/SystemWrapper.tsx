@@ -232,12 +232,29 @@ export function SystemWrapper({
         </div>
         <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
           <div className="flex items-center gap-2 text-[10px] flex-nowrap overflow-x-auto min-w-0 max-w-[min(52vw,32rem)]">
-            <StatusDot healthy={systemHealthy} />
-            <span className="text-ink-400 whitespace-nowrap">
+            <StatusDot
+              healthy={systemHealthy}
+              title={
+                systemHealthy
+                  ? "Server OK — /api/health responded. The swarm API is reachable."
+                  : "Server unreachable — /api/health failed. Runs may not start or update until the server is back."
+              }
+            />
+            <span
+              className="text-ink-400 whitespace-nowrap cursor-help"
+              title={
+                phase === "idle"
+                  ? "Ready — no swarm run is active in this view. Start a run from the setup page or open a past run from Runs."
+                  : `Current run phase: ${phase} (shown as “${displaySwarmPhase(phase)}”). Updates live from the runner over WebSocket.`
+              }
+            >
               {phase === "idle" ? "Ready" : displaySwarmPhase(phase)}
             </span>
             {activeRunId && (
-              <span className="text-ink-500 font-mono whitespace-nowrap">
+              <span
+                className="text-ink-500 font-mono whitespace-nowrap cursor-help"
+                title={`Active run id (first 8 chars of UUID). Full id: ${activeRunId}. Copy from the run chip in the identity strip below.`}
+              >
                 · {activeRunId.slice(0, 8)}
               </span>
             )}
@@ -246,16 +263,19 @@ export function SystemWrapper({
               icon="▸"
               value={`${activeRuns} active`}
               color={activeRuns > 0 ? "text-blue-400" : "text-ink-500"}
+              title={`${activeRuns} run(s) still in progress under scanned workspace folders (phase not completed, stopped, or failed). Polled every 15s from /api/swarm/runs.`}
             />
             <TopbarStat
               icon="📊"
               value={`${totalRuns} total`}
               color="text-ink-400"
+              title={`${totalRuns} run(s) found in workspace history (active + finished). Includes other parent dirs when enabled.`}
             />
             <TopbarStat
               icon={successRate >= 70 ? "✓" : successRate >= 40 ? "!" : "✗"}
               value={`${successRate}%`}
               color={successRate >= 70 ? "text-emerald-400" : successRate >= 40 ? "text-amber-400" : "text-red-400"}
+              title={`Success rate: ${completedRuns} completed ÷ ${terminalRuns} finished runs = ${successRate}%. Only terminal runs count (not still-active).`}
             />
 
             {/* Phase 10: brain always shown. */}
@@ -263,6 +283,11 @@ export function SystemWrapper({
               icon="🧠"
               value={brainHealth?.status ?? "idle"}
               color="text-violet-400"
+              title={
+                brainHealth
+                  ? `Brain supervisor: ${brainHealth.status}. Background analysis / proposals for the workspace (see sidebar Brain Activity).`
+                  : "Brain supervisor: idle — not initialized or no recent analysis. Use the Brain floating button during a run to chat."
+              }
             />
           </div>
 
@@ -381,25 +406,33 @@ function TopbarStat({
   icon,
   value,
   color = "text-ink-400",
+  title,
 }: {
   icon: string;
   value: string;
   color?: string;
+  title?: string;
 }) {
   return (
-    <span className={`flex items-center gap-1 whitespace-nowrap shrink-0 ${color}`}>
-      <span className="text-xs">{icon}</span>
+    <span
+      className={`flex items-center gap-1 whitespace-nowrap shrink-0 cursor-help ${color}`}
+      title={title}
+    >
+      <span className="text-xs" aria-hidden>
+        {icon}
+      </span>
       <span>{value}</span>
     </span>
   );
 }
 
-function StatusDot({ healthy }: { healthy: boolean }) {
+function StatusDot({ healthy, title }: { healthy: boolean; title?: string }) {
   return (
     <span
-      className={`inline-block w-1.5 h-1.5 rounded-full ${
+      className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 cursor-help ${
         healthy ? "bg-emerald-400" : "bg-red-400"
       }`}
+      title={title}
     />
   );
 }

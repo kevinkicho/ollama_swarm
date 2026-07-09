@@ -17,6 +17,7 @@
 // re-fire the request. Capped at MAX_TOOL_TURNS to bound runaway.
 
 import type { ChatMessage, ChatOpts, ChatResult, SessionProvider } from "./SessionProvider.js";
+import { formatToolInvokePreview } from "../swarm/toolCallTranscript.js";
 
 const ANTHROPIC_BASE = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
@@ -255,9 +256,11 @@ export class AnthropicProvider implements SessionProvider {
           tool: t.name as "read" | "grep" | "glob" | "list" | "bash" | "web_fetch" | "web_search",
           args: t.input,
         });
-        const preview = dispatchResult.ok
-          ? dispatchResult.output.slice(0, 80).replace(/\n/g, " ")
-          : dispatchResult.error.slice(0, 80);
+        const preview = formatToolInvokePreview(
+          t.name,
+          (t.input && typeof t.input === "object" ? t.input : {}) as Record<string, unknown>,
+          dispatchResult,
+        );
         opts.onTool?.({ tool: t.name, ok: dispatchResult.ok, preview });
         toolResults.push({
           type: "tool_result",

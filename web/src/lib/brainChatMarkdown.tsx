@@ -20,8 +20,25 @@ export function renderBrainChatMarkdown(text: string): ReactNode {
       continue;
     }
     chunk.split("\n").forEach((line, li) => {
-      if (!line.trim()) {
+      const trimmed = line.trim();
+      if (!trimmed) {
         nodes.push(<div key={`${i}-${li}-sp`} className="h-1" />);
+        return;
+      }
+      if (/^---+$/.test(trimmed)) {
+        nodes.push(<hr key={`${i}-${li}-hr`} className="my-2 border-ink-700/60" />);
+        return;
+      }
+      const numbered = /^(\d+)\.\s+(.*)$/.exec(trimmed);
+      if (numbered) {
+        nodes.push(
+          <div key={`${i}-${li}`} className="flex gap-2 pl-1 text-ink-300">
+            <span className="shrink-0 font-mono text-[10px] text-ink-500 w-4 text-right">
+              {numbered[1]}.
+            </span>
+            <span className="min-w-0">{inlineFormat(numbered[2])}</span>
+          </div>,
+        );
         return;
       }
       if (line.startsWith("### ")) {

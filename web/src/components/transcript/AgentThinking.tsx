@@ -149,8 +149,8 @@ export const ToolTraceContentPanel = memo(function ToolTraceContentPanel({
                 <span className={`shrink-0 uppercase tracking-wider text-[9px] px-1 rounded border ${chipCls}`}>
                   {row.tool}
                 </span>
-                <span className="min-w-0 flex-1 truncate text-ink-400" title={row.preview}>
-                  {row.ok ? "ok" : "error"}: {row.preview}
+                <span className="min-w-0 flex-1 truncate text-ink-400" title={row.preview || undefined}>
+                  {row.ok ? "ok" : "error"}: {row.preview.trim() || "(no preview)"}
                 </span>
                 {row.preview.length > 60 ? (
                   <button

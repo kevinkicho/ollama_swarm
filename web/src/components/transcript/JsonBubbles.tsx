@@ -10,6 +10,7 @@ import {
   type ResolvedToolTraceEntry,
 } from "./AgentThinking";
 
+
 export const COLLAPSE_THRESHOLD = 600;
 export const JSON_COLLAPSE_THRESHOLD = 2000;
 export const MAX_BUBBLE_HEIGHT_PX = 384;
@@ -237,39 +238,35 @@ export function CollapsibleBlock({ text, header, className, style, thinking, pro
   const [showToolTrace, setShowToolTrace] = useState(false);
   const charLong = text.length > COLLAPSE_THRESHOLD;
   const shown = !charLong || expanded ? text : text.slice(0, COLLAPSE_THRESHOLD).trimEnd() + "…";
-  // Height is now predictable from initial render (char count + expanded state).
-  // Removed runtime DOM overflow detection + extra state + gradient (excess).
-  // This gives the virtualizer a stable first-paint size.
   const bodyStyle = expanded ? undefined : { maxHeight: MAX_BUBBLE_HEIGHT_PX, overflow: "hidden" as const };
   const hasMore = charLong;
   const hasToggles = thinking || prompt || toolTrace?.length;
-  const headerRow = hasToggles ? (
-    <div className="flex items-start justify-between gap-2 mb-1">
-      <div className="flex-1">{header}</div>
-      <BubbleToggleRow
-        thinking={thinking}
-        prompt={prompt}
-        toolTrace={toolTrace}
-        showThinking={showThinking}
-        showPrompt={showPrompt}
-        showToolTrace={showToolTrace}
-        onToggleThinking={() => setShowThinking((v) => !v)}
-        onTogglePrompt={() => setShowPrompt((v) => !v)}
-        onToggleToolTrace={() => setShowToolTrace((v) => !v)}
-      />
-    </div>
-  ) : (
-    header
-  );
 
   return (
     <div className={className} style={style}>
-      {headerRow}
+      <div className="mb-2">
+        {header}
+        {hasToggles ? (
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-ink-800/50 bg-ink-950/35 px-2 py-1">
+            <BubbleToggleRow
+              thinking={thinking}
+              prompt={prompt}
+              toolTrace={toolTrace}
+              showThinking={showThinking}
+              showPrompt={showPrompt}
+              showToolTrace={showToolTrace}
+              onToggleThinking={() => setShowThinking((v) => !v)}
+              onTogglePrompt={() => setShowPrompt((v) => !v)}
+              onToggleToolTrace={() => setShowToolTrace((v) => !v)}
+            />
+          </div>
+        ) : null}
+      </div>
       {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
       {showToolTrace && toolTrace?.length ? <ToolTraceContentPanel trace={toolTrace} /> : null}
       {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
       <div>
-        <div className="whitespace-pre-wrap" style={bodyStyle}>{shown}</div>
+        <div className="whitespace-pre-wrap text-ink-300" style={bodyStyle}>{shown}</div>
       </div>
       {hasMore ? (
         !expanded ? (

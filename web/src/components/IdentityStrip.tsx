@@ -108,7 +108,12 @@ export function IdentityStrip() {
       {cfg ? (
         <>
           <span className="text-ink-600">·</span>
-          <span className="text-ink-100 font-semibold">{runName}</span>
+          <span
+            className="text-ink-100 font-semibold cursor-help"
+            title={`Run folder name — basename of the clone path (${cfg.clonePath ?? "unknown"}). Each run gets its own working copy of the repo.`}
+          >
+            {runName}
+          </span>
           <span className="text-ink-600">·</span>
           <ConformanceGauge samples={conformance} drift={drift} />
           {runId && phase !== "idle" && phase !== "completed" && phase !== "stopped" ? (
@@ -176,6 +181,7 @@ function ConformanceGauge({
         onMouseEnter={onEnter}
         onMouseLeave={() => setPos(null)}
         className={`inline-flex items-center gap-1.5 ml-3 cursor-help ${color}`}
+        title="Conformance to your directive — hover for score breakdown (LLM grader + optional embedding signal)."
       >
         <span className="text-[9px] uppercase tracking-wider text-ink-500">conf</span>
         <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="overflow-visible">
@@ -378,10 +384,26 @@ function PresetBadge({ preset }: { preset: string }) {
         return { bg: "bg-indigo-900/30", fg: "text-indigo-200", border: "border-indigo-700" };
     }
   })();
+  const presetHelp: Record<string, string> = {
+    blackboard:
+      "Blackboard — planner posts todos to a shared board; workers apply hunks and commit. Full write pipeline.",
+    council:
+      "Council — agents draft and debate, then execute todos in cycles with contract-driven exit criteria.",
+    "debate-judge":
+      "Debate-judge — pro/con agents argue; a judge synthesizes a verdict.",
+    stigmergy:
+      "Stigmergy — explorers annotate files; pheromone trails guide later rounds.",
+    "round-robin": "Round-robin — agents take turns discussing without a shared todo board.",
+    "map-reduce": "Map-reduce — parallel map passes then a reduce synthesis.",
+    "orchestrator-worker": "Orchestrator-worker — lead assigns subtasks to workers.",
+    "orchestrator-worker-deep": "Orchestrator-worker-deep — multi-level orchestration with deeper delegation.",
+    "role-diff": "Role-diff — agents hold fixed roles across rounds, then synthesize.",
+    "moa": "Mixture-of-agents — multiple agents answer; responses are aggregated.",
+  };
   return (
     <span
-      title={`Preset: ${preset}`}
-      className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] uppercase tracking-wider font-semibold ${palette.bg} ${palette.fg} ${palette.border}`}
+      title={presetHelp[preset] ?? `Swarm preset: ${preset} — orchestration style for this run.`}
+      className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] uppercase tracking-wider font-semibold cursor-help ${palette.bg} ${palette.fg} ${palette.border}`}
     >
       {preset}
     </span>

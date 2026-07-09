@@ -129,6 +129,22 @@ test("killAgent — does not affect other agents", async () => {
   assert.equal(remaining[0].id, "survivor");
 });
 
+test("beginRunShutdown — aborts sessions and blocks markStatus thinking", async () => {
+  const { mgr, events } = makeManager();
+  injectAgent(mgr, fakeAgent({ id: "a-stop", index: 1 }));
+  const internal = mgr as unknown as {
+    sessions: Map<string, { abortController: AbortController }>;
+  };
+  const session = { abortController: new AbortController() };
+  internal.sessions.set("sess-stop", session as never);
+  mgr.beginRunShutdown();
+  assert.equal(session.abortController.signal.aborted, true);
+  mgr.markStatus("a-stop", "thinking");
+  assert.equal(mgr.isInFlight("a-stop"), false);
+  const streaming = events.filter((e) => e.type === "agent_streaming");
+  assert.equal(streaming.length, 0);
+});
+
 test("killAll — aborts provider session controllers", async () => {
   const { mgr } = makeManager();
   const agent = fakeAgent({ id: "a-abort", sessionId: "sess-abort" });
