@@ -33,7 +33,7 @@ function spawnFallbackForRunConfig(cfg: RunConfig, index: number): string {
   return spawnModelFallbackForIndex(ctx, index);
 }
 
-/** Model string for spawnAgentNoOpencode at the given 1-based agent index. */
+/** Model string for spawnAgent at the given 1-based agent index. */
 export function resolveRunSpawnModel(cfg: RunConfig, index: number): string {
   return resolveModelForTopologyIndex(cfg.topology, index, spawnFallbackForRunConfig(cfg, index));
 }

@@ -136,44 +136,39 @@ export interface RunConfigDiscussion {
    *  (length heuristic when no judge available). Generalizes T199's
    *  self-consistency-on-hunks pattern. K cap = 5 (matching the
    *  existing self-consistency cap). Default 1 (no fan-out). Honored
-   *  by runners that adopt the shared `bestOfNTurn.ts` helpers. */
+   *  Library ready (`bestOfNTurn.ts`); not yet adopted by a runner. */
   bestOfNTurn?: number;
   /** Q6 (2026-05-04): dynamic role picker for round-robin / role-diff.
    *  When set, the runner consults a planner-tier meta-prompt to pick
    *  the next role based on what the conversation NEEDS (vs fixed
    *  cycle). One extra prompt per turn. Default OFF — fixed-cycle
-   *  rotation preserves the legacy deterministic behavior. Honored
-   *  via the shared `dynamicRolePicker.ts` helpers. */
+   *  rotation preserves the legacy deterministic behavior. Library
+   *  ready (`dynamicRolePicker.ts`); not yet adopted by RR/role-diff. */
   dynamicRolePicker?: boolean;
   /** Q7 (2026-05-04): debate-judge swap-sides bias check. After the
    *  judge's verdict, run a SECOND verdict pass with PRO/CON labels
    *  swapped. If the same SIDE wins both times, the verdict was
    *  driven by labeling (judge bias) — flag low confidence + skip
    *  the post-verdict build phase. Default OFF — adds 1 judge call
-   *  per debate. Debate-judge only. */
+   *  per debate. **Wired** in `debateStreams.runJudgeTurn`. */
   swapSidesBiasCheck?: boolean;
   /** Q5 (2026-05-04): dissent preservation in synthesis. When set,
-   *  council/MoA/round-robin synthesizer prompts emit THREE sections
+   *  council synthesizer prompts emit THREE sections
    *  (majority view + minority report + open questions) instead of
    *  one consolidated answer. Stops "polite convergence" from
    *  averaging away the most informative contrarian insight.
-   *  Default OFF — longer output. Honored via the shared
-   *  `dissentPreservation.ts` helpers. */
+   *  Default OFF — longer output. **Wired** in `councilSynthesis`. */
   preserveDissent?: boolean;
   /** Q8 (2026-05-04): stigmergy pheromone decay + saturation cap.
-   *  When set, StigmergyRunner's per-file picker applies multiplicative
-   *  decay to avgInterest per elapsed round + filters out files that
-   *  hit DEFAULT_MAX_REVISITS=8. Stops hot-spot loops. Default OFF —
-   *  preserves the legacy "all visits weighted equal forever"
-   *  behavior. Stigmergy only. */
+   *  When set, explorer prompts filter saturated files and surface a
+   *  decay-ranked pick hint. Default OFF. **Wired** in
+   *  `stigmergyTurns.runExplorerTurn` (rankingScore already applies
+   *  baseline decay always). */
   pheromoneDecay?: boolean;
   /** Q9 (2026-05-04): map-reduce mid-cycle finding broadcast. When set,
-   *  high-confidence findings (≥7/10) from completed mappers are
-   *  surfaced in the prompt of mappers that haven't started THIS round.
-   *  Stops "siloed mapper" failures where two mappers independently
-   *  miss the same insight. Cap at MAX_BROADCAST_PER_MAPPER=5.
-   *  Default OFF — preserves the legacy "all pooling at reduce time"
-   *  behavior. Map-reduce only. */
+   *  mappers run sequentially and high-confidence findings from earlier
+   *  mappers are injected into later mappers' prompts this cycle.
+   *  Default OFF. **Wired** in `mapReduceLoopBody` (non-streaming path). */
   midCycleBroadcast?: boolean;
   /** Q12 (2026-05-04): best-preset auto-pick router. When set, the
    *  /api/swarm/start route consults `presetRouter.ts` to pick the
@@ -210,8 +205,8 @@ export interface RunConfigDiscussion {
    *  high-stakes turns BACK to the same agent with a critique prompt
    *  before shipping. Verdict + refined output replace the original
    *  when the model flags issues. Default OFF (doubles per-turn
-   *  latency). Currently honored by: DebateJudgeRunner judge verdict.
-   *  Other runners adopt incrementally via the shared
+   *  latency). **Wired** on DebateJudge judge turn
+   *  (`debateStreams.runJudgeTurn`). Other runners can adopt via
    *  `selfCritique.ts` helpers. */
   selfCritique?: boolean;
   /** T-Item-CouncilRec (2026-05-04): council reconcile policy.

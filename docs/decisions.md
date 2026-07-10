@@ -33,6 +33,39 @@ landed incrementally (PR 0–1 + budget UI); not default-on.
 
 ---
 
+## 2026-07-10: Do not re-enable turn-level Jaccard as primary loop gate
+
+**Context:** Around 2026-07-07/08, long agent outputs that *looked* like
+repetition were diagnosed as dead loops. A later observation: many of those
+runs were agents **reading large prior-run logs / stockpiled worker output**
+that legitimately said similar things while building on previous work — not
+byte-identical self-loops. That weakens the case for “similarity ⇒ stuck.”
+
+**Decision:** Keep **not** re-enabling **turn-level Jaccard / SWARM_LOOP_DETECTION**
+as a primary whole-run halt. Jaccard (and embedding similarity used as a
+*stop-early* signal in MoA/RR convergence) can still be valid **optional**
+signals when the product intent is “discussion settled, save rounds.” They
+are **invalid as the sole proof of wasteful loops** when transcripts or
+workspace logs contain natural repetition.
+
+**What remains valid (and is not Jaccard):**
+- **OutputEmpty dead-loop** — only when new agent turns are empty/`looksLikeJunk`
+  (not “similar prose”). Safe against log-stockpile false positives.
+- **PlanEmpty dead-loop** — zero parseable assignments (OW family).
+- **Token budget / wall-clock / quota** — resource caps, not text similarity.
+- **Blackboard tier stuck / council audit stuck** — board/ledger progress, not Jaccard.
+- **Transport retries only** — network failures, not stream content.
+
+**False-positive class for Jaccard specifically:**
+- Re-reading prior workers’ logs with shared vocabulary
+- Legitimate multi-round refinement with overlapping claims
+- Large shared context (seed + transcript) dominating token sets
+
+**Status:** Affirms 2026-07-09 removal of turn-level Jaccard halt. Prefer
+empty-output + caps + progress signatures if loops reappear.
+
+---
+
 ## 2026-07-08: No client-side `:cloud` admission / concurrency throttling
 
 **Decision:** Do **not** implement local “cloud admission”, slot queues, or artificial

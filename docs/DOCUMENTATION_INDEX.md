@@ -45,10 +45,17 @@ This is the structured index of all relevant, tracked documentation for the olla
 
 - **docs/decisions.md**  
   Key architectural and product decisions. Includes **2026-07-08: no `:cloud`
-  admission throttling** — do not reintroduce local parallel-stream limits.
+  admission throttling**, **2026-07-09: no stream-guard aborts**, and
+  **2026-07-10: no Jaccard primary loop gate**.
+
+- **docs/postmortems/stream-guards-removed.md**  
+  Why stream/Jaccard guards were removed; what remains valid (empty-output, caps).
 
 - **docs/changelog.md**  
   Historical change log.
+
+- **scripts/_dead-code-scan.mjs** + **scripts/_dead-code-report.md**  
+  Import-graph dead-module scan and last report (re-run after large refactors).
 
 - **docs/model-behaviors.md**  
   Observed behaviors of different models in this system.

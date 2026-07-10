@@ -18,6 +18,12 @@ import {
   parseReducerReTaskLines,
 } from "./mapReducePromptHelpers.js";
 import { runCouncilMapperSlice, type CouncilMapperResult } from "./mapReduceCouncilMapper.js";
+import { notifyGuardTrip } from "./guardNotify.js";
+import {
+  buildCrossMapperContextBlock,
+  selectFindingsForMapper,
+  type MapperFinding,
+} from "./midCycleBroadcast.js";
 
 export interface MapReduceLoopHost {
   manager: AgentManager;
@@ -65,6 +71,11 @@ export interface MapReduceLoopHost {
     isFinal?: true,
     userDirective?: string,
   ) => Promise<void>;
+  getRunId?: () => string | undefined;
+  getBrainService?: () =>
+    | { injectSuggestion?: (runId: string, s: { title: string; text: string; category?: string }) => void }
+    | null
+    | undefined;
 }
 
 export async function runMapReduceLoopBody(
@@ -287,6 +298,46 @@ export async function runMapReduceLoopBody(
           totalRounds: cfg.rounds,
           userDirective: cfg.userDirective,
         });
+      } else if (cfg.midCycleBroadcast) {
+        // Q9: sequential mappers so high-confidence findings can flow
+        // into later mappers' prompts this cycle.
+        host.appendSystem(
+          "[Q9] Mid-cycle broadcast ON — mappers run sequentially so high-confidence findings reach later slices.",
+        );
+        const findingPool: MapperFinding[] = [];
+        for (let i = 0; i < mappers.length; i++) {
+          if (host.getStopping()) break;
+          const m = mappers[i]!;
+          const mySlice = slices[i] ?? [];
+          const reframing = reframingsThisCycle.get(m.index);
+          const broadcast = selectFindingsForMapper({
+            pool: findingPool,
+            receivingMapperIndex: m.index,
+          });
+          const crossBlock = buildCrossMapperContextBlock(broadcast);
+          const mergedReframing = [reframing, crossBlock].filter(Boolean).join("\n\n") || undefined;
+          const lenBefore = host.transcript.length;
+          await host.runMapperTurn(
+            m,
+            r,
+            cfg.rounds,
+            mySlice,
+            seedSnapshot,
+            cfg.userDirective,
+            mergedReframing,
+          );
+          // Heuristic: treat substantial non-empty mapper text as confidence 7 findings.
+          for (const e of host.transcript.slice(lenBefore)) {
+            if (e.role !== "agent" || e.agentIndex !== m.index) continue;
+            const text = (e.text ?? "").trim();
+            if (text.length < 40) continue;
+            findingPool.push({
+              fromMapperIndex: m.index,
+              text: text.slice(0, 280),
+              confidence: 7,
+            });
+          }
+        }
       } else {
         await staggerStart(mappers, (m, i) => {
           const mySlice = slices[i] ?? [];
@@ -307,6 +358,13 @@ export async function runMapReduceLoopBody(
         host.appendSystem(
           `All mappers produced empty/junk output for ${dlHit.consecutive} consecutive cycles — ending map-reduce early.`,
         );
+        notifyGuardTrip({
+          kind: "output-empty",
+          detail: dlHit.earlyStopDetail ?? "mappers-silenced",
+          runId: host.getRunId?.() ?? cfg.runId,
+          appendSystem: (t, s) => host.appendSystem(t, s),
+          getBrainService: host.getBrainService,
+        });
         break;
       }
 

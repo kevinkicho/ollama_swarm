@@ -99,7 +99,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private consecutiveEmptyCycles = 0;
   private tierPromotionRetries = 0;
   private maxTiers = Infinity;
-  private capWatchdog: ReturnType<typeof setInterval> | undefined;
+
   private drainResolve: (() => void) | undefined;
   private drainRequested = false;
 
@@ -333,33 +333,21 @@ export class CouncilRunner extends DiscussionRunnerBase {
   }
 
   private startCapWatchdog(cfg: RunConfig): void {
-    const CHECK_INTERVAL = 10_000;
-    this.capWatchdog = setInterval(() => {
-      const capMs = this.active?.wallClockCapMs ?? cfg.wallClockCapMs;
-      if (!capMs || capMs <= 0 || this.startedAt == null) return;
-      const deadline = this.startedAt + capMs;
-      if (Date.now() >= deadline) {
-        this.appendSystem(`[cap] Wall-clock cap reached (${Math.round(capMs / 60_000)} min) — stopping.`);
-        this.stop();
-      }
-    }, CHECK_INTERVAL);
-    this.capWatchdog.unref();
+    // Delegate to shared sleep-safe discussion wall-clock (tick accumulator).
+    this.startDiscussionWallClockIfConfigured(cfg);
   }
 
   protected override onReconfig(changes: import("./runReconfig.js").RunReconfigChanges): void {
     if (changes.wallClockCapMs && this.active) {
-      this.stopCapWatchdog();
+      this.stopDiscussionWallClock();
       if (this.active.wallClockCapMs && this.active.wallClockCapMs > 0) {
-        this.startCapWatchdog(this.active);
+        this.startDiscussionWallClockIfConfigured(this.active);
       }
     }
   }
 
   private stopCapWatchdog(): void {
-    if (this.capWatchdog) {
-      clearInterval(this.capWatchdog);
-      this.capWatchdog = undefined;
-    }
+    this.stopDiscussionWallClock();
   }
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
@@ -473,6 +461,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
         executionFailures: this.executionFailures,
         round: this.round,
         earlyStopDetail: this.earlyStopDetail,
+        setEarlyStopDetail: (d) => { this.earlyStopDetail = d; },
+        getRunId: () => this.active?.runId,
+        getBrainService: () => this.opts.getBrainService?.() ?? null,
         swarmControl: this.swarmControl,
         manager: this.opts.manager,
         repos: this.opts.repos,

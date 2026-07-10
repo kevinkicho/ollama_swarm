@@ -34,7 +34,7 @@ export interface TranscriptEntry {
   // markers (reasoning models), the server-side appendAgent strips
   // them out into this field via shared/extractThinkTags. The text
   // field carries the FINAL response only. UI renders thoughts as a
-  // collapsed-by-default ThoughtsBlock above the main bubble. Absent
+  // collapsed thinking section above the main bubble. Absent
   // on system/user entries and on agent entries with no <think> tags.
   thoughts?: string;
   // 2026-04-27 evening (#229): when an agent emitted XML pseudo-tool-

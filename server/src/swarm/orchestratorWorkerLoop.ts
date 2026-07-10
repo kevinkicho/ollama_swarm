@@ -5,6 +5,7 @@ import type { TranscriptEntry } from "../types.js";
 import type { RunConfig } from "./SwarmRunner.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { PlanEmptyDeadLoopGuard } from "./deadLoopGuard.js";
+import { notifyGuardTrip } from "./guardNotify.js";
 import { staggerStart } from "./staggerStart.js";
 import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
 import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
@@ -60,6 +61,11 @@ export interface OwLoopHost {
     plan: Plan,
     userDirective?: string,
   ) => Promise<void>;
+  getRunId?: () => string | undefined;
+  getBrainService?: () =>
+    | { injectSuggestion?: (runId: string, s: { title: string; text: string; category?: string }) => void }
+    | null
+    | undefined;
 }
 
 export async function runOwLoopBody(
@@ -157,6 +163,13 @@ export async function runOwLoopBody(
           host.appendSystem(
             `Lead has produced empty plans for ${planHit.consecutive} consecutive cycles — ending OW early to avoid burning wall-clock on dead loops.`,
           );
+          notifyGuardTrip({
+            kind: "plan-empty",
+            detail: planHit.earlyStopDetail ?? "lead-empty-plans",
+            runId: host.getRunId?.() ?? cfg.runId,
+            appendSystem: (t) => host.appendSystem(t),
+            getBrainService: host.getBrainService,
+          });
           break;
         }
         continue;

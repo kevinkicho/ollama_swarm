@@ -148,6 +148,8 @@ export class MapReduceRunner extends DiscussionRunnerBase {
           runMapperTurn: (a, r, tr, s, snap, d, ref) =>
             this.runMapperTurn(a, r, tr, s, snap, d, ref),
           runReducerTurn: (a, r, tr, fin, d) => this.runReducerTurn(a, r, tr, fin, d),
+          getRunId: () => this.active?.runId ?? cfg.runId,
+          getBrainService: () => this.opts.getBrainService?.() ?? null,
         },
         cfg,
         clonePath,

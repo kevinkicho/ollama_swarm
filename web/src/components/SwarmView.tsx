@@ -352,21 +352,33 @@ export const SwarmView = memo(function SwarmView() {
     () => agentList.some((a) => a.status === "thinking" || a.status === "retrying"),
     [agentList],
   );
-  const drainEligible = isDrainEligible({
+  const statusDrainEligible = useSwarm((s) => s.drainEligible);
+  const statusDrainReason = useSwarm((s) => s.drainIneligibleReason);
+  const capsRemaining = useSwarm((s) => s.capsRemaining);
+  const localDrainEligible = isDrainEligible({
     phase,
     claimed: claimedCount,
     pendingCommit: pendingCommitCount,
     workerThinking,
   });
+  // Prefer server status when present (includes replan state); fall back to local board counts.
+  const drainEligible = statusDrainEligible ?? localDrainEligible;
   const drainDisabled = stopDisabled || !drainEligible;
   const drainIneligibleTitle = drainEligible
     ? "Soft stop: workers finish their current claim, then swarm exits. Up to 3 min. Preserves in-flight commits."
-    : drainIneligibleReason({
+    : (statusDrainReason ??
+      drainIneligibleReason({
         phase,
         claimed: claimedCount,
         pendingCommit: pendingCommitCount,
         workerThinking,
-      });
+      }));
+  const capsHint =
+    capsRemaining?.wallClockMsRemaining != null
+      ? ` · wall-clock left ~${Math.ceil(capsRemaining.wallClockMsRemaining / 60_000)}m`
+      : capsRemaining?.tokenBudgetRemaining != null
+        ? ` · token budget left ~${capsRemaining.tokenBudgetRemaining.toLocaleString()}`
+        : "";
 
   // Per-preset role labels. Each preset has its own spawn contract:
   //   - blackboard: agent-1=planner, mid=workers, N+1=auditor (Unit 58)
@@ -497,7 +509,7 @@ export const SwarmView = memo(function SwarmView() {
                 onClick={onDrain}
                 disabled={drainDisabled}
                 className="text-xs px-2 py-1 rounded bg-amber-700 hover:bg-amber-600 text-amber-100 font-medium transition-colors disabled:bg-ink-600 disabled:text-ink-300 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-ink-800"
-                title={drainIneligibleTitle}
+                title={drainIneligibleTitle + capsHint}
               >
                 Drain & Stop
               </button>

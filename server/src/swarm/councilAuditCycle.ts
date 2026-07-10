@@ -44,7 +44,7 @@ export interface CouncilAuditHost {
     providerStall: string | null | undefined,
   ) => Promise<StallGateVerdict | null | undefined>;
   getBrainService?: () =>
-    | { injectSuggestion?: (runId: string, s: { title: string; text: string; category: string }) => void }
+    | { injectSuggestion?: (runId: string, s: { title: string; text: string; category?: string }) => void }
     | null
     | undefined;
   getActiveRunId: () => string | undefined;
@@ -238,18 +238,14 @@ export async function runCouncilAuditCycle(
         );
         host.appendSystem(`[audit] Stuck for ${stuck} cycles — stopping.`);
         host.setPhase("stopped");
-        const getBrain = host.getBrainService;
-        if (getBrain) {
-          const brain = getBrain();
-          if (brain?.injectSuggestion) {
-            const rid = host.getActiveRunId() || "current-run";
-            brain.injectSuggestion(rid, {
-              title: `Council stuck after ${stuck} cycles`,
-              text: "Suggestion: consider amending directive or trying a different preset (e.g. pipeline for chaining).",
-              category: "recommendation",
-            });
-          }
-        }
+        const { notifyGuardTrip } = await import("./guardNotify.js");
+        notifyGuardTrip({
+          kind: "audit-stuck",
+          detail: `same ${sameUnmet} criteria unmet for ${stuck} cycles`,
+          runId: host.getActiveRunId() || undefined,
+          appendSystem: (t, s) => host.appendSystem(t, s),
+          getBrainService: host.getBrainService,
+        });
         return "stop";
       }
     } else {

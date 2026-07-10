@@ -1,7 +1,7 @@
 // E3 Phase 5 cleanup pt 5 (2026-04-29): @opencode-ai/sdk + the
 // `Client` / `SessionClient` stub types REMOVED. Agent no longer
 // carries a `client` field; every prompt routes through pickProvider
-// and every spawn through spawnAgentNoOpencode (no real subprocess).
+// and every spawn through spawnAgent (no real subprocess).
 import type { ChildProcess } from "node:child_process";
 import { config } from "../config.js";
 import { treeKill } from "./treeKill.js";
@@ -165,7 +165,7 @@ export class AgentManager {
   // Kill guard: once killAll() completes, any stale setAgentState calls
   // that race with the clear (e.g., a prompt catch-block running on a
   // microtask after the kill) are silently dropped instead of re-adding
-  // an already-dead agent to the map. Reset by spawnAgent / spawnAgentNoOpencode.
+  // an already-dead agent to the map. Reset by spawnAgent / spawnAgent.
   private killed = false;
   /** Provider-session abort handles — fired on killAll to cancel in-flight HTTP. */
   private readonly sessions = new Map<string, Session>();
@@ -343,18 +343,11 @@ export class AgentManager {
     this.streamingThrottle.markDone(agentId);
   }
 
-  // E3 Phase 3 (slice): construct an Agent without spawning an opencode
-  // subprocess. The returned agent has a stubbed `client` that throws
-  // on use — any caller that still touches agent.client.session.* in
-  // no-opencode mode is a logic bug that should fail loud, not fall
-  // back silently to opencode behavior.
-  //
-  // Today only BaselineRunner uses this. killAll handles agent.child=
-  // undefined gracefully (the existing `agent.child?.pid` chain).
-  async spawnAgentNoOpencode(opts: SpawnOpts): Promise<Agent> {
+  // Register an agent session (no subprocess). E3 removed per-agent
+  // opencode processes; killAll handles agent.child=undefined.
+  async spawnAgent(opts: SpawnOpts): Promise<Agent> {
     const id = `agent-${opts.index}`;
     const session = createSession(opts.model);
-    const port = 0; // sentinel — no real port allocated
     const stateBase: AgentState = {
       id,
       index: opts.index,
@@ -378,20 +371,6 @@ export class AgentManager {
     this.agents.set(id, agent);
     return agent;
   }
-
-  // E3 (2026-04-29): legacy SDK spawning removed. Every
-  // call now delegates to spawnAgentNoOpencode. Existing callers that
-  // still use spawnAgent (and the conditional spawnFn pattern in the
-  // 9 runners) keep working — both branches now do the same thing.
-  // Future cleanup can remove the conditionals and rename the method.
-  async spawnAgent(opts: SpawnOpts): Promise<Agent> {
-    return this.spawnAgentNoOpencode(opts);
-  }
-
-  // E3 Phase 5: pingAgentHealth + respawnAgent shims removed. With no
-  // opencode subprocess to crash, BlackboardRunner's subprocess-death
-  // recovery dance is dead code. The recovery dance was simplified out
-  // in the same phase, so these no-op stubs have no callers.
 
   // Unit 18: warm a batch of agents one at a time. Used by runners
   // that pass skipWarmup:true to spawnAgent and then warm explicitly

@@ -122,7 +122,7 @@ async function chatOnceOnce(
       minThinkCharsForReferee: opts.minThinkCharsForReferee,
     });
     // Default clonePath to agent.cwd (set by AgentManager.spawnAgent /
-    // spawnAgentNoOpencode) so callers don't have to plumb it through
+    // spawnAgent) so callers don't have to plumb it through
     // explicitly. Override via opts.clonePath when needed.
     const clonePath = opts.clonePath ?? agent.cwd;
     const tools =

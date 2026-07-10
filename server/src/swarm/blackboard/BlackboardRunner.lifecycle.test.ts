@@ -21,7 +21,7 @@ function makeMockOpts(): {
   const agents: Map<string, Agent> = new Map();
 
   const manager = {
-    spawnAgentNoOpencode: async (o: any) => {
+    spawnAgent: async (o: any) => {
       const agent = makeMockAgent(`agent-${o.index}`, o.index, o.model);
       agents.set(agent.id, agent);
       agentStates.set(agent.id, { id: agent.id, index: agent.index, status: "ready" });

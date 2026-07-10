@@ -719,6 +719,12 @@ export interface SwarmStatusSnapshot {
   mapperSlices?: Record<string, string[]>;
   regions?: RegionStatus;
   drainEligible?: boolean;
+  drainIneligibleReason?: string;
+  earlyStopDetail?: string;
+  capsRemaining?: {
+    wallClockMsRemaining?: number;
+    tokenBudgetRemaining?: number;
+  };
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   thinkGuardReferee?: ResolvedThinkGuardRefereeBudget;
 }

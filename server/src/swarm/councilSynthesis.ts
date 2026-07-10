@@ -18,6 +18,11 @@ import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
 import { resolveCouncilToolProfile } from "./toolProfiles.js";
 import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import { buildCouncilToolCoachHook } from "./control/councilControlHooks.js";
+import {
+  buildDissentSynthesisPrompt,
+  parseDissentSynthesis,
+  renderDissentSynthesisMarkdown,
+} from "./dissentPreservation.js";
 
 
 export interface SynthesisContext {
@@ -65,7 +70,22 @@ export async function runSynthesisPass(
   stats.countTurn(lead.id);
   ctx.appendSystem(`Synthesizing council consensus (agent-${lead.index})…`);
 
-  const prompt = buildCouncilSynthesisPrompt(cfg.rounds, transcript, cfg.userDirective, committedFiles, ambitionTier, cfg.localPath, repoFiles, codeContextExcerpts, cfg.model);
+  // Q5: opt-in three-section synthesis (majority / minority / open Qs).
+  let prompt: string;
+  if (cfg.preserveDissent) {
+    const drafts = transcript
+      .filter((e) => e.role === "agent" && typeof e.agentIndex === "number")
+      .slice(-Math.max(3, cfg.agentCount * 2))
+      .map((e) => ({ agentIndex: e.agentIndex as number, text: e.text }));
+    prompt = buildDissentSynthesisPrompt({
+      question: cfg.userDirective?.trim() || "Synthesize the council discussion.",
+      drafts,
+      userDirective: cfg.userDirective,
+    });
+    ctx.appendSystem("[Q5] Dissent-preserving synthesis prompt (majority + minority + open questions).");
+  } else {
+    prompt = buildCouncilSynthesisPrompt(cfg.rounds, transcript, cfg.userDirective, committedFiles, ambitionTier, cfg.localPath, repoFiles, codeContextExcerpts, cfg.model);
+  }
   const controller = new AbortController();
   const watchdog = startSseAwareTurnWatchdog({
     manager: ctx.manager as any,
@@ -139,6 +159,14 @@ export async function runSynthesisPass(
       recordJunkPostRetry: (id, j) => { stats.recordJunkPostRetry(id, j); return 0; },
       appendSystem: (msg) => ctx.appendSystem(msg),
     });
+
+    if (cfg.preserveDissent && text) {
+      const parsedDissent = parseDissentSynthesis(text);
+      if (parsedDissent) {
+        text = renderDissentSynthesisMarkdown(parsedDissent);
+        ctx.appendSystem("[Q5] Parsed dissent-preserving synthesis into majority/minority/open-questions sections.");
+      }
+    }
 
     const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
     if (cfg.postSynthesisCritique && !isJunkSynthesis && text.length > 0) {

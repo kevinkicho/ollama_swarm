@@ -4,17 +4,23 @@
 //     "consecutive rounds where all new entries were empty/junk"
 //   - OW, OW-Deep: tracked "consecutive cycles where the lead/orchestrator
 //     produced no parseable plan assignments"
-//   - All 6 used `EMPTY_*_BREAK_THRESHOLD = 2`
+//   - Historical runners used EMPTY_*_BREAK_THRESHOLD = 2; shared default
+//     is now 3 (one extra empty iteration before halt — intentional).
 //   - Each runner had a bespoke earlyStopDetail format string —
 //     `${role}-silenced (${n} consecutive empty ${unit}s|plans)`
 //
 // The two variants don't merge cleanly (different signal — output text
 // vs plan structure), so this module exposes TWO classes. The shared
 // part is the consecutive-counter + threshold + format-string template.
+//
+// IMPORTANT: This is NOT turn-level Jaccard / stream similarity. Empty
+// or looksLikeJunk only — legitimate similar prose (e.g. reading prior
+// logs) does NOT trip this guard. See docs/decisions.md 2026-07-10.
 
 import { looksLikeJunk } from "./extractText.js";
 import type { TranscriptEntry } from "../types.js";
 
+/** Consecutive empty/junk iterations before halt (was 2 in older runners). */
 const DEFAULT_THRESHOLD = 3;
 
 export interface DeadLoopHit {
@@ -43,7 +49,7 @@ export class OutputEmptyDeadLoopGuard {
        *  for map-reduce. */
       unit: "round" | "cycle";
       /** Threshold of consecutive empty iterations before tripping.
-       *  Defaults to 2 (matches every existing runner). */
+       *  Defaults to 3 (shared DEFAULT_THRESHOLD). */
       threshold?: number;
     },
   ) {}
@@ -95,7 +101,7 @@ export class PlanEmptyDeadLoopGuard {
        *  "orchestrator". Used in the earlyStopDetail string. */
       roleLabel: string;
       /** Threshold of consecutive empty plans before tripping.
-       *  Defaults to 2 (matches existing OW/OW-Deep). */
+       *  Defaults to 3 (shared DEFAULT_THRESHOLD). */
       threshold?: number;
     },
   ) {}

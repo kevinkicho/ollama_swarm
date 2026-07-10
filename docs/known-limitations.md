@@ -18,6 +18,21 @@ an unattended run launcher.
 
 ---
 
+## Turn-level Jaccard is not a primary loop halt (2026-07-10)
+
+**Choice:** Whole-run “agents repeating themselves” detection via text Jaccard
+(or similar) is **not** used as a primary stop. Empty/junk turns, plan-empty,
+resource caps, and board/ledger stuck remain the automated gates.
+
+**Why:** Agents re-reading prior-run logs or refining shared claims often look
+“repetitive” while still making progress — Jaccard false-positives halt useful
+work. See `docs/decisions.md` and `docs/postmortems/stream-guards-removed.md`.
+
+**When to revisit:** Optional *convergence* “discussion settled, save rounds”
+signals (MoA/RR) are separate from wasteful-loop halts.
+
+---
+
 ## Host bind defaults to loopback; API token optional (2026-07-09)
 
 **Choice:** `SERVER_HOST` defaults to `127.0.0.1`. `SWARM_API_TOKEN` is optional

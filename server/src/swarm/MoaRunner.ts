@@ -102,6 +102,7 @@ export class MoaRunner extends DiscussionRunnerBase {
       // wired up — pickReflectionAgent returns null) AND uses a custom
       // shouldSetCompleted guard so a phase=failed inline-set inside
       // the loop body isn't overwritten by setPhase("completed").
+      this.stopDiscussionWallClock();
       await runDiscussionCloseOut({
         cfg,
         crashMessage,
@@ -134,19 +135,24 @@ export class MoaRunner extends DiscussionRunnerBase {
         getStopping: () => this.stopping,
         getDerivedRubric: () => this.derivedRubric,
         setDerivedRubric: (r) => { this.derivedRubric = r; },
-        setStartedAt: (ts) => { this.startedAt = ts; },
+        setStartedAt: (ts) => {
+          this.startedAt = ts;
+          this.startDiscussionWallClockIfConfigured(cfg);
+        },
         getMultiWriter: () => this.multiWriter,
         setMultiWriter: (mw) => { this.multiWriter = mw; },
         setRound: (r) => { this.round = r; },
         getActualRoundsCompleted: () => this.actualRoundsCompleted,
         setActualRoundsCompleted: (n) => { this.actualRoundsCompleted = n; },
         setEarlyStopDetail: (d) => { this.earlyStopDetail = d; },
-        appendSystem: (t) => this.appendSystem(t),
+        appendSystem: (t, s) => this.appendSystem(t, s as any),
         setPhase: (p) => this.setPhase(p),
         runOne: (agent, prompt, label) => this.runOne(agent, prompt, label),
         runAggregatorSelfCritique: (agg, synthesis, proposals) =>
           this.runAggregatorSelfCritique(agg, synthesis, proposals),
         runAggregationTree: (input) => this.runAggregationTree(input),
+        getRunId: () => this.active?.runId ?? cfg.runId,
+        getBrainService: () => this.opts.getBrainService?.() ?? null,
       },
       cfg,
     );

@@ -18,6 +18,7 @@ import { CopyChip } from "./CopyChip";
 import { ToolingConfigPanel } from "./ToolingConfigPanel";
 import { ThinkGuardRefereePanel } from "./ThinkGuardRefereePanel";
 import { SwarmControlPanel } from "./SwarmControlPanel";
+import { RunHealthChip } from "./RunHealthChip";
 import type { ConformanceSample, DriftSample } from "../state/store";
 import { isActiveSwarmPhase } from "../lib/swarmPhase";
 import { submitMidRunNudge } from "../lib/submitMidRunNudge";
@@ -112,6 +113,7 @@ export function IdentityStrip() {
       {cfg ? <ToolingConfigPanel cfg={cfg} /> : null}
       {cfg ? <ThinkGuardRefereePanel /> : null}
       {cfg ? <SwarmControlPanel /> : null}
+      <RunHealthChip />
       {cfg ? (
         <>
           <span className="text-ink-600">·</span>

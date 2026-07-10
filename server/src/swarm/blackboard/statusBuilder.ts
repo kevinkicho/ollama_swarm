@@ -3,7 +3,7 @@ import type { RunConfig } from "../SwarmRunner.js";
 import type { ExitContract } from "./types.js";
 import type { RunSummary } from "./summary.js";
 import { boardCounts as boardCountsExtracted, boardSnapshot as boardSnapshotExtracted, type RunnerUtilContext } from "./runnerUtil.js";
-import { isDrainEligible } from "@ollama-swarm/shared/drainEligibility";
+import { isDrainEligible, drainIneligibleReason } from "@ollama-swarm/shared/drainEligibility";
 import { resolveThinkGuardRefereeBudget } from "@ollama-swarm/shared/thinkGuardBudget";
 import { resolveDisplayPhase } from "@ollama-swarm/shared/mapRunPhase";
 import type { RunPhase } from "@ollama-swarm/shared/runStateMachine";
@@ -95,11 +95,18 @@ export function status(ctx: StatusContext): SwarmStatus {
     ? resolveThinkGuardRefereeBudget(ctx.active, config.THINK_GUARD_REFEREE_ENABLED)
     : undefined;
   const pendingCommit = ctx.getTodoQueueCounts?.().pendingCommit ?? 0;
-  const drainEligible = ctx.getDrainEligibilityInput
-    ? isDrainEligible(
-        ctx.getDrainEligibilityInput({ claimed: counts.claimed, pendingCommit }),
-      )
-    : isDrainEligible({ phase: ctx.phase, claimed: counts.claimed, pendingCommit });
+  const drainInput = ctx.getDrainEligibilityInput
+    ? ctx.getDrainEligibilityInput({ claimed: counts.claimed, pendingCommit })
+    : { phase: ctx.phase, claimed: counts.claimed, pendingCommit };
+  const drainEligible = isDrainEligible(drainInput);
+  const drainReason = drainEligible ? undefined : drainIneligibleReason(drainInput);
+
+  const wallCap = ctx.active?.wallClockCapMs;
+  let wallClockMsRemaining: number | undefined;
+  if (wallCap && wallCap > 0 && ctx.runBootedAt != null) {
+    // Coarse remaining (display only); exec-active elapsed is clamped separately in capManager.
+    wallClockMsRemaining = Math.max(0, wallCap - (Date.now() - ctx.runBootedAt));
+  }
 
   const displayPhase =
     ctx.v2Phase !== undefined
@@ -121,6 +128,10 @@ export function status(ctx: StatusContext): SwarmStatus {
       : {}),
     ...(ctx.planningSubphase ? { planningSubphase: ctx.planningSubphase } : {}),
     drainEligible,
+    ...(drainReason ? { drainIneligibleReason: drainReason } : {}),
+    ...(wallClockMsRemaining != null
+      ? { capsRemaining: { wallClockMsRemaining } }
+      : {}),
     round: ctx.round,
     repoUrl: ctx.active?.repoUrl,
     localPath: ctx.active?.localPath,

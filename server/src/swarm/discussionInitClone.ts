@@ -82,7 +82,7 @@ export async function initCloneAndSpawn(
   const spawnTasks: Promise<Agent>[] = [];
   for (let i = 1; i <= cfg.agentCount; i++) {
     const model = resolveRunSpawnModel(cfg, i);
-    spawnTasks.push(host.manager.spawnAgentNoOpencode({ cwd: destPath, index: i, model }));
+    spawnTasks.push(host.manager.spawnAgent({ cwd: destPath, index: i, model }));
   }
   const results = await Promise.allSettled(spawnTasks);
   const ready = results

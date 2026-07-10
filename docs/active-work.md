@@ -19,6 +19,19 @@ See **`docs/RELEASE-1.0-PLAN.md`** and **`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`*
 
 ---
 
+## 2026-07-10 — Guards, quality levers, hygiene ✅ DONE
+
+- [x] Empty-output / plan-empty / wall-clock / budget guards (no Jaccard primary halt)
+- [x] `guardNotify` → Brain inject + RECONFIG; `RunHealthChip` + `BrainSuggestionBubble`
+- [x] Quality levers wired: failurePatternSeed, preserveDissent, selfCritique, swapSidesBiasCheck, pheromoneDecay, midCycleBroadcast
+- [x] `spawnAgent` single API (drop `spawnAgentNoOpencode`)
+- [x] Dead-code purge + `scripts/_dead-code-scan.mjs` / `_dead-code-report.md`
+- [x] God-file modularization extracts (runners / routes / loops)
+
+**Still library-only (schema accepted):** bestOfNTurn, dynamicRolePicker, mentionContracts, preflightDryRun, hunkRag, councilReconcile.
+
+---
+
 ## Queued: Run-start stability (P1)
 
 See **`docs/plans/run-start-stability.md`** for full PR breakdown.

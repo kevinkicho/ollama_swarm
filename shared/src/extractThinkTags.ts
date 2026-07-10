@@ -13,7 +13,7 @@
 // text in → { thoughts, finalText } out. No I/O, no dependencies.
 // Caller decides what to do with the thoughts string
 // (server-side: stash on TranscriptEntry.thoughts; client-side:
-// render in a ThoughtsBlock).
+// render in the agent thinking toggle).
 
 /**
  * Split agent text into thoughts (concatenated <think>...</think>

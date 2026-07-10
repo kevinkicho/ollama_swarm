@@ -101,9 +101,21 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   brainChatHistory: [],
   useCaseFilters: [],
   transcriptPlainListLatched: false,
+  drainEligible: undefined,
+  drainIneligibleReason: undefined,
+  capsRemaining: undefined,
+  earlyStopDetail: undefined,
 
   latchTranscriptPlainList: () =>
     set((s) => (s.transcriptPlainListLatched ? s : { transcriptPlainListLatched: true })),
+
+  setRunHealthFromStatus: (patch) =>
+    set(() => ({
+      drainEligible: patch.drainEligible,
+      drainIneligibleReason: patch.drainIneligibleReason,
+      capsRemaining: patch.capsRemaining,
+      earlyStopDetail: patch.earlyStopDetail,
+    })),
 
   setPhase: (phase, round, opts) =>
     set((s) => {

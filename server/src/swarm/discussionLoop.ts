@@ -8,6 +8,7 @@ import { checkBudgetGuards } from "./loopGuards.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import type { CloseOutHooks } from "./runFinallyHooks.js";
 import type { RunOutcome } from "./outcomeScorer.js";
+import { notifyGuardTrip } from "./guardNotify.js";
 
 export interface DiscussionLoopHost {
   manager: AgentManager;
@@ -19,8 +20,13 @@ export interface DiscussionLoopHost {
   setRound: (r: number) => void;
   getPhase: () => SwarmPhase;
   setPhase: (p: SwarmPhase) => void;
-  appendSystem: (text: string) => void;
+  appendSystem: (text: string, summary?: import("../types.js").TranscriptEntrySummary) => void;
   writeSummary: (cfg: RunConfig, crashMessage?: string) => Promise<void>;
+  getRunId?: () => string | undefined;
+  getBrainService?: () =>
+    | { injectSuggestion?: (runId: string, s: { title: string; text: string; category?: string }) => void }
+    | null
+    | undefined;
 }
 
 export type DiscussionLoopCloseOutHooks = CloseOutHooks & {
@@ -108,6 +114,15 @@ export function checkRoundBudget(
   if (guard.halt) {
     host.setEarlyStopDetail(guard.earlyStopDetail);
     host.appendSystem(guard.message ?? "");
+    const detail = guard.earlyStopDetail ?? guard.message ?? "budget/quota halt";
+    const kind = detail.includes("quota") ? "quota" : "token-budget";
+    notifyGuardTrip({
+      kind,
+      detail,
+      runId: host.getRunId?.() ?? cfg.runId,
+      appendSystem: (t, s) => host.appendSystem(t, s),
+      getBrainService: host.getBrainService,
+    });
     return false;
   }
   host.setRound(r);

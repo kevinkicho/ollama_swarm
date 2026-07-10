@@ -91,6 +91,15 @@ export interface SwarmStatus {
   regions?: RegionStatus;
   /** True when soft drain would preserve in-flight worker work (exec-only). */
   drainEligible?: boolean;
+  /** Human reason when drain is not applicable (UI tooltip / Brain context). */
+  drainIneligibleReason?: string;
+  /** Early-stop detail if the run is winding down for a guard (dead-loop, budget, etc.). */
+  earlyStopDetail?: string;
+  /** Remaining resource budgets when configured (discussion + blackboard). */
+  capsRemaining?: {
+    wallClockMsRemaining?: number;
+    tokenBudgetRemaining?: number;
+  };
   /** Blackboard planning pipeline step (seeding / contract / todos). */
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   /** Live think-guard referee budget (resolved defaults + usage). */

@@ -3,6 +3,20 @@
 All notable changes to ollama_swarm. Reverse chronological order.
 The git log is the authoritative record; this summarizes user-facing changes.
 
+## 2026-07-10 — Guards without Jaccard, Brain reconfig, quality levers, dead-code prune
+
+**Loop policy (docs + code).** Affirm: do **not** re-enable turn-level Jaccard as a primary halt (log re-reads looked like loops). Primary automated stops remain empty/junk output, plan-empty, wall-clock/token/quota caps, and board/ledger stuck. See `docs/decisions.md` (2026-07-10) and `docs/postmortems/stream-guards-removed.md`.
+
+**Guard → Brain → UI.** Shared `guardNotify.ts` injects Brain suggestions (or transcript fallback) with optional `RECONFIG` JSON. Sleep-safe discussion wall-clock watchdog. Status fields: `drainEligible`, `drainIneligibleReason`, `capsRemaining`, `earlyStopDetail`. UI: `RunHealthChip`, drain tooltip/caps hint, `BrainSuggestionBubble` one-click reconfig apply.
+
+**Quality levers (opt-in API flags).** Wired: `failurePatternSeed` (blackboard seed), `preserveDissent` (council synthesis), `selfCritique` + `swapSidesBiasCheck` (debate judge), `pheromoneDecay` (stigmergy), `midCycleBroadcast` (map-reduce sequential broadcast). Schema + start route accept these and related library flags.
+
+**spawnAgent cleanup.** Single `AgentManager.spawnAgent` API; removed `spawnAgentNoOpencode` alias.
+
+**Dead-code purge.** Removed ~24 never-imported modules (orphan UI, unwired multi-repo/decomposer/SubRunProtocol, PortAllocator leftovers, patch panels, etc.). Scanner: `scripts/_dead-code-scan.mjs` + `scripts/_dead-code-report.md`.
+
+**Also:** Mechanical modularization of large runners/routes into focused modules (prior commits on same branch stream).
+
 ## 2026-07-07 — Planner grounding truncation, thinking UX, parse-salvage
 
 **Planner `expectedFiles` truncation (run `94224a3e`).** `lenientPreprocess` caps planner todos at 2 `expectedFiles`. When the model lists new-file paths first, both kept paths can be grounding-rejected and valid registry paths truncated away → `no-progress` with 0 todos. `prioritizeExpectedFilesSlice()` now keeps shallow config/registry paths over deep `sources/` / `panels/` trees when slicing. Postmortem: `docs/postmortems/run-94224a3e.md`.

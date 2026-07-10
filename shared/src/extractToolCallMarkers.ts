@@ -28,7 +28,7 @@
 //
 // This extractor strips them server-side at appendAgent time. The
 // client renders them as a collapsed-by-default ToolCallsBlock similar
-// to ThoughtsBlock — the user can see what the planner THOUGHT it was
+// into the thinking panel — the user can see what the planner THOUGHT it was
 // reading without that text bloating the bubble.
 //
 // Pure shape-transform: text in → { toolCalls, finalText } out. No I/O.

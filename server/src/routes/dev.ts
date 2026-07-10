@@ -41,9 +41,9 @@ export function devRouter(deps: DevRouterDeps): Router {
   // `@playwright/mcp` subprocess starts, the `swarm-ui` agent can call
   // `browser_navigate` + `browser_snapshot`, and a reply comes back.
   //
-  // Runs on an ISOLATED AgentManager (its own PortAllocator, no callbacks
-  // wired to the real broadcaster) so a smoke poke never appears in the UI
-  // or leaks state into any active swarm.
+  // Runs on an ISOLATED AgentManager (no callbacks wired to the real
+  // broadcaster) so a smoke poke never appears in the UI or leaks state
+  // into any active swarm.
   //
   // Request body: `{ url: string, prompt?: string }`. If `prompt` is
   // omitted, a default "navigate + snapshot" instruction is sent.

@@ -8,6 +8,7 @@ import { tryRenderCouncilMarkers } from "./CouncilCycleDivider";
 import { ExecutionStatusBubble } from "./ExecutionStatusBubble";
 import { CompactPipelineStatusLine } from "./CompactPipelineStatusLine";
 import { isCompactPipelineStatus } from "./compactPipelineStatus";
+import { BrainSuggestionBubble } from "./BrainSuggestionBubble";
 
 export function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   const councilMarker = tryRenderCouncilMarkers(entry);
@@ -155,16 +156,8 @@ export function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string
   }
 
   // Prototype for proactive Brain suggestions (injected via brainService.injectSuggestion + transcript_append)
-  if (entry.summary?.kind === "brain_suggestion" || (entry.text && entry.text.includes('[brain suggestion]'))) {
-    return (
-      <div className="rounded-md border-2 border-violet-700/60 bg-violet-950/20 px-3 py-2 text-xs">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="inline-block bg-violet-900/60 text-violet-200 font-mono uppercase tracking-wider px-1.5 py-0.5 rounded text-[10px]">🧠 Brain suggestion</span>
-          <span className="text-ink-400">{ts}</span>
-        </div>
-        <div className="text-violet-100">{entry.text}</div>
-      </div>
-    );
+  if (entry.summary?.kind === "brain_suggestion" || (entry.text && entry.text.includes('[brain suggestion]')) || (entry.text && entry.text.includes('[🧠 Brain Suggestion]'))) {
+    return <BrainSuggestionBubble text={entry.text} ts={ts} />;
   }
   // 2026-04-26 fix: distinct visual style for transient parser/repair
   // recovery messages. These are normal recovery (system caught a bad

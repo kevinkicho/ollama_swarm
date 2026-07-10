@@ -70,7 +70,7 @@ export async function moaCloneAndSpawn(
       ? aggregatorModel
       : proposerModels[(i - 1) % proposerModels.length]!;
     const model = resolveModelForTopologyIndex(cfg.topology, i, tierFallback);
-    const agent = await host.manager.spawnAgentNoOpencode({
+    const agent = await host.manager.spawnAgent({
       cwd: destPath,
       index: i,
       model,

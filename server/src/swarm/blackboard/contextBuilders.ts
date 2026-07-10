@@ -187,7 +187,7 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
       }
     },
     buildSeed: (clonePath: string, cfg: RunConfig) => r.buildSeed(clonePath, cfg),
-    spawnAgentNoOpencode: (opts: SpawnOpts) => r.opts.manager.spawnAgentNoOpencode(opts),
+    spawnAgent: (opts: SpawnOpts) => r.opts.manager.spawnAgent(opts),
     getManager: () => r.opts.manager,
     emitAgentState: (s: AgentState) => r.emitAgentState(s),
     markPlannerStatus: (planner: Agent, status: "thinking" | "ready") => r.markPlannerStatus(planner, status),
@@ -301,8 +301,10 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
     setCompletionDetail: (d: string | undefined) => { r.completionDetail = d; },
     setContract: (c: ExitContract | undefined) => { r.contract = c; },
     setConsecutiveStuckCycles: (n: number) => { r.consecutiveStuckCycles = n; },
-    appendSystem: (msg: string) => r.appendSystem(msg),
+    appendSystem: (msg: string, summary?: import("../../types.js").TranscriptEntrySummary) =>
+      r.appendSystem(msg, summary),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),
+    getBrainService: () => r.opts.getBrainService?.() ?? null,
     promptPlannerSafely: (agent: Agent, promptText: string, agentName: "swarm" | "swarm-read" | "swarm-builder" | "swarm-research", ollamaFormat?: "json" | Record<string, unknown>) => r.promptPlannerSafely(agent, promptText, agentName, ollamaFormat),
     emit: (e: SwarmEvent) => r.opts.emit(e),
     scheduleStateWrite: () => r.scheduleStateWrite(),

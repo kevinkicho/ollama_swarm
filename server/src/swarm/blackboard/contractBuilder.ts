@@ -27,9 +27,11 @@ import { groundExpectedFiles, validateContractGrounding } from "./contractGround
 import { withSiblingRetry } from "./siblingRetry.js";
 import { config as appConfig } from "../../config.js";
 import {
+  readMemory,
   readRecentMemory,
   renderMemoryForSeed,
 } from "./memoryStore.js";
+import { buildFailurePatternSeed } from "../failurePatternSeed.js";
 import {
   readDesignMemory,
   renderDesignMemoryForSeed,
@@ -453,6 +455,28 @@ export async function buildSeed(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       ctx.appendSystem(`Memory read failed (${msg}); continuing without prior-run context.`);
+    }
+  }
+
+  // Q2: structured failure/success pattern seed (opt-in). Complements
+  // autoMemory lessons with commits/tier heuristics from full history.
+  if (cfg.failurePatternSeed) {
+    try {
+      const all = await readMemory(clonePath);
+      const seed = buildFailurePatternSeed({ entries: all });
+      if (seed.text) {
+        priorMemoryRendered = priorMemoryRendered
+          ? `${priorMemoryRendered}\n\n${seed.text}`
+          : seed.text;
+        if (cfg.suppressSeedMessages !== true) {
+          ctx.appendSystem(
+            `Failure-pattern seed: ${seed.failureCount} failure + ${seed.successCount} success pattern(s) into planner seed.`,
+          );
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.appendSystem(`Failure-pattern seed failed (${msg}); continuing.`);
     }
   }
 

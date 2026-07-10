@@ -31,6 +31,7 @@ import {
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
+import { notifyGuardTrip } from "./guardNotify.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
@@ -220,6 +221,13 @@ export class StigmergyRunner extends DiscussionRunnerBase {
             this.appendSystem(
               `All explorers produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending stigmergy early.`,
             );
+            notifyGuardTrip({
+              kind: "output-empty",
+              detail: dlHit.earlyStopDetail ?? "explorers-silenced",
+              runId: this.active?.runId,
+              appendSystem: (t, s) => this.appendSystem(t, s as any),
+              getBrainService: () => this.opts.getBrainService?.() ?? null,
+            });
             break;
           }
         }

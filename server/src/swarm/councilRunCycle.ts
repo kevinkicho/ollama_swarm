@@ -8,6 +8,8 @@ import type { CouncilAdapterState } from "./councilAdapter.js";
 import type { CouncilProgressLedger } from "./councilProgressLedger.js";
 import { harvestStandupFindingsFromEntries } from "./councilProgressLedger.js";
 import { burstSpacingForModels, staggerStart } from "./staggerStart.js";
+import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
+import { notifyGuardTrip } from "./guardNotify.js";
 import { runSynthesisPass } from "./councilSynthesis.js";
 import { extractActionableTodos } from "./councilDecisions.js";
 import { postCouncilTodoBatch } from "./councilTodoPlan.js";
@@ -27,6 +29,7 @@ export interface CouncilRunCycleHost {
   executionFailures: string[];
   round: number;
   earlyStopDetail: string | undefined;
+  setEarlyStopDetail: (d: string | undefined) => void;
   swarmControl: SwarmControlCenter;
   manager: AgentManager;
   repos: RepoService;
@@ -66,6 +69,11 @@ export interface CouncilRunCycleHost {
   drainTodos: (cfg: RunConfig, cycle: number) => Promise<void>;
   finalizeCycleProgress: (cycle: number) => void;
   runAudit: (cfg: RunConfig, cycle: number) => Promise<"done" | "retry" | "stop">;
+  getRunId?: () => string | undefined;
+  getBrainService?: () =>
+    | { injectSuggestion?: (runId: string, s: { title: string; text: string; category?: string }) => void }
+    | null
+    | undefined;
 }
 
 export async function runCouncilCycle(
@@ -153,8 +161,14 @@ async function runCycle1Discussion(
     detail: "3 rounds",
   });
 
+  // Empty/junk discussion turns only — not Jaccard (revisers often restate peers).
+  const deadLoopGuard = new OutputEmptyDeadLoopGuard({
+    roleLabel: "drafters",
+    unit: "round",
+  });
   for (let r = 1; r <= 3; r++) {
     if (host.closingRequested()) break;
+    const transcriptLenBefore = host.transcript.length;
     const snapshot: readonly TranscriptEntry[] = [...host.transcript];
     const agents = host.manager.list();
     await staggerStart(
@@ -162,6 +176,26 @@ async function runCycle1Discussion(
       (agent) => host.runTurn(agent, r, 3, snapshot, cfg.userDirective),
       burstSpacingForModels(agents),
     );
+    if (!host.getStopping()) {
+      const newEntries = host.transcript
+        .slice(transcriptLenBefore)
+        .filter((e) => e.role === "agent");
+      const dlHit = deadLoopGuard.recordIteration(newEntries);
+      if (dlHit.tripped) {
+        host.setEarlyStopDetail(dlHit.earlyStopDetail);
+        host.appendSystem(
+          `All drafters produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending council discussion early.`,
+        );
+        notifyGuardTrip({
+          kind: "output-empty",
+          detail: dlHit.earlyStopDetail ?? "drafters-silenced",
+          runId: host.getRunId?.() ?? cfg.runId,
+          appendSystem: (t, s) => host.appendSystem(t, s),
+          getBrainService: host.getBrainService,
+        });
+        break;
+      }
+    }
   }
 
   if (!host.closingRequested()) {

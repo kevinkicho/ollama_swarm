@@ -183,6 +183,29 @@ export function applyStatusSnapshotToStore(
     s.setPhase("idle", (snap as { round?: number }).round ?? 0);
   }
 
+  const healthSnap = snap as {
+    drainEligible?: boolean;
+    drainIneligibleReason?: string;
+    capsRemaining?: {
+      wallClockMsRemaining?: number;
+      tokenBudgetRemaining?: number;
+    };
+    earlyStopDetail?: string;
+  };
+  if (
+    healthSnap.drainEligible !== undefined ||
+    healthSnap.drainIneligibleReason ||
+    healthSnap.capsRemaining ||
+    healthSnap.earlyStopDetail
+  ) {
+    s.setRunHealthFromStatus({
+      drainEligible: healthSnap.drainEligible,
+      drainIneligibleReason: healthSnap.drainIneligibleReason,
+      capsRemaining: healthSnap.capsRemaining,
+      earlyStopDetail: healthSnap.earlyStopDetail,
+    });
+  }
+
   if (upsertLiveAgents) {
     const roster = inferAgentsFromSnapshot({ ...snap, agents: [] });
     const agentsForSidebar = mergeAgentsForSnapshot(snap.agents ?? [], roster);

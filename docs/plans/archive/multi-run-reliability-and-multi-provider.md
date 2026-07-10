@@ -79,7 +79,7 @@ interface ActiveRun {
 - [ ] Two runs with different `localPath` can both spawn agents without overwriting each other's `AgentState`
 - [ ] `stopRun(A)` does not kill agents belonging to run B
 - [ ] `killAll` on server shutdown still reclaims all runs' agents
-- [ ] Unit test: two managers, concurrent `spawnAgentNoOpencode`, independent state maps
+- [ ] Unit test: two managers, concurrent `spawnAgent`, independent state maps
 
 ### Estimated scope: ~400 LOC, 1–2 days
 

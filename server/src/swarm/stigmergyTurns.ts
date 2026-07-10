@@ -27,6 +27,11 @@ import {
   describeSdkError,
 } from "./stigmergyPromptHelpers.js";
 import { pheromoneHeatmap } from "./pheromoneHeatmap.js";
+import {
+  isSaturated,
+  pickNextFileWithDecay,
+  DEFAULT_MAX_REVISITS,
+} from "./pheromoneDecay.js";
 
 export interface StigmergyTurnsHost {
   manager: AgentManager;
@@ -262,6 +267,42 @@ agent: Agent,
   totalRounds: number,
   candidatePaths: readonly string[],
 ): Promise<void> {
+  // Q8: optional saturation filter + decay-guided pick hint.
+  let pathsForPrompt = candidatePaths;
+  let decayHint: string | undefined;
+  if (host.active?.pheromoneDecay) {
+    const filtered = candidatePaths.filter((p) => {
+      const st = host.annotations.get(p);
+      if (!st) return true;
+      return !isSaturated(st, DEFAULT_MAX_REVISITS);
+    });
+    pathsForPrompt = filtered.length > 0 ? filtered : candidatePaths;
+    const pick = pickNextFileWithDecay({
+      candidates: pathsForPrompt.map((path) => {
+        const st = host.annotations.get(path);
+        return {
+          path,
+          state: st ?? {
+            visits: 0,
+            avgInterest: 5,
+            avgConfidence: 5,
+            latestNote: "",
+          },
+          lastVisitedRound: st?.lastVisitedRound ?? null,
+        };
+      }),
+      currentRound: round,
+    });
+    if (pick) {
+      decayHint = pick.path;
+      if (agent.index === 1 && round === 1) {
+        host.appendSystem(
+          `[Q8] Pheromone decay active — saturation cap ${DEFAULT_MAX_REVISITS}; decay-guided pick this turn: ${pick.path}`,
+        );
+      }
+    }
+  }
+
   // 2026-05-02 (improvement #1): compute recently-active files from
   // the last 1-2 rounds for the per-agent prompt. Surfaces the
   // dynamic peer-activity signal above the cumulative table.
@@ -284,17 +325,19 @@ agent: Agent,
     });
     recentlyActive.length = Math.min(recentlyActive.length, 5);
   }
+  const assignedTerritory = host.territoryAssignments.get(agent.index);
+  const territory =
+    assignedTerritory ??
+    (decayHint ? `Prefer starting at ${decayHint} (decay-ranked, saturation-aware)` : undefined);
   const prompt = buildExplorerPrompt({
     agentIndex: agent.index,
     round,
     totalRounds,
-    candidatePaths,
+    candidatePaths: pathsForPrompt,
     annotations: host.annotations,
     // 2026-05-02 (improvement #2): thread territory assignment from
     // the lead's pre-round-1 plan. Empty when plan failed.
-    ...(host.territoryAssignments.has(agent.index)
-      ? { territory: host.territoryAssignments.get(agent.index) }
-      : {}),
+    ...(territory ? { territory } : {}),
     ...(recentlyActive.length > 0 ? { recentlyActive } : {}),
   });
   // #303: parse the annotation INSIDE the runAgent transform so

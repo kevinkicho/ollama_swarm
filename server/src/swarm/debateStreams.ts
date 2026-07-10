@@ -23,6 +23,12 @@ import {
   buildCrossStreamJudgePrompt,
   parseCrossStreamPick,
 } from "./debatePromptHelpers.js";
+import {
+  buildSelfCritiquePrompt,
+  parseSelfCritiqueResponse,
+  pickPostCritiqueOutput,
+} from "./selfCritique.js";
+import { compareVerdicts, swapPositionLabels } from "./swapSidesBiasCheck.js";
 
 export interface DebateStreamsHost {
   manager: AgentManager;
@@ -100,9 +106,9 @@ agents: { pro: Agent; con: Agent; judge: Agent },
     // JUDGE turn (only on the final round, OR mid-loop when we
     // hit the early-check checkpoint).
     if (isFinalRound) {
-      finalVerdict = await runJudgeTurn(host, judge, proposition, r, cfg.userDirective, stream);
+      finalVerdict = await runJudgeTurn(host, judge, proposition, r, cfg.userDirective, stream, cfg);
     } else if (r === earlyCheckRound) {
-      finalVerdict = await runJudgeTurn(host, judge, proposition, r, cfg.userDirective, stream);
+      finalVerdict = await runJudgeTurn(host, judge, proposition, r, cfg.userDirective, stream, cfg);
       if (finalVerdict?.confidence === "high") {
         // Multi-stream mode: each stream may early-stop independently.
         // We DON'T set this.earlyStopDetail in that case (it would
@@ -367,6 +373,7 @@ judge: Agent,
   round: number,
   userDirective?: string,
   stream?: DebateStream,
+  cfg?: RunConfig,
 ): Promise<ParsedDebateVerdict | null> {
   // T-Item-2 (2026-05-04): scope transcript view to this stream when
   // running a stream-local judge turn.
@@ -381,11 +388,13 @@ judge: Agent,
   // Task #94: capture the parsed verdict so the loop can use
   // confidence:high as an early-stop signal.
   let parsed: ParsedDebateVerdict | null = null;
+  let judgeText = "";
   await host.runAgent(
     judge,
     prompt,
     { role: "judge", round },
     (text) => {
+      judgeText = text;
       parsed = parseDebateVerdict(text);
       if (!parsed) return undefined;
       return { kind: "debate_verdict", round, ...parsed };
@@ -393,6 +402,84 @@ judge: Agent,
     "swarm-read",
     stream,
   );
+
+  // Q1: optional self-critique on the judge verdict (opt-in).
+  if (cfg?.selfCritique && judgeText && !host.getStopping()) {
+    try {
+      const critiquePrompt = buildSelfCritiquePrompt({
+        originalOutput: judgeText,
+        taskBrief: `Judge the debate on: ${proposition}`,
+        customChecks: [
+          "Does the verdict pick a clear winner with evidence?",
+          "Is confidence calibrated to the strength of arguments?",
+        ],
+      });
+      let critiqueRaw = "";
+      await host.runAgent(
+        judge,
+        critiquePrompt,
+        { role: "judge", round },
+        (text) => {
+          critiqueRaw = text;
+          return undefined;
+        },
+        "swarm-read",
+        stream,
+      );
+      const verdict = parseSelfCritiqueResponse(critiqueRaw);
+      const picked = pickPostCritiqueOutput({ original: judgeText, verdict });
+      if (picked.replaced) {
+        host.appendSystem("[Q1] Self-critique refined the judge verdict.");
+        parsed = parseDebateVerdict(picked.output) ?? parsed;
+        judgeText = picked.output;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      host.appendSystem(`[Q1] Self-critique skipped (${msg}).`);
+    }
+  }
+
+  // Q7: swap-sides bias check — second judge pass with PRO/CON labels flipped.
+  if (cfg?.swapSidesBiasCheck && parsed && !host.getStopping()) {
+    try {
+      const swapped = swapPositionLabels(transcriptView);
+      const swapPrompt = buildJudgePrompt({
+        proposition,
+        transcript: swapped,
+        userDirective,
+      });
+      let swappedParsed: ParsedDebateVerdict | null = null;
+      await host.runAgent(
+        judge,
+        swapPrompt,
+        { role: "judge", round },
+        (text) => {
+          swappedParsed = parseDebateVerdict(text);
+          return undefined;
+        },
+        "swarm-read",
+        stream,
+      );
+      if (swappedParsed) {
+        const cmp = compareVerdicts({ original: parsed, swapped: swappedParsed });
+        host.appendSystem(`[Q7] Swap-sides bias check: ${cmp.note}`);
+        // Degrade confidence so executeNextAction skips bias-driven build.
+        if (cmp.winnerFlipped) {
+          parsed = { ...parsed, confidence: "low" };
+        } else if (cmp.confidenceDegraded) {
+          if (parsed.confidence === "high") {
+            parsed = { ...parsed, confidence: "medium" };
+          } else if (parsed.confidence === "medium") {
+            parsed = { ...parsed, confidence: "low" };
+          }
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      host.appendSystem(`[Q7] Swap-sides check skipped (${msg}).`);
+    }
+  }
+
   if (parsed && stream) stream.verdict = parsed;
   return parsed;
 }

@@ -1,18 +1,20 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-07-09 (Simple/Advanced presets; Brain control-surface + CLI; pending-commit reaper; unified createRunner; eval preset coverage.)
+**Last updated:** 2026-07-10 (empty-output/caps guards + Brain RECONFIG; quality levers wired; spawnAgent unify; dead-code prune; god-file modularization.)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **Release track:** See [`docs/RELEASE-1.0-PLAN.md`](RELEASE-1.0-PLAN.md). Setup **Simple** = core+supported (default blackboard). Brain agents: `GET /api/swarm/brain/control-surface` + [`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`](BRAIN-OS-FOR-EXTERNAL-AGENTS.md).
+
+> **2026-07-10 — Loop / guard policy.** Do **not** use turn-level Jaccard similarity as a primary whole-run halt (false positives when agents re-read prior-run logs). Prefer empty/junk output dead-loop, plan-empty, wall-clock/token/quota caps, and board/ledger progress stuck. Guard trips notify Brain (`guardNotify`) with optional RECONFIG; UI shows `RunHealthChip` + `BrainSuggestionBubble`. Details: `docs/decisions.md`, `docs/postmortems/stream-guards-removed.md`.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
 > now goes through a direct `SessionProvider` (Ollama / Anthropic / OpenAI)
 > via `chatOnce`. Tool-using turns route through an in-process `ToolDispatcher`
 > (read/grep/glob/list/bash with a hard allowlist). `Agent.client`, the
-> `@opencode-ai/sdk` dep, the `PortAllocator`, and the spawn-subprocess code
-> path are all gone. `OPENCODE_SERVER_PASSWORD` is still required at
-> config-load time so existing `npm test` setups don't break, but it's
-> otherwise unused.
+> `@opencode-ai/sdk` dep, and the spawn-subprocess code path are all gone.
+> Agents register via `AgentManager.spawnAgent` only (no port allocator).
+> `OPENCODE_SERVER_PASSWORD` is still required at config-load time so existing
+> `npm test` setups don't break, but it's otherwise unused.
 >
 > **2026-07 — Legacy agent memory consolidated:** `.opencode/session-checkpoint.md` (and `.opencode/`) superseded and removed after consolidation of historical notes (council refactor, test snapshots, old LOCs) into `docs/STATUS.md`, `docs/AGENT-GUIDE.md`, and `README.md`. `opencode.json` now points at current docs. Runtime logs under `terminals/` and `runs/` are gitignored (not guidance).
 
@@ -23,7 +25,7 @@
 The app is a **Brain-as-OS for concurrent swarm orchestration**:
 
 - **Brain-as-OS layer** (under blackboard): real-time monitoring, run analysis & final reports, cross-run knowledge (librarian), run provisioning, health tracking. Brain acts as master-admin for initializing, starting, finishing, reviewing records and analyzing runs. Self-upgrader is present in *safe recording mode only* (logs system/prompt improvement proposals from insights into `logs/upgrades.jsonl`; never auto-applies platform patches — manual git review required). See `brainOverseer/selfUpgrader.ts` + wiring in `runBrainAnalysis`.
-- **Brain during live runs (FAB + chat + suggest)**: Floating fixed 🧠 "Brain" pill (bottom-right in SystemWrapper, shown for active runs) opens modal running `BrainStartChat` with runContext (transcript summary via formatServerSummary + board todos + phase + cfg). Chat uses `/brain/chat` (with runContext prompt augmentation). History saved per-run via store + `/brain/chat-history` + RunStatePersister + summary recovery. `/brain/suggest` calls `brainService.injectSuggestion` which appends system + emits `brain_suggestion` transcript kind (rendered in MessageBubble). Proactive inject wired in Council stuck cycles + adaptive watchdog stalls.
+- **Brain during live runs (FAB + chat + suggest)**: Floating fixed 🧠 "Brain" pill (bottom-right in SystemWrapper, shown for active runs) opens modal running `BrainStartChat` with runContext (transcript summary via formatServerSummary + board todos + phase + cfg). Chat uses `/brain/chat` (with runContext prompt augmentation). History saved per-run via store + `/brain/chat-history` + RunStatePersister + summary recovery. `/brain/suggest` and **guard-trip notify** (`guardNotify.ts`) call `brainService.injectSuggestion` → `brain_suggestion` transcript kind (`BrainSuggestionBubble` with one-click RECONFIG apply). Proactive inject also on council stuck cycles + adaptive watchdog stalls.
 - **Concurrent multi-swarm support**: multiple independent runs in parallel (`/runs/:runId` routing, ActiveRunsPanel, per-run WebSocket/REST, concurrency cap). Brain and UI manage them at system level.
 - **System UI**: `SystemWrapper` with persistent sidebar, floating Brain FAB, BrainProposalsPanel, BrainActivityPanel, SystemStatus, PatchMonitor, RunQueue, topbar stats/health. Transcript defaults to full "all" view (normal unfiltered log of everything). Optional "key"/other filters available in the bar to reduce noise if desired.
 - **Recent major UI work**: full viewport layout hardening, sticky elements, scrolling fixes; dedicated Brain chat + suggest flow. 
@@ -70,7 +72,9 @@ Validation: tour v2 (2026-04-28) ran 9 sequentially with 8/9 self-terminating cl
 | Eval harness | preset×task scoreboard | `eval/run-eval.mjs` + `eval/catalog.json` |
 | Pre-commit verify gate | Worker hunks gated by user shell command (npm test, lint, etc.) | `WorkerPipeline.VerifyAdapter` |
 | HITL nudge channel | `/api/swarm/amend` + topbar textarea | `IdentityStrip.AmendButton` |
-| Brain-as-OS | proposals, analysis, run provisioning, health monitoring, during-run chat (FAB), proactive suggestions via injectSuggestion | `brainOverseer/*`, `brainService.ts`, `/brain/*` routes, SystemWrapper + BrainStartChat + transcript MessageBubble (brain_suggestion kind) |
+| Brain-as-OS | proposals, analysis, run provisioning, health monitoring, during-run chat (FAB), proactive suggestions + guard RECONFIG via injectSuggestion | `brainOverseer/*`, `brainService.ts`, `guardNotify.ts`, `/brain/*` + `/api/swarm/reconfig`, SystemWrapper + BrainStartChat + BrainSuggestionBubble |
+| Run health (UI) | Caps remaining, early-stop, drain eligibility chip + drain tooltip | `RunHealthChip`, status `capsRemaining` / `drainEligible` / `earlyStopDetail` |
+| Quality levers (opt-in) | failurePatternSeed, preserveDissent, selfCritique, swapSidesBiasCheck, pheromoneDecay, midCycleBroadcast (+ library flags) | `runConfig/*`, schemas + startRoute; runners wire per flag |
 | Concurrent runs + Active Runs UI | multi-tenant, per-run routing, ActiveRunsPanel | Orchestrator + `/api/swarm/active-runs` + deep links |
 | V2 event log | `/api/v2/event-log/runs` + UI EventLogPanel; infra-only filter | `EventLogReaderV2` |
 | Run history (95+ runs) | History dropdown auto-scans `runs*/` at startup | `Orchestrator.scanForRunParents` |

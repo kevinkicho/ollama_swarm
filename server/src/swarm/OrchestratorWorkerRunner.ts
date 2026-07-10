@@ -143,6 +143,8 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
             this.dispatchHandoffWave(w, r, tr, snap, d),
           runDecompositionPeerReview: (rev, r, tr, plan, d) =>
             this.runDecompositionPeerReview(rev, r, tr, plan, d),
+          getRunId: () => this.active?.runId ?? cfg.runId,
+          getBrainService: () => this.opts.getBrainService?.() ?? null,
         },
         cfg,
       );

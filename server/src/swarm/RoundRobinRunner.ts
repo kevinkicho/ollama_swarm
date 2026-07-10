@@ -18,6 +18,8 @@ import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { buildRoundRobinSeedMessage } from "./roundRobinSeed.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
+import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
+import { notifyGuardTrip } from "./guardNotify.js";
 // runEndReflection moved into runFinallyHooks (Phase D).
 
 import { writeDeliverableAndEmit } from "./deliverable.js";
@@ -174,14 +176,40 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
     await this.runDiscussionLoop(cfg, "Round-robin", async (cfg) => {
       const earlyCheckRound = this.roles && cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
       const tokenBaseline = snapshotLifetimeTokens();
+      // Empty/junk turns only — not Jaccard similarity (log re-reads can look similar).
+      const deadLoopGuard = new OutputEmptyDeadLoopGuard({
+        roleLabel: "peers",
+        unit: "round",
+      });
 
       for (let r = 1; r <= cfg.rounds; r++) {
         if (!this.checkRoundBudget(cfg, "round", r, tokenBaseline)) break;
 
+        const transcriptLenBefore = this.transcript.length;
         const agents = this.opts.manager.list();
         for (const agent of agents) {
           if (this.stopping) break;
           await this.runTurn(agent, r, cfg.rounds);
+        }
+        if (!this.stopping) {
+          const newEntries = this.transcript
+            .slice(transcriptLenBefore)
+            .filter((e) => e.role === "agent");
+          const dlHit = deadLoopGuard.recordIteration(newEntries);
+          if (dlHit.tripped) {
+            this.earlyStopDetail = dlHit.earlyStopDetail;
+            this.appendSystem(
+              `All peers produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending round-robin early.`,
+            );
+            notifyGuardTrip({
+              kind: "output-empty",
+              detail: dlHit.earlyStopDetail ?? "peers-silenced",
+              runId: this.active?.runId,
+              appendSystem: (t, s) => this.appendSystem(t, s as any),
+              getBrainService: () => this.opts.getBrainService?.() ?? null,
+            });
+            break;
+          }
         }
 
         if (cfg.postRoundCritique) {

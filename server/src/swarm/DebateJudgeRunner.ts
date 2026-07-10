@@ -381,6 +381,7 @@ export class DebateJudgeRunner extends DiscussionRunnerBase {
       round,
       userDirective,
       stream,
+      this.active,
     );
   }
 

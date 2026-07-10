@@ -162,6 +162,14 @@ export interface SwarmStore {
    * cannot flip to virtual mid-session (source of hidden/gapped messages).
    */
   transcriptPlainListLatched: boolean;
+  /** Soft-drain eligibility from last status snapshot (server). */
+  drainEligible?: boolean;
+  drainIneligibleReason?: string;
+  capsRemaining?: {
+    wallClockMsRemaining?: number;
+    tokenBudgetRemaining?: number;
+  };
+  earlyStopDetail?: string;
 
   setPhase: (
     phase: SwarmPhase,
@@ -172,6 +180,13 @@ export interface SwarmStore {
     },
   ) => void;
   latchTranscriptPlainList: () => void;
+  /** Status-snapshot fields for drain tooltip + remaining caps. */
+  setRunHealthFromStatus: (patch: {
+    drainEligible?: boolean;
+    drainIneligibleReason?: string;
+    capsRemaining?: SwarmStore["capsRemaining"];
+    earlyStopDetail?: string;
+  }) => void;
   upsertAgent: (a: AgentState) => void;
   appendEntry: (e: TranscriptEntry) => void;
   /** Batch-load transcript from REST hydrate — one set() to avoid virtual-list flicker. */

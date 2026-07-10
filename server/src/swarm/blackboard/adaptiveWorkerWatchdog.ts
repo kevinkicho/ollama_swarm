@@ -139,7 +139,7 @@ export async function scaleUpAdaptive(
   for (let i = 0; i < recommendedAdd; i++) {
     try {
       const spawnIndex = baseIdx + i;
-      const newAgent = await ctx.getManager().spawnAgentNoOpencode({
+      const newAgent = await ctx.getManager().spawnAgent({
         cwd: cfg.localPath,
         index: spawnIndex,
         model: resolveRunSpawnModel(cfg, spawnIndex),

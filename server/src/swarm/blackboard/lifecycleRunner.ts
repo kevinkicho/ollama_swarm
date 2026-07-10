@@ -190,7 +190,7 @@ export interface LifecycleContext {
   excludeRunnerArtifacts(destPath: string): Promise<void>;
   captureGitBaseline(clonePath: string): Promise<void>;
   buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed>;
-  spawnAgentNoOpencode(opts: SpawnOpts): Promise<Agent>;
+  spawnAgent(opts: SpawnOpts): Promise<Agent>;
   getManager(): AgentManager;
   emitAgentState(s: import("../../types.js").AgentState): void;
   markPlannerStatus(planner: Agent, status: "thinking" | "ready"): void;
@@ -326,12 +326,12 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // Planner is always index 1. Workers take 2..N. If the user picks
   // agentCount=1 there are no workers — planner posts TODOs, nothing drains
   // them, and we transition straight to completed. Documented in README.
-  // E3 Phase 5: opencode subprocess is gone. spawnAgentNoOpencode is
+  // E3 Phase 5: opencode subprocess is gone. spawnAgent is
   // the only spawn path. The auxiliary direct-prompt helpers
   // (auditorSeedBuilder, goalGenerationPrePass, reflectionPasses,
   // runEndReflection, promptAndExtract) all migrated to chatOnce in
   // earlier cleanup commits.
-  const planner = await ctx.spawnAgentNoOpencode({
+  const planner = await ctx.spawnAgent({
     cwd: destPath,
     index: 1,
     model: plannerModel,
@@ -345,7 +345,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
     // sequential would compound that for every extra worker.
     const workerSpawns = Array.from({ length: workerCount }, (_, i) => {
       const agentIndex = 2 + i;
-      return ctx.spawnAgentNoOpencode({
+      return ctx.spawnAgent({
         cwd: destPath,
         index: agentIndex,
         model: resolveRunSpawnModel(cfg, agentIndex),
@@ -377,7 +377,7 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // 2..N=workers, N+1=auditor). Total agents = agentCount + 1.
   if (cfg.dedicatedAuditor) {
     const auditorIndex = cfg.agentCount + 1;
-    ctx.setAuditor(await ctx.spawnAgentNoOpencode({
+    ctx.setAuditor(await ctx.spawnAgent({
       cwd: destPath,
       index: auditorIndex,
       model: resolveRunSpawnModel(cfg, auditorIndex),

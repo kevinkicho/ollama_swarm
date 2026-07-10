@@ -426,6 +426,20 @@ export const StartBody = z.object({
   }).optional(),
   rubricGrading: z.boolean().optional(),
   checkpointing: z.boolean().optional(),
+  // Quality levers (opt-in; pure helpers + runner wiring).
+  failurePatternSeed: z.boolean().optional(),
+  preserveDissent: z.boolean().optional(),
+  selfCritique: z.boolean().optional(),
+  swapSidesBiasCheck: z.boolean().optional(),
+  pheromoneDecay: z.boolean().optional(),
+  midCycleBroadcast: z.boolean().optional(),
+  bestOfNTurn: z.coerce.number().int().min(1).max(5).optional(),
+  dynamicRolePicker: z.boolean().optional(),
+  mentionContracts: z.boolean().optional(),
+  preflightDryRun: z.boolean().optional(),
+  hunkRag: z.boolean().optional(),
+  councilReconcile: z.enum(["revise", "vote", "judge"]).optional(),
+  stigmergyOnBlackboard: z.boolean().optional(),
 });
 
 

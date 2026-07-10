@@ -188,6 +188,8 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
           runAgent: (a, p) => this.runAgent(a, p),
           runMidLeadSubtree: (ml, pool, a, r, tr, snap, d) =>
             this.runMidLeadSubtree(ml, pool, a, r, tr, snap, d),
+          getRunId: () => this.active?.runId ?? cfg.runId,
+          getBrainService: () => this.opts.getBrainService?.() ?? null,
         },
         cfg,
       );

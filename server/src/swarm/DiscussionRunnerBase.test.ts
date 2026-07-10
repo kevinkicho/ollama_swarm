@@ -21,7 +21,7 @@ function makeMockOpts(): {
   const agents: Map<string, Agent> = new Map();
 
   const manager = {
-    spawnAgentNoOpencode: async (opts: any) => {
+    spawnAgent: async (opts: any) => {
       const agent = makeMockAgent(`agent-${opts.index}`, opts.index, opts.model);
       agents.set(agent.id, agent);
       agentStates.set(agent.id, { id: agent.id, index: agent.index, status: "ready" });
@@ -402,7 +402,7 @@ describe("DiscussionRunnerBase — initCloneAndSpawn", () => {
   it("spawns each agent with topology per-row model, not only cfg.model", async () => {
     const spawnedModels: string[] = [];
     const { opts } = makeMockOpts();
-    (opts.manager as any).spawnAgentNoOpencode = async (spawnOpts: { index: number; model: string }) => {
+    (opts.manager as any).spawnAgent = async (spawnOpts: { index: number; model: string }) => {
       spawnedModels.push(spawnOpts.model);
       return makeMockAgent(`agent-${spawnOpts.index}`, spawnOpts.index, spawnOpts.model);
     };
@@ -445,7 +445,7 @@ describe("DiscussionRunnerBase — initCloneAndSpawn", () => {
 
   it("throws when no agents start and minAgents > 1", async () => {
     const { opts, events } = makeMockOpts();
-    (opts.manager as any).spawnAgentNoOpencode = async () => {
+    (opts.manager as any).spawnAgent = async () => {
       throw new Error("spawn failed");
     };
     const runner = new TestRunner(opts);

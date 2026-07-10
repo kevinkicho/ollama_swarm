@@ -644,9 +644,7 @@ if (config.OLLAMA_PROXY_PORT > 0) {
 
 // Reclaim orphaned processes from prior runs (if any)
 // instances BEFORE we start accepting swarm-start requests. This
-// prevents the PortAllocator from handing out a port that a zombie
-// process still holds, and bounds cumulative resource leak across
-// dev-server restarts. Await so listen doesn't race the kill.
+// bounds cumulative resource leak across dev-server restarts.
 //
 // Also reclaim stale clone lock files left by killed/crashed runs.
 void reclaimOrphans(repoRoot)

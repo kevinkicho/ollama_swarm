@@ -5,7 +5,7 @@
 // Server-side appendAgent runs shared/extractToolCallMarkers on every
 // agent response and stashes the joined markers in
 // TranscriptEntry.toolCalls. MessageBubble renders THIS block above
-// the entry's main bubble (next to ThoughtsBlock) when toolCalls is
+// the entry's main bubble (next to thinking) when toolCalls is
 // non-empty.
 //
 // Why surface them at all instead of just dropping them: the markers

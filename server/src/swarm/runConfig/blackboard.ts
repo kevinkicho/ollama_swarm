@@ -279,9 +279,8 @@ export interface RunConfigBlackboard {
    *  surfaces the most-recent N "failure" + "success" entries to the
    *  planner via the seed prompt. Lets a planner avoid re-trying
    *  known dead ends + replicate known-working approaches. Default
-   *  OFF — adds prompt tokens to every planner seed. Currently
-   *  honored by: BlackboardRunner planner seed (other runners adopt
-   *  via `failurePatternSeed.ts` helper). */
+   *  OFF — adds prompt tokens to every planner seed. **Wired** in
+   *  blackboard `buildSeed` (`contractBuilder.ts`). */
   failurePatternSeed?: boolean;
   /** T-Item-StigBb (2026-05-04): blackboard worker dispatch with
    *  stigmergy preference. When true, the worker dequeue picks among

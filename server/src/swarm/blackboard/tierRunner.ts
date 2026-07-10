@@ -48,8 +48,17 @@ export interface TierContext {
   setConsecutiveStuckCycles: (n: number) => void;
 
   // --- callbacks ---
-  appendSystem: (msg: string) => void;
+  appendSystem: (msg: string, summary?: import("../../types.js").TranscriptEntrySummary) => void;
   appendAgent: (agent: Agent, text: string) => void;
+  getBrainService?: () =>
+    | {
+        injectSuggestion?: (
+          runId: string,
+          s: { title: string; text: string; category?: string },
+        ) => void;
+      }
+    | null
+    | undefined;
   promptPlannerSafely: (
     primaryAgent: Agent,
     promptText: string,
@@ -581,8 +590,22 @@ export async function runAuditedExecution(
         );
         continue;
       }
-      ctx.setCompletionDetail("auditor + planner produced no new work; unresolved criteria remain");
-      ctx.appendSystem(ctx.getCompletionDetail()! + ".");
+      const stuckDetail =
+        "auditor + planner produced no new work; unresolved criteria remain";
+      ctx.setCompletionDetail(stuckDetail);
+      ctx.appendSystem(stuckDetail + ".");
+      try {
+        const { notifyGuardTrip } = await import("../guardNotify.js");
+        notifyGuardTrip({
+          kind: "tier-stuck",
+          detail: stuckDetail,
+          runId: ctx.getActive()?.runId,
+          appendSystem: (t, s) => ctx.appendSystem(t, s),
+          getBrainService: ctx.getBrainService,
+        });
+      } catch {
+        // non-fatal: stuck stop already recorded
+      }
       return;
     }
     ctx.setConsecutiveStuckCycles(0);

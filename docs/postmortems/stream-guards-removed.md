@@ -74,3 +74,19 @@ guarantee of a better outcome.
 ## Status
 
 **Removed.** Server restart required after deploy.
+
+## Follow-up note (2026-07-10) — false “loop” diagnosis
+
+User observation after the fact: agents that appeared to “repeat themselves”
+were often **reading massive prior-run / stockpile logs** with similar wording
+while continuing real work — not stuck in generative loops. That means:
+
+1. **Similarity-based halt (Jaccard / turn-level loop detection)** would have
+   been a **false positive** on those runs (halted useful work).
+2. Removing Jaccard as a **primary** gate remains correct.
+3. **Empty/junk consecutive turns** and **resource caps** remain the right
+   primary automated stops — they do not fire on long, non-empty, informative
+   (even if similar) log consumption.
+
+See also `docs/decisions.md` entry **2026-07-10: Do not re-enable turn-level
+Jaccard as primary loop gate**.

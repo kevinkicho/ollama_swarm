@@ -393,7 +393,7 @@ describe("DebateJudgeRunner — directive plumbing (structural)", () => {
     );
     assert.match(
       DJ_ALL,
-      /runJudgeTurn\((?:host, )?judge, proposition, r, cfg\.userDirective, stream\)/,
+      /runJudgeTurn\((?:host, )?judge, proposition, r, cfg\.userDirective, stream(?:, cfg)?\)/,
     );
     assert.match(
       DJ_ALL,

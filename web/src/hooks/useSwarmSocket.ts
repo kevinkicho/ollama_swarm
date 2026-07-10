@@ -11,7 +11,7 @@ import {
 import { apiFetch, swarmWsTokenQuery } from "../lib/apiFetch";
 
 // Legacy singleton WS hook for the primary SwarmStore. Per-run views
-// should prefer `useRunScopedWebSocket` to avoid mixing events when
+// should filter by runId on the client (or use a run-scoped socket) when
 // multiple runs are active. This hook already scopes by store.runId.
 //
 // Singleton so React StrictMode's double-invoked effect doesn't

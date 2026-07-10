@@ -20,6 +20,8 @@ import {
 import { detectSemanticConvergence, jaccardToCosineThreshold } from "./semanticConvergence.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
+import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
+import { notifyGuardTrip } from "./guardNotify.js";
 import { gatherProposerContext, type FileExcerpt } from "./moaContextGather.js";
 import { userEntryVisibleTo } from "./chatReceipt.js";
 import { deriveRubric, recommendProposerCount, type DerivedRubric } from "./rubricPrePass.js";
@@ -45,7 +47,7 @@ export interface MoaLoopBodyHost {
   getActualRoundsCompleted: () => number;
   setActualRoundsCompleted: (n: number) => void;
   setEarlyStopDetail: (d: string | undefined) => void;
-  appendSystem: (text: string) => void;
+  appendSystem: (text: string, summary?: unknown) => void;
   setPhase: (p: SwarmPhase) => void;
   runOne: (agent: Agent, prompt: string, label: string) => Promise<string>;
   runAggregatorSelfCritique: (
@@ -59,6 +61,11 @@ export interface MoaLoopBodyHost {
     levels: number;
     availableAggregators: readonly Agent[];
   }) => Promise<{ text: string; layerSizes: number[] }>;
+  getRunId?: () => string | undefined;
+  getBrainService?: () =>
+    | { injectSuggestion?: (runId: string, s: { title: string; text: string; category?: string }) => void }
+    | null
+    | undefined;
 }
 
 export async function runMoaLoopBody(
@@ -172,6 +179,11 @@ export async function runMoaLoopBody(
   // with the other 8 runners. Pre-fix MoA was the only preset that
   // could blow past cfg.tokenBudget without halting (audit Pattern 2a).
   const tokenBaseline = snapshotLifetimeTokens();
+  // Empty/junk proposals only — not Jaccard (similar proposer drafts are expected).
+  const deadLoopGuard = new OutputEmptyDeadLoopGuard({
+    roleLabel: "proposers",
+    unit: "round",
+  });
   for (let round = 1; round <= rounds; round++) {
     if (host.getStopping()) break;
     const guard = checkBudgetGuards({
@@ -190,6 +202,8 @@ export async function runMoaLoopBody(
     host.setRound(round);
     host.setActualRoundsCompleted(round);
     host.appendSystem(`── MoA Round ${round}/${rounds} — Layer 1: ${proposerCount} proposers (peer-hidden) ──`);
+
+    const transcriptLenBefore = host.transcript.length;
 
     // #119 + 2026-05-02 (chat lever #3): pull user-role transcript
     // entries each round so chat injections reach agents. PER-AGENT
@@ -246,6 +260,26 @@ export async function runMoaLoopBody(
       host.appendSystem(`MoA round ${round}: all ${proposerCount} proposers failed; aborting.`);
       host.setPhase("failed");
       return;
+    }
+
+    // Empty/junk transcript turns only (not Jaccard on similar proposal text).
+    const newEntries = host.transcript
+      .slice(transcriptLenBefore)
+      .filter((e) => e.role === "agent");
+    const dlHit = deadLoopGuard.recordIteration(newEntries);
+    if (dlHit.tripped) {
+      host.setEarlyStopDetail(dlHit.earlyStopDetail);
+      host.appendSystem(
+        `All proposers produced empty/junk output for ${dlHit.consecutive} consecutive rounds — ending MoA early.`,
+      );
+      notifyGuardTrip({
+        kind: "output-empty",
+        detail: dlHit.earlyStopDetail ?? "proposers-silenced",
+        runId: host.getRunId?.() ?? cfg.runId,
+        appendSystem: (t, s) => host.appendSystem(t, s),
+        getBrainService: host.getBrainService,
+      });
+      break;
     }
 
     // #93 deeper (2026-05-01): K aggregators in parallel + central pick.
