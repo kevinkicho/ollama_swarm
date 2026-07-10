@@ -13,7 +13,9 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(__dirname, "Orchestrator.ts"), "utf8");
+const EMIT_SRC = readFileSync(join(__dirname, "orchestratorEmit.ts"), "utf8");
 const ACTIVE_RUN_SRC = readFileSync(join(__dirname, "ActiveRun.ts"), "utf8");
+const ALL_ORCH_SRC = [SRC, EMIT_SRC].join("\n");
 
 test("Orchestrator: ActiveRun class declared with required fields", () => {
   // Structural: keeps refactor honest if a future edit drops a field.
@@ -88,14 +90,16 @@ test("Orchestrator: per-run AgentManager via createManager factory", () => {
 
 test("Orchestrator: wrappedEmit binds runId + persister at build time", () => {
   assert.match(SRC, /interface BuildRunnerContext/);
+  // Stamp lives in orchestratorEmit.ts after extract; still must not use this.runId.
   assert.match(
-    SRC,
+    ALL_ORCH_SRC,
     /e\.runId === undefined \? \{ \.\.\.e, runId \} : e/,
   );
   assert.doesNotMatch(
-    SRC,
+    ALL_ORCH_SRC,
     /e\.runId === undefined && this\.runId \? \{ \.\.\.e, runId: this\.runId \}/,
   );
+  assert.match(SRC, /createWrappedEmitExtracted|createWrappedEmit\(/);
 });
 
 test("Orchestrator: amendments close on stopRun; start finally only clears gate", () => {
