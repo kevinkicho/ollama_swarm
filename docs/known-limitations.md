@@ -156,7 +156,7 @@ Blackboard runs a **research pre-pass** before JSON-locked contract turns.
 Tool calls are logged to the transcript. Web fetch is biased toward
 gov/academic sources; there is no general browser or arbitrary HTTP.
 
-**Still not available:** GitHub MCP (`mcps/grok_com_github/`), Playwright
+**Still not available:** GitHub MCP integration, Playwright
 (`MCP_PLAYWRIGHT_ENABLED`), or unconstrained external APIs in the general
 agent loop.
 

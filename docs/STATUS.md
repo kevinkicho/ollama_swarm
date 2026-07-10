@@ -14,7 +14,7 @@
 > config-load time so existing `npm test` setups don't break, but it's
 > otherwise unused.
 >
-> **2026-07 — Legacy agent memory consolidated:** `.opencode/session-checkpoint.md` (and `.opencode/`) superseded and removed after consolidation of historical notes (council refactor, test snapshots, old LOCs) into `docs/STATUS.md`, `docs/AGENT-GUIDE.md`, and `README.md`. `opencode.json` now points at current docs. Old `terminals/*.txt` are runtime logs (not guidance).
+> **2026-07 — Legacy agent memory consolidated:** `.opencode/session-checkpoint.md` (and `.opencode/`) superseded and removed after consolidation of historical notes (council refactor, test snapshots, old LOCs) into `docs/STATUS.md`, `docs/AGENT-GUIDE.md`, and `README.md`. `opencode.json` now points at current docs. Runtime logs under `terminals/` and `runs/` are gitignored (not guidance).
 
 ---
 

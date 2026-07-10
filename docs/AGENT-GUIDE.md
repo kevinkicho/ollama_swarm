@@ -131,7 +131,7 @@ Tools (via in-process `ToolDispatcher`, resolved in `shared/src/toolProfiles.ts`
 
 - Web tools require explicit RunConfig flags; not enabled by default.
 - Bash is heavily gated (see `buildCommandAllowlist.ts`).
-- MCP (GitHub tools in `mcps/grok_com_github/`, Playwright) is not generally available to swarm agents.
+- MCP (GitHub tools, Playwright) is not generally available to swarm agents.
 - Special case: when `MCP_PLAYWRIGHT_ENABLED=true`, the auditor can get browser snapshots for UI criteria.
 
 Directives that require "live web research" (scientific literature, data endpoints, superconductor studies, etc.) should set `webTools: true` + `plannerTools: true`. Use pure council/map-reduce/moa or the pipeline preset for research. See README "Using for Scientific Research & Internet Work" and STATUS preset matrix for current patterns and configs. Local-only workers remain sandboxed.

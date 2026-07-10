@@ -90,17 +90,15 @@ This is the structured index of all relevant, tracked documentation for the olla
 - `eval/README.md` and fixture READMEs  
   Documentation for the evaluation harness and test fixtures.
 
-- `PROJECT-REVIEW.md` and `PROJECT-REVIEW-2026-07-04.md`  
-  Project review notes.
-
 ## What Is Not Tracked
 
 These are deliberately excluded from version control (see `.gitignore`):
 
 - Runtime state: `.last_rid.txt`, `.swarm-memory.jsonl`
 - Brain-generated artifacts: `.swarm-design/`, `.swarm-improvements/`
-- Logs and outputs: `logs/`, `screenshots/`, deliverable files inside logs
-- Test / debug artifacts: `*.rid.txt`, temporary capture scripts, `runs/_*` diagnose dirs
+- Logs and outputs: `logs/`, `screenshots/`, `server.err` / `server.out`, deliverable files inside logs
+- Run / session artifacts: entire `runs/`, `terminals/`, `agent-tools/`
+- MCP schema dumps: `mcps/` (not loaded by the app runtime)
 - Per-clone operational files: `blackboard-state.json`, `run-state.json*`, `.server-port`
 - Environment and build artifacts: `.env*`, `node_modules/`, `dist/`, `build/`, `*.log`
 

@@ -7,6 +7,13 @@ build/
 *.log
 .DS_Store
 logs/
+# Runtime run artifacts (clones, smoke tests, monitors, eval sweeps)
+runs/
+runs_*/
+# Agent / IDE session logs
+terminals/
+# MCP tool schema dumps (not loaded by the app; regenerate externally if needed)
+mcps/
 # 2026-05-02: per-clone operational state from RunStatePersister.
 # Lives next to the swarm's clone path so a server restart could
 # resume mid-run (recovery deferred — write side only for now).
@@ -37,3 +44,8 @@ blackboard-state.json
 *.rid.txt
 scripts/capture-*-debug.mjs
 scripts/capture-*-debug.js
+server.err
+server.out
+agent-tools/
+run-summary-embedded.json
+inspect-summary.mjs

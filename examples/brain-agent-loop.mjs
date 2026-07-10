@@ -18,7 +18,7 @@
 const SERVER = process.env.OLLAMA_SWARM_SERVER_URL || 'http://localhost:8243';
 const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
 const goal = args.join(' ') || 'analyze recent papers on room-temperature superconductors and synthesize the common crystal and electronic features';
-// Prior run data from run-summary-embedded.json for testing start params (blackboard,5,0)
+// Optional fixed start params for --use-prior demos (blackboard continuous)
 const PRIOR_PARAMS = { preset: 'blackboard', agentCount: 5, rounds: 0 };
 if (process.argv.includes('--use-prior')) {
   console.log('[brain-agent] Using prior run data for start params:', PRIOR_PARAMS);

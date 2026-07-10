@@ -183,7 +183,7 @@ By default, agents have **no internet access**. Tools are local to the cloned re
 
 **Opt-in research mode** (`webTools: true` or `plannerTools: true`): profiles upgrade to `swarm-planner`, `swarm-research`, or `swarm-builder-research`, adding `web_search` + `web_fetch`. Blackboard runs a research pre-pass before contract derivation; tool calls appear in the transcript. See `shared/src/toolProfiles.ts` and `docs/known-limitations.md`.
 
-GitHub MCP (`mcps/`) and Playwright (`MCP_PLAYWRIGHT_ENABLED`) are not part of the general agent loop.
+GitHub MCP and Playwright (`MCP_PLAYWRIGHT_ENABLED`) are not part of the general agent loop.
 
 ## Architecture
 
