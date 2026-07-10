@@ -96,13 +96,15 @@ describe("TodoQueue — terminal transitions", () => {
     assert.equal(q.getRetries(id), 0); // skips don't bump retries
   });
 
-  it("complete throws if todo isn't in-progress", () => {
+  it("complete throws if still pending; idempotent once completed", () => {
     const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     assert.throws(() => q.complete(id), /status=pending/);
     q.dequeue("worker-2");
     q.complete(id);
-    assert.throws(() => q.complete(id), /status=completed/);
+    // Double-complete is a no-op (race-safe).
+    q.complete(id);
+    assert.equal(q.get(id)?.status, "completed");
   });
 
   it("fail throws if todo isn't in-progress", () => {
@@ -572,15 +574,15 @@ describe("TodoQueue — reapStaleInProgress (Phase 2 reaper)", () => {
     assert.equal(q.get(id)?.endedAt, 602_000);
   });
 
-  it("complete() after reap still throws for non-timeout failures", () => {
+  it("complete() after non-reaper fail accepts late worker success (no crash)", () => {
     const q = new TodoQueue();
     const id = q.post({ description: "x", expectedFiles: [], createdBy: "p" });
     q.dequeue("worker", undefined, 1_000);
     q.fail(id, "parse error");
-    assert.throws(
-      () => q.complete(id),
-      /Cannot complete todo .* status=failed/,
-    );
+    q.complete(id, 2_000);
+    assert.equal(q.get(id)?.status, "completed");
+    assert.equal(q.get(id)?.endedAt, 2_000);
+    assert.equal(q.get(id)?.reason, undefined);
   });
 });
 

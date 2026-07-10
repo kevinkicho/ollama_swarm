@@ -49,6 +49,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommended: 3,
     recommendedModel: MODEL_REASONING,
     status: "active",
+    maturity: "supported",
     directive: "honored",
     useCases: ["analysis", "deliberation"],
   },
@@ -64,6 +65,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     // (BLACKBOARD_DEFAULT_*_MODEL) refine workers + auditor.
     recommendedModel: MODEL_REASONING,
     status: "active",
+    maturity: "core",
     directive: "honored",
     useCases: ["code-writing", "research", "audit"],
   },
@@ -81,6 +83,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommended: 5,
     recommendedModel: MODEL_REASONING,
     status: "active",
+    maturity: "experimental",
     directive: "honored",
     useCases: ["analysis", "multi-perspective", "research"],
   },
@@ -104,6 +107,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     // (Unit 65 candidate), swap mappers to MODEL_CODING.
     recommendedModel: MODEL_REASONING,
     status: "active",
+    maturity: "experimental",
     directive: "honored",
     useCases: ["literature-scan", "research", "coverage"],
   },
@@ -117,13 +121,14 @@ export const PRESETS: readonly SwarmPreset[] = [
     // side-by-side. Honors directive (drafters answer it; rubric +
     // synthesis frame around it).
     summary: "Independent parallel drafts + reveal/revise. Each agent commits to a `### MY POSITION` per round; Round-2+ must explicitly KEEP or CHANGE prior position. Synthesis preserves dissent via a Minority report. Honors directive.",
-    min: 3,
+    min: 2,
     max: 8,
     recommended: 4,
     // All N drafters need actual angles; coding-tier produces
     // near-identical drafts → no diversity gain.
     recommendedModel: MODEL_REASONING,
     status: "active",
+    maturity: "core",
     directive: "honored",
     useCases: ["research", "analysis", "debate", "synthesis"],
   },
@@ -143,6 +148,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     // Unit 65 candidate as map-reduce.
     recommendedModel: MODEL_REASONING,
     status: "active",
+    maturity: "supported",
     directive: "honored",
     useCases: ["hierarchical", "research"],
   },
@@ -163,6 +169,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommended: 8,
     recommendedModel: MODEL_REASONING,
     status: "active",
+    maturity: "research",
     directive: "honored",
     useCases: ["hierarchical", "large-scale"],
   },
@@ -183,6 +190,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     // candidate — bias mitigation gain isn't huge.
     recommendedModel: MODEL_REASONING,
     status: "active",
+    maturity: "experimental",
     directive: "honored",
     useCases: ["debate", "analysis"],
   },
@@ -198,6 +206,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     // pheromone table, not deliberation, so reasoning doesn't pay.
     recommendedModel: MODEL_CODING,
     status: "active",
+    maturity: "research",
     directive: "ignored",
     useCases: ["exploration"],
   },
@@ -210,6 +219,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommended: 5,
     recommendedModel: MODEL_REASONING,
     status: "active",
+    maturity: "experimental",
     directive: "honored",
     useCases: ["synthesis", "research"],
   },
@@ -222,6 +232,7 @@ export const PRESETS: readonly SwarmPreset[] = [
     recommended: 4,
     recommendedModel: MODEL_REASONING,
     status: "active",
+    maturity: "experimental",
     directive: "honored",
     useCases: ["multi-stage", "research", "pipeline"],
   },

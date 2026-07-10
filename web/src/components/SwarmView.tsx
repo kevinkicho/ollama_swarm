@@ -31,6 +31,7 @@ import { applyStatusSnapshotToStore } from "../state/swarmStoreHydrate";
 import { stopControlsDisabled } from "../lib/stopControls";
 import { drainIneligibleReason, isDrainEligible } from "@ollama-swarm/shared/drainEligibility";
 import { planningSubphaseLabel } from "@ollama-swarm/shared/planningSubphase";
+import { apiFetch } from "../lib/apiFetch";
 
 
 type Tab =
@@ -193,7 +194,7 @@ export const SwarmView = memo(function SwarmView() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const r = await fetch(statusUrl);
+        const r = await apiFetch(statusUrl);
         if (!r.ok || cancelled) return;
         const snap = await r.json();
         if (!cancelled) applyStatusSnapshot(snap);
@@ -215,7 +216,7 @@ export const SwarmView = memo(function SwarmView() {
     if (!targetRunId) return;
     setActionRunId(targetRunId);
     try {
-      const res = await fetch(stopUrl, { method: "POST" });
+      const res = await apiFetch(stopUrl, { method: "POST" });
       // Show closing phase immediately; rehydrate will sync summary + terminal state.
       setPhaseScoped("stopping", (useSwarm.getState().round || 0) as any);
       if (!res.ok) {
@@ -228,7 +229,7 @@ export const SwarmView = memo(function SwarmView() {
       setActionRunId((cur) => (cur === targetRunId ? null : cur));
       // re-hydrate status so UI reflects backend (especially useful for
       // review/per-run views where phase might be stale)
-      fetch(statusUrl).then(r => r.ok ? r.json() : null).then(applyStatusSnapshot).catch(() => {});
+      apiFetch(statusUrl).then(r => r.ok ? r.json() : null).then(applyStatusSnapshot).catch(() => {});
     }
   };
 
@@ -244,7 +245,7 @@ export const SwarmView = memo(function SwarmView() {
     try {
       const drainUrl = viewRunId ? `/api/swarm/drain` : "/api/swarm/drain";
       const body = viewRunId ? JSON.stringify({ runId: viewRunId }) : undefined;
-      const res = await fetch(drainUrl, {
+      const res = await apiFetch(drainUrl, {
         method: "POST",
         headers: body ? { "Content-Type": "application/json" } : undefined,
         body,
@@ -260,7 +261,7 @@ export const SwarmView = memo(function SwarmView() {
       setActionRunId((cur) => (cur === targetRunId ? null : cur));
       // re-hydrate status so UI reflects backend (especially useful for
       // review/per-run views where phase might be stale)
-      fetch(statusUrl).then(r => r.ok ? r.json() : null).then(applyStatusSnapshot).catch(() => {});
+      apiFetch(statusUrl).then(r => r.ok ? r.json() : null).then(applyStatusSnapshot).catch(() => {});
     }
   };
 
@@ -280,7 +281,7 @@ export const SwarmView = memo(function SwarmView() {
     const targetRunId = viewRunId ?? "resume";
     setActionRunId(targetRunId);
     try {
-      const res = await fetch("/api/swarm/start", {
+      const res = await apiFetch("/api/swarm/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -318,7 +319,7 @@ export const SwarmView = memo(function SwarmView() {
     if (!sayText.trim()) return;
     const { text, targetAgent } = parseMention(sayText);
     try {
-      await fetch(sayUrl, {
+      await apiFetch(sayUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -465,7 +466,7 @@ export const SwarmView = memo(function SwarmView() {
       ) : null}
       {(phase === "planning" || phase === "seeding") && planningSubphase ? (
         <div className="shrink-0 px-3 py-1.5 bg-sky-950/40 border-b border-sky-700/30 text-xs text-sky-200">
-          Planning — {planningSubphaseLabel(planningSubphase)}. Use Stop to exit immediately (Drain is not available until workers are executing).
+          Planning — {planningSubphaseLabel(planningSubphase)}. Use Stop to exit immediately (Drain enables once workers are executing or agents are streaming).
         </div>
       ) : null}
       <IdentityStrip />

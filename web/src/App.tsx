@@ -17,6 +17,7 @@ import { PlanningTab } from "./components/PlanningTab";
 import { notificationService } from "./services/notificationService";
 import { SystemWrapper } from "./components/SystemWrapper";
 import { ProjectGrowthPage } from "./features/projectGrowth/ProjectGrowthPage";
+import { apiFetch } from "./lib/apiFetch";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
 // past run from the history modal we set ?review=<runId>&path=<encoded>.
@@ -156,7 +157,8 @@ function AppMain() {
   // endpoints scan broadly for sibling runs (including under logs/ subdirs
   // for per-run summaries). This makes the runs dropdown show more relevant
   // history when viewing a specific run.
-  const parentPath = review?.clonePath || (clonePath ? clonePath.replace(/[/\\][^/\\]*$/, '') : undefined);
+  // Scan the clone/workspace directory itself — summaries live in <clone>/logs/.
+  const parentPath = review?.clonePath || clonePath || undefined;
 
   // Subscribe to run completion/failure events for notifications
   useEffect(() => {
@@ -250,8 +252,7 @@ function useReviewedRunIsLive(review: { runId: string; clonePath: string } | nul
     const ctrl = new AbortController();
     async function check() {
       try {
-        const r = await fetch(
-          `/api/swarm/runs/${encodeURIComponent(review!.runId)}/status`,
+        const r = await apiFetch(`/api/swarm/runs/${encodeURIComponent(review!.runId)}/status`,
           { signal: ctrl.signal },
         );
         if (!r.ok) return;
@@ -334,7 +335,7 @@ function useReviewHydration(review: { runId: string; clonePath: string } | null)
           clonePath: review.clonePath,
           runId: review.runId,
         });
-        const r = await fetch(`/api/swarm/run-summary?${params.toString()}`, { signal: ctrl.signal });
+        const r = await apiFetch(`/api/swarm/run-summary?${params.toString()}`, { signal: ctrl.signal });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const summary = (await r.json()) as RunSummary;
         if (cancelled) return;

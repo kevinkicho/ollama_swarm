@@ -62,6 +62,7 @@ import { apiVersion } from "./middleware/apiVersion.js";
 import { corsMiddleware } from "./middleware/cors.js";
 import { compressionMiddleware } from "./middleware/compression.js";
 import { staticServing } from "./middleware/staticServing.js";
+import { apiAuthMiddleware, isInsecureLanExposure } from "./middleware/apiAuth.js";
 import { startupHealthCheck } from "./startupHealthCheck.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -84,6 +85,14 @@ app.use((_req, res, next) => {
 });
 
 app.use(express.json({ limit: "1mb" }));
+
+// Lightweight liveness (open even when SWARM_API_TOKEN is set).
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, host: config.SERVER_HOST, port: config.SERVER_PORT });
+});
+
+// Optional API token gate for all other /api routes.
+app.use("/api", apiAuthMiddleware);
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true, path: "/ws", maxPayload: 1024 * 1024 });
@@ -120,10 +129,29 @@ function isLocalWsClient(req: IncomingMessage): boolean {
   );
 }
 
-// WS auth — validate ws_token cookie (localhost clients may omit it).
+// WS auth — cookie for remote clients; optional SWARM_API_TOKEN for all clients
+// when configured (secure appliance mode). Localhost may omit cookie only when
+// API token is not set.
 server.on("upgrade", (req: IncomingMessage, socket: import("node:stream").Duplex, head: Buffer) => {
   if (!req.url?.startsWith("/ws")) { socket.destroy(); return; }
-  if (!isLocalWsClient(req)) {
+  const apiToken = config.SWARM_API_TOKEN;
+  if (apiToken) {
+    const q = new URL(req.url, "http://localhost").searchParams.get("token");
+    const headerTok =
+      (typeof req.headers["x-swarm-token"] === "string" ? req.headers["x-swarm-token"] : undefined) ??
+      parseCookieValue(req.headers.cookie, "swarm_api_token");
+    const bearer = (() => {
+      const a = req.headers.authorization;
+      if (typeof a !== "string") return undefined;
+      const m = /^Bearer\s+(.+)$/i.exec(a.trim());
+      return m?.[1]?.trim();
+    })();
+    if (q !== apiToken && headerTok !== apiToken && bearer !== apiToken) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+  } else if (!isLocalWsClient(req)) {
     const token = parseCookieValue(req.headers.cookie, "ws_token");
     if (token !== wsToken) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
@@ -662,12 +690,19 @@ void reclaimOrphans(repoRoot)
       }
       console.warn("└──────────────────────────────────────────────────┘");
     }
-    server.listen(config.SERVER_PORT, "0.0.0.0", () => {
+    const listenHost = config.SERVER_HOST;
+    server.listen(config.SERVER_PORT, listenHost, () => {
       startProviderHealthScheduler();
-      console.log(`ollama_swarm server listening on http://127.0.0.1:${config.SERVER_PORT}`);
+      console.log(`ollama_swarm server listening on http://${listenHost === "0.0.0.0" ? "127.0.0.1" : listenHost}:${config.SERVER_PORT} (bind ${listenHost})`);
       console.log(`  ollama: ${config.OLLAMA_BASE_URL}`);
       console.log(`  default model: ${config.DEFAULT_MODEL}`);
       console.log(`  event log: ${eventLogger.path}`);
+      console.log(`  api auth: ${config.SWARM_API_TOKEN ? "token required" : "open (local trusted)"}`);
+      console.log(`  mcp servers: ${config.SWARM_ALLOW_MCP_SERVERS ? "allowed" : "disabled"}`);
+      if (isInsecureLanExposure()) {
+        console.warn("⚠ SECURITY: SERVER_HOST is not loopback and SWARM_API_TOKEN is unset.");
+        console.warn("  Anyone on the network can start runs and use provider keys. Set SWARM_API_TOKEN or bind 127.0.0.1.");
+      }
       // R5 wiring (2026-05-04): auto-resume mid-flight runs from disk.
       // Fire-and-forget — startup must complete even if resume fails.
       if (config.SWARM_AUTO_RESUME) {

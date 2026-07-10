@@ -28,3 +28,12 @@ test("classifyDiscussionStopReason keeps generic early-stop for non give-up", ()
   });
   assert.equal(stopReason, "early-stop");
 });
+
+test("classifyDiscussionStopReason maps provider-quota to no-progress with detail", () => {
+  const { stopReason, stopDetail } = classifyDiscussionStopReason({
+    stopping: false,
+    earlyStopDetail: "provider-quota: unmet criteria after transport/429 stalls (not a code deadlock)",
+  });
+  assert.equal(stopReason, "no-progress");
+  assert.match(stopDetail ?? "", /provider-quota/);
+});

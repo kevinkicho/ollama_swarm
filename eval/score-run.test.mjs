@@ -70,15 +70,41 @@ describe("scoreRun — throughput component (30 pts)", () => {
     assert.equal(r10.components.throughput, 30); // capped
   });
 
-  it("for analysis tasks, scales on transcript length (capped at 30)", () => {
+  it("for analysis tasks without judge, throughput is 0 (no chatty free points)", () => {
     const task = { id: "a", expectFilesChanged: false };
     const base = { stopReason: "completed", wallClockMs: 60_000, totalPromptTokens: 10_000, totalResponseTokens: 0 };
-    const r1 = scoreRun({ ...base, transcript: Array(1).fill({}) }, task);
-    const r10 = scoreRun({ ...base, transcript: Array(10).fill({}) }, task);
+    const r = scoreRun({ ...base, transcript: Array(20).fill({}) }, task);
+    assert.equal(r.components.throughput, 0);
+  });
+
+  it("for analysis with qualityScore, scales 0-100 to 0-30", () => {
+    const task = { id: "a", expectFilesChanged: false, qualityScore: 50 };
+    const base = { stopReason: "completed", wallClockMs: 60_000, totalPromptTokens: 10_000, totalResponseTokens: 0 };
+    const r = scoreRun(base, task);
+    assert.equal(r.components.throughput, 15);
+  });
+
+  it("legacy allowTranscriptThroughput still scales on length", () => {
+    const task = { id: "a", expectFilesChanged: false, allowTranscriptThroughput: true };
+    const base = { stopReason: "completed", wallClockMs: 60_000, totalPromptTokens: 10_000, totalResponseTokens: 0 };
     const r20 = scoreRun({ ...base, transcript: Array(20).fill({}) }, task);
-    assert.equal(r1.components.throughput, 2);
-    assert.equal(r10.components.throughput, 20);
-    assert.equal(r20.components.throughput, 30); // capped
+    assert.equal(r20.components.throughput, 30);
+  });
+
+  it("conformance scales from summary.conformanceScore", () => {
+    const task = { id: "c", expectFilesChanged: true };
+    const r = scoreRun(
+      {
+        stopReason: "completed",
+        filesChanged: 1,
+        wallClockMs: 60_000,
+        totalPromptTokens: 1000,
+        totalResponseTokens: 0,
+        conformanceScore: 80,
+      },
+      task,
+    );
+    assert.equal(r.components.conformance, 8);
   });
 });
 

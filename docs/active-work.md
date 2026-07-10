@@ -5,6 +5,22 @@
 
 ---
 
+## Release 1.0 (Tier A) — Phases 0–7 foundation landed 2026-07-09
+
+See **`docs/RELEASE-1.0-PLAN.md`**.
+
+- [x] **Phase 0** — Product freeze + maturity badges
+- [x] **Phase 1** — Host security (bind, token, MCP, roots, SSRF, bash)
+- [x] **Phase 2** — Crash/race hardening
+- [x] **Phase 3** — Council quota ≠ audit-stuck
+- [x] **Phase 4** — Partial V2 phase SoT on status
+- [x] **Phase 5** — CI matrix ubuntu + windows
+- [x] **Phase 6** — Eval score honesty
+- [x] **Phase 7** — Brain approve-to-provision default
+- [ ] Polish: full V2 cutover mid-flight; live Core eval table; apiFetch all routes
+
+---
+
 ## Queued: Run-start stability (P1)
 
 See **`docs/plans/run-start-stability.md`** for full PR breakdown.

@@ -1,7 +1,9 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-07-07 (Planner expectedFiles truncation fix, thinking/pseudo-tool transcript UX, parse-salvage cascade.)
+**Last updated:** 2026-07-09 (Release 1.0 Phases 0–7 foundation: security, crash races, quota≠stuck, V2 phase partial SoT, CI matrix, eval honesty, Brain approve-to-provision.)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
+
+> **Release track:** See [`docs/RELEASE-1.0-PLAN.md`](RELEASE-1.0-PLAN.md). Trusted-appliance posture: default bind `127.0.0.1`, optional `SWARM_API_TOKEN`, MCP spawn off by default, workspace roots, SSRF guard on `web_fetch`. Brain auto-provision **off** unless `SWARM_BRAIN_AUTO_PROVISION=true` or explicit `approved: true`.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
 > now goes through a direct `SessionProvider` (Ollama / Anthropic / OpenAI)
@@ -30,22 +32,22 @@ The app is a **Brain-as-OS for concurrent swarm orchestration**:
   - Transcript: virtual list now reliably draws all items (rangeExtractor with scroll+tail, mounted force-measure, tuned estimates + ITEM_GAP_PX=6).
 - **12 presets** with the existing write-mode story (blackboard native writes; others opt-in via `writeMode`).
 
-**12 swarm presets** (blackboard + 10 discussion/pipeline variants + baseline). Opt-in write capability for discussion presets:
+**12 swarm presets** (UI badges: **core** / **supported** / **experimental** / **research**). Opt-in write capability for discussion presets:
 
 | Preset | Maturity | Write-capable? | Notes |
 |---|---|---|---|
-| `blackboard` | production | ✅ (native) | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`). Most tested preset with deepest maturity. |
-| `round-robin` | production | ⚡ (opt-in) | Rotating Critic/Synthesizer/Gap-finder/Builder dispositions framed around directive. `cfg.writeMode: "single"` → synthesizer produces hunks; `"multi"` → vote reconciliation. |
-| `council` | production | ✅ (native) | **3-phase autonomous cycle:** Phase 1 (Analysis): N agents debate and synthesize consensus. Phase 2 (Execution): ALL agents become workers, produce hunks via pipeline. Phase 3 (Audit): ALL agents inspect changes. Cycles repeat in autonomous mode (`rounds: 0`). Retry-on-failure with error feedback. **Stop/close-out:** hard `stop()` waits for execution workers (bounded), then summary → `killAll`; `drain()` soft-stops with 3 min backstop; contract in `docs/run-stop-drain-lifecycle.md`. `ensureTerminalCloseOut()` backstop; crash summary recovery from `.run-state.json`. **Transcript UX:** `council_cycle` / `council_stage` markers; live elapsed on execution status lines; Drafts tab shows structured council drafts (not raw JSON). **Architecture:** `CouncilRunner.ts` orchestrates; `councilDecisions.ts` handles todo extraction; `councilWorkerRunner.ts` marks `thinking` during todos. **Blackboard infrastructure:** TodoQueue, ExitContract, hunk-based editing, replanner, path grounding, tier ratchet. |
-| `orchestrator-worker` (flat) | production | ⚡ (opt-in) | Lead decomposes directive into subtasks for workers. Phase 1: lead synthesis; Phase 2: sequential reconciliation (CAS on file hashes). |
-| `role-diff` | beta | ⚡ (opt-in) | Specialist role assignment per agent with diff-based deliverable. Phase 1: specialist synthesis; Phase 2: vote reconciliation. |
-| `debate-judge` | beta | ⚡ (opt-in) | PRO/CON/JUDGE debate structure. Phase 1: judge verdict produces hunks; Phase 2: judge picks winner's hunks. |
-| `map-reduce` | beta | ⚡ (opt-in) | Mappers find directive-relevant evidence → reducer synthesizes. Phase 1: reducer hunks; Phase 2: merge reconciliation (isolated slices). Partition-dependent quality. |
-| `orchestrator-worker-deep` | needs-validation | ⚡ (opt-in) | 3-tier: orchestrator → mid-leads → workers. Phase 1: multi-tier synthesis; Phase 2: sequential reconciliation. **Known issue:** validation tour hit model-drift failures — some models produce XML pseudo-tool-calls under structured-output pressure in deep chains. |
-| `stigmergy` | exploration | ❌ | Pheromone-table + per-file annotations. **Read-only by design** — exploration mode, no write pipeline. Pheromone heatmap feeds blackboard workers when `cfg.stigmergyOnBlackboard` is on. |
-| `moa` | beta | ⚡ (opt-in) | Mixture of Agents: proposers → aggregators, three layers of depth. Phase 1: aggregator hunks; Phase 2: aggregator picks best proposer's hunks. **Shipped 2026-05-01 in a single day; less polish than older presets.** |
-| `baseline` | production | ✅ (native) | single agent / single prompt / single apply step — eval-harness path, not in the form's normal preset list |
-| `pipeline` | beta | ⚡ (opt-in) | Chains sub-runs with transcript/deliverable piping. Default phases: Explore → Decompose → Validate. Each phase's output feeds the next. |
+| `blackboard` | **core** | ✅ (native) | planner + workers + auditor; tier ratchet; Aider-style hunks; pre-commit verify gate (`verifyCommand`). Most tested preset with deepest maturity. |
+| `round-robin` | **supported** | ⚡ (opt-in) | Rotating Critic/Synthesizer/Gap-finder/Builder dispositions framed around directive. `cfg.writeMode: "single"` → synthesizer produces hunks; `"multi"` → vote reconciliation. |
+| `council` | **core** | ✅ (native) | **3-phase autonomous cycle:** Phase 1 (Analysis): N agents debate and synthesize consensus. Phase 2 (Execution): ALL agents become workers, produce hunks via pipeline. Phase 3 (Audit): ALL agents inspect changes. Cycles repeat in autonomous mode (`rounds: 0`). Retry-on-failure with error feedback. **Stop/close-out:** hard `stop()` waits for execution workers (bounded), then summary → `killAll`; `drain()` soft-stops with 3 min backstop; contract in `docs/run-stop-drain-lifecycle.md`. `ensureTerminalCloseOut()` backstop; crash summary recovery from `.run-state.json`. **Transcript UX:** `council_cycle` / `council_stage` markers; live elapsed on execution status lines; Drafts tab shows structured council drafts (not raw JSON). **Architecture:** `CouncilRunner.ts` orchestrates; `councilDecisions.ts` handles todo extraction; `councilWorkerRunner.ts` marks `thinking` during todos. **Blackboard infrastructure:** TodoQueue, ExitContract, hunk-based editing, replanner, path grounding, tier ratchet. |
+| `orchestrator-worker` (flat) | **supported** | ⚡ (opt-in) | Lead decomposes directive into subtasks for workers. Phase 1: lead synthesis; Phase 2: sequential reconciliation (CAS on file hashes). |
+| `role-diff` | **experimental** | ⚡ (opt-in) | Specialist role assignment per agent with diff-based deliverable. Phase 1: specialist synthesis; Phase 2: vote reconciliation. |
+| `debate-judge` | **experimental** | ⚡ (opt-in) | PRO/CON/JUDGE debate structure. Phase 1: judge verdict produces hunks; Phase 2: judge picks winner's hunks. |
+| `map-reduce` | **experimental** | ⚡ (opt-in) | Mappers find directive-relevant evidence → reducer synthesizes. Phase 1: reducer hunks; Phase 2: merge reconciliation (isolated slices). Partition-dependent quality. |
+| `orchestrator-worker-deep` | **research** | ⚡ (opt-in) | 3-tier: orchestrator → mid-leads → workers. Phase 1: multi-tier synthesis; Phase 2: sequential reconciliation. **Known issue:** validation tour hit model-drift failures — some models produce XML pseudo-tool-calls under structured-output pressure in deep chains. |
+| `stigmergy` | **research** | ❌ | Pheromone-table + per-file annotations. **Read-only by design** — exploration mode, no write pipeline. Pheromone heatmap feeds blackboard workers when `cfg.stigmergyOnBlackboard` is on. |
+| `moa` | **experimental** | ⚡ (opt-in) | Mixture of Agents: proposers → aggregators, three layers of depth. Phase 1: aggregator hunks; Phase 2: aggregator picks best proposer's hunks. **Shipped 2026-05-01 in a single day; less polish than older presets.** |
+| `baseline` | **core** (eval) | ✅ (native) | single agent / single prompt / single apply step — eval-harness path, not in the form's normal preset list |
+| `pipeline` | **experimental** | ⚡ (opt-in) | Chains sub-runs with transcript/deliverable piping. Default phases: Explore → Decompose → Validate. Each phase's output feeds the next. |
 
 All presets honor the user directive except `stigmergy` (exploration is repo-driven by design).
 

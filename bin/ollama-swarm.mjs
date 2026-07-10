@@ -21,6 +21,17 @@ import { parseArgs } from 'node:util';
 
 const DEFAULT_SERVER = process.env.OLLAMA_SWARM_SERVER_URL || 'http://localhost:8243';
 
+/** Optional shared secret for SWARM_API_TOKEN-secured servers. */
+function authHeaders(extra = {}) {
+  const tok = (process.env.SWARM_API_TOKEN || process.env.OLLAMA_SWARM_API_TOKEN || '').trim();
+  const h = { 'Content-Type': 'application/json', ...extra };
+  if (tok) {
+    h['Authorization'] = `Bearer ${tok}`;
+    h['X-Swarm-Token'] = tok;
+  }
+  return h;
+}
+
 function printHelp() {
   console.log(`
 ollama-swarm — control ollama_swarm from terminal or Brain-OS agents
@@ -57,7 +68,7 @@ async function startRun(config, serverUrl) {
   try {
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(config),
     });
 
@@ -89,8 +100,8 @@ async function startRun(config, serverUrl) {
 
 async function fetchJson(url, options = {}) {
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
+    headers: authHeaders(options.headers || {}),
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {

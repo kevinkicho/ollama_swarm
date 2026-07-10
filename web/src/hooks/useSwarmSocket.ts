@@ -8,6 +8,7 @@ import {
   HYDRATE_MAX_WAIT_MS,
   WS_REPLAY_GRACE_MS,
 } from "../state/swarmStoreHydrate";
+import { apiFetch, swarmWsTokenQuery } from "../lib/apiFetch";
 
 // Legacy singleton WS hook for the primary SwarmStore. Per-run views
 // should prefer `useRunScopedWebSocket` to avoid mixing events when
@@ -120,8 +121,10 @@ export function wsUrlForRunId(runId: string | undefined, light = false): string 
     ? `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`
     : `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws`;
   if (light) {
-    url += (url.includes('?') ? '&' : '?') + 'light=1';
+    url += (url.includes("?") ? "&" : "?") + "light=1";
   }
+  const tq = swarmWsTokenQuery();
+  if (tq) url += (url.includes("?") ? "&" : "?") + tq;
   return url;
 }
 
@@ -211,7 +214,7 @@ async function hydrateFromSnapshot(): Promise<void> {
 
   const runId = current.runId ?? pathRunId;
   try {
-    const res = await fetch(statusUrlForRunId(runId));
+    const res = await apiFetch(statusUrlForRunId(runId));
     if (!res.ok) return;
     const snap = (await res.json()) as SwarmStatusSnapshot;
 

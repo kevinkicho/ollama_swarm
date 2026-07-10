@@ -300,15 +300,25 @@ export class TodoQueue {
     return reaped;
   }
 
-  /** Mark an in-progress todo as completed. Throws if id unknown or
-   *  not in-progress (callers should guard against double-complete).
+  /** Mark a claimed todo as completed.
    *
-   *  Idempotent on already-completed. Accepts late completion when the
-   *  reaper marked the todo failed for in-progress timeout but the worker
-   *  finished and committed shortly after (council execution race). */
+   *  Race-safe (2026-07-09 release hardening):
+   *  - Already completed → no-op (double-complete / refresh races).
+   *  - failed (any reason, including reaper timeout or tool-cap fail) →
+   *    upgrade to completed when the worker finished after a concurrent fail.
+   *  - in-progress → completed.
+   *  - pending / skipped / pending-commit → throw (caller bug).
+   *
+   *  Unknown id still throws. Never throw solely because another path
+   *  already failed the same todo — that crashed long council runs (e182). */
   complete(id: string, ts: number = Date.now()): void {
     const t = this.findOrThrow(id);
-    if (t.status === "failed" && isReaperTimeoutReason(t.reason)) {
+    if (t.status === "completed") {
+      return;
+    }
+    if (t.status === "failed") {
+      // Late success wins over reaper timeout, tool-cap fail, or any other
+      // concurrent fail while the worker was still producing a result.
       t.status = "completed";
       t.endedAt = ts;
       t.reason = undefined;

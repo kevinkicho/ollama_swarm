@@ -38,6 +38,7 @@ import {
   ProjectGraphQuery,
   BrainApplyBody,
   BrainRejectBody,
+  BrainProvisionBody,
   StatusQuery,
   LegacyRunBody,
 } from "./schemas.js";
@@ -90,11 +91,9 @@ export function swarmRouter(orch: Orchestrator): Router {
   // cloneStats) don't touch orchestrator state, so a fresh instance is
   // fine and avoids threading orch.opts.repos through.
   const repos = new RepoService();
-  // R6 wiring (2026-05-04): tracks the wall-clock of the last
-  // /api/swarm/stop click for the double-click-within-5s detection.
-  // null until the first click; carried inside the closure so it's
-  // bounded to the router's lifetime.
-  let lastStopClickAt: number | null = null;
+  // R6 + multi-run fix: per-runId last stop click for double-click-within-5s.
+  // Process-global was wrong when concurrent runs both used SWARM_DRAIN_ON_STOP.
+  const lastStopClickAtByRun = new Map<string, number>();
 
   r.get("/status", validate(StatusQuery, "query"), (req: Request, res: Response) => {
     const { runId } = req.query as unknown as z.infer<typeof StatusQuery>;
@@ -431,19 +430,19 @@ export function swarmRouter(orch: Orchestrator): Router {
         return;
       }
     }
-    // Council preset: always exactly 3 agents. 3 is the sweet spot for
-    // diverse independent drafts without excessive token burn. Fewer
-    // than 3 reduces diversity; more than 3 adds cost without meaningful
-    // improvement in coverage.
-    if (parsed.data.preset === "council" && effAgentCount !== 3) {
-      if (effAgentCount < 3) {
+    // Council preset: at least 2 drafters for independent drafts; clamp
+    // above the preset max to avoid runaway token burn.
+    if (parsed.data.preset === "council") {
+      const councilMax = 8;
+      if (effAgentCount < 2) {
         res.status(400).json({
-          error: `Council requires at least 3 agents. With fewer, draft diversity collapses and the council degenerates into a single-agent analysis. Got agentCount=${effAgentCount}.`,
+          error: `Council requires at least 2 agents for independent drafts. Got agentCount=${effAgentCount}.`,
         });
         return;
       }
-      // Silently clamp to 3 when > 3
-      parsed.data.agentCount = 3;
+      if (effAgentCount > councilMax) {
+        parsed.data.agentCount = councilMax;
+      }
     }
     // Task #131: orchestrator-worker-deep needs at least 1 orchestrator
     // + 1 mid-lead + 2 workers = 4 agents to add coverage over flat OW.
@@ -502,6 +501,24 @@ export function swarmRouter(orch: Orchestrator): Router {
       res.status(400).json({ error: msg });
       return;
     }
+    {
+      const { assertUnderWorkspaceRoots } = await import("../services/workspaceRoots.js");
+      const rootCheck = assertUnderWorkspaceRoots(localPath);
+      if (!rootCheck.ok) {
+        res.status(403).json({ error: rootCheck.error });
+        return;
+      }
+      // Also constrain parentPath when cloning under a parent.
+      if (parsed.data.parentPath?.trim()) {
+        const parentCheck = assertUnderWorkspaceRoots(
+          path.resolve(normalizeWslPath(parsed.data.parentPath)),
+        );
+        if (!parentCheck.ok) {
+          res.status(403).json({ error: parentCheck.error });
+          return;
+        }
+      }
+    }
     // Task #147: force-restart — stop only runs on THIS workspace, not every
     // concurrent run. Resume / Run-again used to call stopAll() and killed
     // unrelated active runs (stopReason=user).
@@ -536,11 +553,17 @@ export function swarmRouter(orch: Orchestrator): Router {
       // honor that over the continuous override so tierRunner can detect
       // autonomous mode via active?.rounds === 0.
       const explicitRounds = parsed.data.rounds;
-      const effectiveRounds = explicitRounds === 0
-        ? 0
-        : parsed.data.continuous
-          ? 1_000_000
-          : (explicitRounds ?? (parsed.data.preset === "blackboard" ? 0 : 3));
+      let effectiveRounds: number;
+      if (explicitRounds != null && explicitRounds > 0) {
+        // Explicit non-zero rounds always win (auditor-invocation cap for blackboard).
+        effectiveRounds = explicitRounds;
+      } else if (explicitRounds === 0) {
+        effectiveRounds = 0;
+      } else if (parsed.data.continuous) {
+        effectiveRounds = 1_000_000;
+      } else {
+        effectiveRounds = parsed.data.preset === "blackboard" ? 0 : 3;
+      }
       // R4 wiring (2026-05-04): pre-flight cost projector. When the
       // user has set maxCostUsd AND the projected spend already
       // exceeds it on Day 1, refuse rather than start a run that's
@@ -615,7 +638,8 @@ export function swarmRouter(orch: Orchestrator): Router {
         plannerTools: parsed.data.plannerTools,
         webTools: parsed.data.webTools,
         projectGraphContext: parsed.data.projectGraphContext,
-        mcpServers: parsed.data.mcpServers,
+        // MCP process spawn is opt-in (SWARM_ALLOW_MCP_SERVERS); default off = RCE harden.
+        mcpServers: config.SWARM_ALLOW_MCP_SERVERS ? parsed.data.mcpServers : undefined,
         useLocal: parsed.data.useLocal,
         createdBy: parsed.data.createdBy,
         resumeContract: parsed.data.resumeContract,
@@ -754,9 +778,9 @@ export function swarmRouter(orch: Orchestrator): Router {
       if (config.SWARM_DRAIN_ON_STOP) {
         const decision = decideStopAction({
           now: Date.now(),
-          lastStopAt: lastStopClickAt,
+          lastStopAt: lastStopClickAtByRun.get(resolved.runId) ?? null,
         });
-        lastStopClickAt = Date.now();
+        lastStopClickAtByRun.set(resolved.runId, Date.now());
         if (decision.action === "drain") {
           const ok = await orch.drainRun(resolved.runId);
           if (!ok) {
@@ -1012,6 +1036,14 @@ export function swarmRouter(orch: Orchestrator): Router {
     const activeRunId = status.runConfig?.preset
       ? status.runId ?? null
       : null;
+
+    // Direct-workspace runs store summaries under <clone>/logs/<runId>/ —
+    // scan the active clone itself, not only its parent directory.
+    if (activeClone) parentsToScan.add(activeClone);
+    if (query.parentPath) {
+      const resolvedParent = path.resolve(normalizeWslPath(query.parentPath));
+      parentsToScan.add(resolvedParent);
+    }
 
     // Delegated to extracted RunsScanner service (deeper refactor of parent-scanning logic)
     const { runs, parentsScanned } = await scanForRunDigests(parentsToScan, {
@@ -1503,6 +1535,73 @@ function registerBrainRoutes(r: Router, orch: Orchestrator) {
       success: false,
       error: "System patching has been removed. Brain now provides run analysis and librarian functions only (initialize/start/finish/review/analyze runs).",
     });
+  });
+
+  // Phase 7: Approve & start a follow-up run from a brain insight (provisioner).
+  r.post("/brain/provision", validate(BrainProvisionBody, "body"), async (req: Request, res: Response) => {
+    await orch.whenBrainReady();
+    const brainService = orch.getBrainService();
+    if (!brainService) {
+      res.status(500).json({ error: "Brain service not initialized" });
+      return;
+    }
+    const body = req.body as z.infer<typeof BrainProvisionBody>;
+    const guarded = guardClonePath(orch, res, body.clonePath);
+    if (!guarded) return;
+
+    let title = body.title?.trim();
+    let description = body.description?.trim() ?? "";
+    let category = body.category;
+    let priority = body.priority ?? "medium";
+    let proposalId = body.proposalId;
+
+    if (body.proposalId) {
+      const all = await brainService.getAllProposals(guarded);
+      const found = all.find((p) => p.id === body.proposalId);
+      if (found) {
+        title = title || found.title;
+        description = description || found.description;
+        category = category ?? found.category;
+        priority = found.priority ?? priority;
+        proposalId = found.id;
+      }
+    }
+    if (!title) {
+      res.status(400).json({ error: "title or known proposalId required" });
+      return;
+    }
+
+    const insight = {
+      id: proposalId,
+      title,
+      description,
+      category: category ?? "followup",
+      priority,
+    };
+    try {
+      const runId = await brainService.getProvisioner().startRunForProposal(insight, guarded, {
+        approved: true,
+      });
+      if (!runId) {
+        res.status(409).json({
+          success: false,
+          error:
+            "Could not start run (capacity, config, or approve-to-provision gate). Check server logs.",
+        });
+        return;
+      }
+      res.json({
+        success: true,
+        runId,
+        navigateTo: `/runs/${encodeURIComponent(runId)}`,
+        proposalId: proposalId ?? null,
+      });
+    } catch (err) {
+      res.status(500).json({
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
 
   // P7: Reject brain proposal

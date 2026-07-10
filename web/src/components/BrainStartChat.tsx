@@ -6,6 +6,7 @@ import { renderBrainChatMarkdown } from "../lib/brainChatMarkdown";
 import { InfoTip } from "./setup/InfoTip";
 import { FormattedTipContent } from "./setup/FormattedTipContent";
 import { useSystemLayerModel } from "../hooks/useSystemLayerModel";
+import { apiFetch } from "../lib/apiFetch";
 
 const BRAIN_TIP_MAX_WIDTH = 520;
 const BRAIN_TIP_SHOW_DELAY_MS = 400;
@@ -255,7 +256,7 @@ export function BrainStartChat({
       setStoreHistory(newMsgs);
       // Persist to server for disk snapshot
       if (runContext.runId) {
-        fetch('/api/swarm/brain/chat-history', {
+        apiFetch('/api/swarm/brain/chat-history', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ runId: runContext.runId, history: newMsgs }),
@@ -400,7 +401,7 @@ export function BrainStartChat({
       const userMsgText = trimmed.toLowerCase();
       const userWantsOptionsTable = /explain (all )?options|show (me )?(all )?options|compare (all )?(presets|options)|which preset|what mode|best preset|preset options|table of presets|all presets for|recommend.*preset|options for my goal/i.test(userMsgText);
 
-      const res = await fetch("/api/swarm/brain/chat", {
+      const res = await apiFetch("/api/swarm/brain/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -510,7 +511,7 @@ export function BrainStartChat({
       await sendMessage(PROACTIVE_SUGGEST_PROMPT);
       // Mirror transcript-header suggest: inject a system entry agents can see.
       if (runContext.runId) {
-        const res = await fetch("/api/swarm/brain/suggest", {
+        const res = await apiFetch("/api/swarm/brain/suggest", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -655,7 +656,7 @@ export function BrainStartChat({
               onClick={async () => {
                 if (runContext?.runId) {
                   try {
-                    await fetch(`/api/swarm/amend`, {
+                    await apiFetch(`/api/swarm/amend`, {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ runId: runContext.runId, text: suggestedAmend }),
@@ -689,7 +690,7 @@ export function BrainStartChat({
               onClick={async () => {
                 if (!runContext?.runId) return;
                 try {
-                  const res = await fetch(`/api/swarm/reconfig`, {
+                  const res = await apiFetch(`/api/swarm/reconfig`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ runId: runContext.runId, ...suggestedReconfig }),

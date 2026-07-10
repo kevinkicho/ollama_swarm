@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { apiFetch } from "../../lib/apiFetch";
 
 type ProjectGraphResponse = {
   workspacePath: string;
@@ -48,7 +49,7 @@ export function ProjectGraphPanel({
       setError(null);
       const q = new URLSearchParams({ clonePath, includeGit: "true" });
       if (refresh) q.set("refresh", "true");
-      void fetch(`/api/swarm/project-graph?${q}`)
+      void apiFetch(`/api/swarm/project-graph?${q}`)
         .then(async (res) => {
           if (!res.ok) {
             const body = await res.json().catch(() => ({}));

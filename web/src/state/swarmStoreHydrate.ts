@@ -11,6 +11,7 @@ import {
   mergeControlAdvice,
   type SwarmControlAdviceRecord,
 } from "@ollama-swarm/shared/swarmControl/controlAdvice";
+import { apiFetch } from "../lib/apiFetch";
 
 /** Context from a successful /status hydrate used to tune WS guards. */
 export type StatusHydrateContext = {
@@ -285,8 +286,7 @@ export async function fetchAndHydrateControlAdviceFromEventLog(
   signal?: AbortSignal,
 ): Promise<void> {
   try {
-    const res = await fetch(
-      `/api/v2/event-log/runs/${encodeURIComponent(runId)}`,
+    const res = await apiFetch(`/api/v2/event-log/runs/${encodeURIComponent(runId)}`,
       { signal },
     );
     if (!res.ok) return;
@@ -310,7 +310,7 @@ export async function catchUpEmptyTranscript(
   if (st.transcript.length > 0) return;
   if (isTerminalSwarmPhase(st.phase)) return;
   try {
-    const res = await fetch(statusUrl, { signal });
+    const res = await apiFetch(statusUrl, { signal });
     if (!res.ok) return;
     const snap = (await res.json()) as SwarmStatusSnapshot;
     applyStatusSnapshotToStore(store, runId, snap);

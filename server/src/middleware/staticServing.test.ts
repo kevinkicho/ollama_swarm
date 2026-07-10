@@ -76,4 +76,12 @@ describe("staticServing middleware", () => {
     const res = await request(getPort(server), "/ws");
     assert.equal(res.status, 404);
   });
+
+  it("does not serve files outside webDir via .. segments", async () => {
+    // Should fall back to SPA index (or 200 with app shell), never leak parent files.
+    const res = await request(getPort(server), "/../package.json");
+    assert.equal(res.status, 200);
+    assert.ok(res.body.includes("app"), "should serve SPA fallback, not escaped file");
+    assert.ok(!res.body.includes('"name"'), "must not leak parent package.json");
+  });
 });

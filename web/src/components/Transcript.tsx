@@ -7,6 +7,7 @@ import { MessageBubble } from "./transcript/MessageBubble";
 import { StreamingTranscriptCard } from "./transcript/StreamingTranscriptCard";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
 import { prepareTranscriptForDisplay } from "../state/transcriptDisplayFilter";
+import { apiFetch } from "../lib/apiFetch";
 
 /** Virtualization disabled — estimate drift caused hidden rows and wide gaps on stop. */
 const ENABLE_TRANSCRIPT_VIRTUALIZATION = false;
@@ -670,7 +671,7 @@ export const Transcript = memo(function Transcript() {
             onClick={async () => {
               setSuggesting(true);
               try {
-                const res = await fetch("/api/swarm/brain/suggest", {
+                const res = await apiFetch("/api/swarm/brain/suggest", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({

@@ -304,13 +304,36 @@ export class CouncilRunner extends DiscussionRunnerBase {
    * Soft stop: workers finish their current todo, then escalate to hard stop.
    * Backstopped at 3 min (matches UI copy).
    */
+  private async waitForAgentsIdle(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.opts.manager.anyAgentThinking() && Date.now() < deadline) {
+      await new Promise<void>((r) => setTimeout(r, 500));
+    }
+  }
+
   async drain(): Promise<void> {
     if (this.stopInFlight) return this.stopInFlight;
     if (this.phase === "stopped" || this.phase === "completed") return;
 
     const q = this.state?.todoQueue?.counts();
     const inFlight = (q?.inProgress ?? 0) + (q?.pending ?? 0);
+    const discussionPhase = this.phase === "discussing" || this.phase === "seeding";
+    const agentsThinking = this.opts.manager.anyAgentThinking();
+
     if (inFlight === 0 && this.phase !== "executing") {
+      if (discussionPhase && agentsThinking) {
+        this.drainRequested = true;
+        this.setPhase("draining");
+        this.appendSystem(
+          "[drain] Finishing in-flight discussion turn(s), then stopping (no new claims).",
+        );
+        const DRAIN_DISCUSSION_TIMEOUT = 180_000;
+        await this.waitForAgentsIdle(DRAIN_DISCUSSION_TIMEOUT);
+        this.stopping = true;
+        if (this.state) this.state.stopping = true;
+        this.stopInFlight = this.awaitLoopThenCloseOut({ immediate: true });
+        return this.stopInFlight;
+      }
       this.appendSystem(
         "Drain not applicable (no in-flight execution todos — use Stop for immediate exit). Stopping immediately.",
       );
@@ -482,9 +505,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
     let cycle = 0;
 
     await this.runDiscussionLoop(cfg, "Council", async (cfg) => {
-      while (!this.stopping) {
+      while (!this.closingRequested()) {
         cycle++;
-        this.state.stopping = this.stopping;
+        this.state.stopping = this.closingRequested();
         const result = await this.runCycle(cfg, cycle, isAutonomous);
 
         if (result === "stop") break;
@@ -644,7 +667,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
         });
 
         for (let r = 1; r <= 3; r++) {
-          if (this.stopping) break;
+          if (this.closingRequested()) break;
           const snapshot: readonly TranscriptEntry[] = [...this.transcript];
           const agents = this.opts.manager.list();
           await staggerStart(
@@ -655,11 +678,11 @@ export class CouncilRunner extends DiscussionRunnerBase {
         }
 
         // Final synthesis
-        if (!this.stopping) {
+        if (!this.closingRequested()) {
           await runSynthesisPass(
             cfg,
             this.transcript,
-            this.stopping,
+            this.closingRequested(),
             this.stats,
             this.runDiscussionAgent.bind(this),
             {
@@ -1008,26 +1031,45 @@ export class CouncilRunner extends DiscussionRunnerBase {
           updatedCriteria,
           cycle,
         );
-        if (transientOnly && isAutonomous) {
+        // Phase 3 (2026-07-09): never count pure quota/transport as "stuck"
+        // for autonomous OR fixed-round runs (d21cf8b3). Autonomous backs off
+        // and retries; finite rounds mark stopReason as provider-quota, not
+        // audit-stuck, so summaries stay honest.
+        if (transientOnly) {
           this.stuckCycleCount = 0;
           this.previousStuckFailSignature = "";
+          if (isAutonomous) {
+            this.appendSystem(
+              "[audit] Provider quota/transport stall — backing off 2m without counting as stuck.",
+            );
+            await new Promise((r) => setTimeout(r, 120_000));
+            return "retry";
+          }
+          this.earlyStopDetail =
+            "provider-quota: unmet criteria after transport/429 stalls (not a code deadlock)";
           this.appendSystem(
-            "[audit] Provider quota/transport stall — backing off 2m without counting as stuck (autonomous).",
+            "[audit] Provider quota/transport stall on finite-round run — stopping with provider-quota (not audit-stuck).",
           );
-          await new Promise((r) => setTimeout(r, 120_000));
-          return "retry";
+          this.setPhase("stopped");
+          return "stop";
         }
         const providerStall = extractRecentProviderStallFromLedger(this.progressLedger, cycle);
         const planner = this.opts.manager.list().find((a) => a.index === 1);
         if (planner) {
           const gate = await this.evaluateCouncilStallGate(planner, providerStall);
-          if (gate?.action === "backoff" && isAutonomous) {
+          if (gate?.action === "backoff") {
             this.stuckCycleCount = 0;
             this.previousStuckFailSignature = "";
-            const waitMs = gate.backoffMs ?? 120_000;
-            this.appendSystem(`[control] Backing off ${Math.round(waitMs / 1000)}s — ${gate.rationale}`);
-            await new Promise((r) => setTimeout(r, waitMs));
-            return "retry";
+            if (isAutonomous) {
+              const waitMs = gate.backoffMs ?? 120_000;
+              this.appendSystem(`[control] Backing off ${Math.round(waitMs / 1000)}s — ${gate.rationale}`);
+              await new Promise((r) => setTimeout(r, waitMs));
+              return "retry";
+            }
+            this.earlyStopDetail = `provider-quota: ${gate.rationale}`;
+            this.appendSystem(`[control] Finite-round run — ${gate.rationale} (stop, not stuck).`);
+            this.setPhase("stopped");
+            return "stop";
           }
           if (gate?.action === "retry" && isAutonomous) {
             this.stuckCycleCount = 0;
@@ -1041,6 +1083,13 @@ export class CouncilRunner extends DiscussionRunnerBase {
             this.setPhase("stopped");
             return "stop";
           }
+        }
+        // Never increment stuck cycles while the latest stall text is quota/429.
+        if (providerStall && /429|session usage|rate limit/i.test(providerStall)) {
+          this.appendSystem(
+            "[audit] Recent provider stall is quota/429 — not incrementing stuck cycle counter.",
+          );
+          return "retry";
         }
         this.stuckCycleCount++;
         this.appendSystem(`[audit] Same ${sameUnmet} criteria unmet for ${this.stuckCycleCount} cycle(s).`);

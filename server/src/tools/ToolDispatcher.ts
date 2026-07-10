@@ -19,8 +19,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { exec, spawn, ChildProcess } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn, ChildProcess } from "node:child_process";
 import { resolveSafe } from "../swarm/blackboard/resolveSafe.js";
 import { checkBuildCommand } from "../swarm/blackboard/buildCommandAllowlist.js";
 import {
@@ -28,10 +27,39 @@ import {
   getAgentBashErrors,
   recordAgentBashResult,
 } from "./agentBashBackoff.js";
+import { isBlockedWebFetchUrl } from "./ssrfGuard.js";
+import { config } from "../config.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-const execAsync = promisify(exec);
+/** Split allowlisted command into argv without a shell. */
+export function tokenizeAllowlistedCommand(command: string): string[] {
+  const tokens: string[] = [];
+  let cur = "";
+  let quote: '"' | "'" | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!;
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (cur) {
+        tokens.push(cur);
+        cur = "";
+      }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) tokens.push(cur);
+  return tokens;
+}
 const BASH_TIMEOUT_MS = 60_000;
 const BASH_OUTPUT_CAP = 200 * 1024;
 
@@ -339,28 +367,81 @@ async function bashTool(clone: string, args: Record<string, unknown>): Promise<T
   if (!allow.ok) {
     return { ok: false, error: `bash refused: ${allow.reason ?? "(no reason)"}` };
   }
-  // Layer 2: cwd-bound exec with a hard wall-clock timeout. cwd is the
-  // clone path so working-dir-relative paths in the command resolve
-  // safely. Combined with the metachar block above, the command can't
-  // escape into the broader filesystem via cd /; rm or similar.
-  // Note: uses shell exec (via execAsync). For stricter safety a future
-  // change could switch to spawn + argv parsing, but that requires
-  // careful command tokenization for the allowlisted tools.
+  // Layer 2: cwd-bound spawn with shell:false + wall-clock timeout.
+  // Metachar block + argv split prevents shell injection; cwd is the clone.
+  const argv = tokenizeAllowlistedCommand(command);
+  if (argv.length === 0) {
+    return { ok: false, error: "bash refused: empty command after tokenize" };
+  }
+  const bin = argv[0]!;
+  const binArgs = argv.slice(1);
   try {
-    const r = await execAsync(command, {
-      cwd: clone,
-      timeout: BASH_TIMEOUT_MS,
-      maxBuffer: BASH_OUTPUT_CAP,
+    const out = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+      const child = spawn(bin, binArgs, {
+        cwd: clone,
+        shell: false,
+        windowsHide: true,
+        env: process.env,
+      });
+      let stdout = "";
+      let stderr = "";
+      let killed = false;
+      const timer = setTimeout(() => {
+        killed = true;
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          /* ignore */
+        }
+        setTimeout(() => {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            /* ignore */
+          }
+        }, 2_000).unref?.();
+      }, BASH_TIMEOUT_MS);
+      child.stdout?.on("data", (c: Buffer) => {
+        if (stdout.length < BASH_OUTPUT_CAP) stdout += c.toString();
+      });
+      child.stderr?.on("data", (c: Buffer) => {
+        if (stderr.length < BASH_OUTPUT_CAP) stderr += c.toString();
+      });
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        if (killed) {
+          reject(Object.assign(new Error("timeout"), { killed: true, stdout, stderr }));
+          return;
+        }
+        if (code !== 0 && code !== null) {
+          reject(Object.assign(new Error(`exit ${code}`), { stdout, stderr, code }));
+          return;
+        }
+        resolve({ stdout, stderr });
+      });
     });
-    const out = (r.stdout ?? "") + (r.stderr ? `\n[stderr]\n${r.stderr}` : "");
-    return { ok: true, output: out.length > BASH_OUTPUT_CAP ? out.slice(0, BASH_OUTPUT_CAP) + "\n…(truncated)" : out };
+    const combined = (out.stdout ?? "") + (out.stderr ? `\n[stderr]\n${out.stderr}` : "");
+    return {
+      ok: true,
+      output:
+        combined.length > BASH_OUTPUT_CAP
+          ? combined.slice(0, BASH_OUTPUT_CAP) + "\n…(truncated)"
+          : combined,
+    };
   } catch (err) {
     const e = err as { stdout?: string; stderr?: string; killed?: boolean; message?: string };
     const stdout = (e.stdout ?? "").toString();
     const stderr = (e.stderr ?? "").toString();
     const detail = stderr.trim() || stdout.trim() || (e.message ?? "exec failed");
     if (e.killed) {
-      return { ok: false, error: `bash killed after ${Math.round(BASH_TIMEOUT_MS / 1000)}s timeout: ${detail.slice(-500)}` };
+      return {
+        ok: false,
+        error: `bash killed after ${Math.round(BASH_TIMEOUT_MS / 1000)}s timeout: ${detail.slice(-500)}`,
+      };
     }
     return { ok: false, error: `bash exited non-zero: ${detail.slice(-700)}` };
   }
@@ -385,6 +466,10 @@ async function webFetchTool(args: Record<string, unknown>): Promise<ToolResult> 
   const url = String(args.url ?? "").trim();
   if (!url || !/^https?:\/\//i.test(url)) {
     return { ok: false, error: "web_fetch: valid http/https url required" };
+  }
+  const ssrf = isBlockedWebFetchUrl(url);
+  if (ssrf.blocked) {
+    return { ok: false, error: `web_fetch refused: ${ssrf.reason}` };
   }
 
   // Rate limit
@@ -615,6 +700,7 @@ export class ToolDispatcher {
   ) {
     if (
       mcpServers
+      && config.SWARM_ALLOW_MCP_SERVERS
       && (profile === "swarm-research"
         || profile === "swarm-read"
         || profile === "swarm-planner"
@@ -622,11 +708,20 @@ export class ToolDispatcher {
     ) {
       // Fire and forget for now; in real use await initMcpServers
       this.initMcpServers(mcpServers).catch((e) => console.error("MCP init failed", e));
+    } else if (mcpServers && !config.SWARM_ALLOW_MCP_SERVERS) {
+      console.warn(
+        "MCP servers requested but SWARM_ALLOW_MCP_SERVERS=false — ignoring (set true to opt in; RCE surface).",
+      );
     }
   }
 
   private async initMcpServers(mcpServers: string) {
+    if (!config.SWARM_ALLOW_MCP_SERVERS) {
+      return;
+    }
     const specs = mcpServers.split(/[\s,]+/).filter(Boolean);
+    // Only allow a small set of package-manager entrypoints when opt-in.
+    const MCP_BIN_ALLOW = new Set(["npx", "npx.cmd", "node", "bun", "bunx", "python", "python3"]);
     for (const spec of specs) {
       const eq = spec.indexOf("=");
       if (eq === -1) continue;
@@ -638,17 +733,17 @@ export class ToolDispatcher {
         const parts = cmdStr.split(/\s+/);
         const command = parts[0];
         const args = parts.slice(1);
+        if (!command || !MCP_BIN_ALLOW.has(command.toLowerCase())) {
+          console.error(
+            `MCP spawn refused for key=${key}: binary "${command}" not in allowlist (${[...MCP_BIN_ALLOW].join(", ")})`,
+          );
+          continue;
+        }
 
-        // Example for real MCP server spawn:
-        // Free keyless search: mcpServers="search=npx -y open-websearch@latest"
-        // (multi-engine: DuckDuckGo, Bing, etc. — no API key).
-        // Other: "fetch=npx -y @modelcontextprotocol/server-fetch"
-        // The SDK handles the stdio transport and tool listing/calling.
-        const isWin = process.platform === "win32";
+        // argv only (do not pass shell:true — avoids Windows cmd injection).
         const transport = new StdioClientTransport({
           command,
           args,
-          ...(isWin ? { shell: true } : {}),
         });
         const client = new Client(
           { name: `swarm-mcp-${key}`, version: "0.1.0" },

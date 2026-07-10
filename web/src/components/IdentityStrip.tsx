@@ -21,6 +21,7 @@ import { SwarmControlPanel } from "./SwarmControlPanel";
 import type { ConformanceSample, DriftSample } from "../state/store";
 import { isActiveSwarmPhase } from "../lib/swarmPhase";
 import { submitMidRunNudge } from "../lib/submitMidRunNudge";
+import { apiFetch } from "../lib/apiFetch";
 
 // Truncate-from-LEFT (per Kevin's Unit 52c spec preference): the
 // distinguishing tail of a path is the run-name + repo-name, not the
@@ -65,7 +66,7 @@ export function IdentityStrip() {
     // Retry 3 times with 500ms backoff before giving up.
     const attemptOnce = async (): Promise<{ ok: boolean; err?: unknown }> => {
       try {
-        const res = await fetch("/api/swarm/open", {
+        const res = await apiFetch("/api/swarm/open", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ path: cfg.clonePath }),

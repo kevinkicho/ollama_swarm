@@ -6,6 +6,7 @@ import {
 } from "@ollama-swarm/shared/thinkGuardBudget";
 import { useSwarm } from "../state/store";
 import { isActiveSwarmPhase } from "../lib/swarmPhase";
+import { apiFetch } from "../lib/apiFetch";
 
 type Draft = {
   enabled: boolean;
@@ -202,7 +203,7 @@ export function ThinkGuardRefereePanel() {
       return;
     }
     try {
-      const res = await fetch("/api/swarm/reconfig", {
+      const res = await apiFetch("/api/swarm/reconfig", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

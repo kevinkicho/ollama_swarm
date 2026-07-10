@@ -43,6 +43,7 @@ import {
   WS_REPLAY_GRACE_MS,
   type StatusHydrateContext,
 } from "./swarmStoreHydrate";
+import { apiFetch } from "../lib/apiFetch";
 
 interface SwarmStoreProviderProps {
   /** Run id to subscribe to. */
@@ -153,7 +154,7 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
     const isFake = runId.startsWith("fake-") || runId.includes("fake");
 
     const hydrateFromHistoryFallback = async () => {
-      const listRes = await fetch(`/api/swarm/runs`, { signal: ctrl.signal });
+      const listRes = await apiFetch(`/api/swarm/runs`, { signal: ctrl.signal });
       if (!listRes.ok) return;
 
       const listBody = await listRes.json();
@@ -167,7 +168,7 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
       if (!match?.clonePath) return;
 
       const params = new URLSearchParams({ clonePath: match.clonePath, runId });
-      const sumRes = await fetch(`/api/swarm/run-summary?${params.toString()}`, {
+      const sumRes = await apiFetch(`/api/swarm/run-summary?${params.toString()}`, {
         signal: ctrl.signal,
       });
       if (!sumRes.ok) return;
@@ -223,7 +224,7 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
         return;
       }
       try {
-        const res = await fetch(statusUrl, { signal: ctrl.signal });
+        const res = await apiFetch(statusUrl, { signal: ctrl.signal });
         if (res.ok) {
           const snap = (await res.json()) as SwarmStatusSnapshot;
           if (cancelled) return;

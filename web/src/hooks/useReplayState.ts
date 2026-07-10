@@ -20,6 +20,7 @@
 // next slice of the time-travel UI needs them.
 
 import { useEffect, useState, useMemo } from "react";
+import { apiFetch } from "../lib/apiFetch";
 
 export interface ReplayRecord {
   ts: number;
@@ -351,7 +352,7 @@ export function useReplayState(runId: string | null): UseReplayStateResult {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/v2/event-log/runs/${encodeURIComponent(runId)}`)
+    apiFetch(`/api/v2/event-log/runs/${encodeURIComponent(runId)}`)
       .then(async (r) => {
         if (cancelled) return;
         if (!r.ok) {

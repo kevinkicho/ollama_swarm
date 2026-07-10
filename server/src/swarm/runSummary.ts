@@ -134,6 +134,12 @@ export function isDiscussionGiveUpStop(detail?: string): boolean {
   return /^(audit-stuck|ambition-failed|no-progress):/.test(detail);
 }
 
+/** Provider 429/quota stalls — not a code deadlock (Phase 3 honesty). */
+export function isProviderQuotaStop(detail?: string): boolean {
+  if (!detail) return false;
+  return /^provider-quota:/.test(detail);
+}
+
 export function classifyDiscussionStopReason(
   input: Pick<DiscussionSummaryInput, "crashMessage" | "stopping" | "earlyStopDetail">,
 ): { stopReason: StopReason; stopDetail?: string } {
@@ -144,6 +150,11 @@ export function classifyDiscussionStopReason(
     return { stopReason: "user" };
   }
   if (input.earlyStopDetail) {
+    // Quota/transport: map to no-progress with explicit provider-quota detail
+    // (same stopReason enum as give-up; detail distinguishes root cause).
+    if (isProviderQuotaStop(input.earlyStopDetail)) {
+      return { stopReason: "no-progress", stopDetail: input.earlyStopDetail };
+    }
     if (isDiscussionGiveUpStop(input.earlyStopDetail)) {
       return { stopReason: "no-progress", stopDetail: input.earlyStopDetail };
     }

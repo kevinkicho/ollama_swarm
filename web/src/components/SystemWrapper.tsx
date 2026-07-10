@@ -4,11 +4,13 @@ import { SystemStatusPanel } from "./SystemStatusPanel";
 import { RunQueuePanel } from "./RunQueuePanel";
 import { MetricsOverviewPanel } from "./MetricsOverviewPanel";
 import { BrainActivityPanel } from "./BrainActivityPanel";
+import { BrainProposalsPanel } from "./BrainProposalsPanel";
 import { QuickNavPanel } from "./QuickNavPanel";
 import { useSwarm } from "../state/store";
 // Phase 10: brain always available (unless other config).
 import { RunHistoryDropdown } from "./RunHistory";
 import { EventLogPanel } from "./EventLogPanel";
+import { apiFetch } from "../lib/apiFetch";
 
 import { NotificationPreferences } from "./NotificationPreferences";
 import { UsageWidget } from "./UsageWidget";
@@ -55,7 +57,7 @@ export function SystemWrapper({
   useEffect(() => {
     const fetchHealth = async () => {
       try {
-        const res = await fetch("/api/health");
+        const res = await apiFetch("/api/health");
         const data = (await res.json()) as { ok?: boolean };
         setSystemHealthy(data.ok === true);
       } catch {
@@ -115,7 +117,7 @@ export function SystemWrapper({
   const handleStopRun = async (runId: string) => {
     if (!runId) return;
     try {
-      const res = await fetch(`/api/swarm/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
+      const res = await apiFetch(`/api/swarm/runs/${encodeURIComponent(runId)}/stop`, { method: "POST" });
       if (!res.ok) {
         // force terminal in any per-run context
         // (this is global-ish wrapper, but helps)
@@ -140,8 +142,8 @@ export function SystemWrapper({
     const fetchBrainState = async () => {
       try {
         const [healthRes, activityRes] = await Promise.all([
-          fetch("/api/swarm/brain/health"),
-          fetch("/api/swarm/brain/activity"),
+          apiFetch("/api/swarm/brain/health"),
+          apiFetch("/api/swarm/brain/activity"),
         ]);
         const healthData = await healthRes.json();
         if (healthData.status === "not-initialized") {
@@ -343,6 +345,7 @@ export function SystemWrapper({
               <RunQueuePanel parentPath={parentPath} onViewRun={handleViewRun} onStopRun={handleStopRun} />
               <MetricsOverviewPanel parentPath={parentPath} />
               <BrainActivityPanel brainHealth={brainHealth} activities={brainActivities} />
+              <BrainProposalsPanel clonePath={clonePathForNav || parentPath} />
               <QuickNavPanel
                 focusedRunId={activeRunId}
                 focusedRunLive={focusedRunLive}

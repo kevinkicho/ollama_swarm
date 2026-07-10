@@ -13,6 +13,7 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { apiFetch } from "../lib/apiFetch";
 
 interface ActiveRun {
   runId: string;
@@ -53,7 +54,7 @@ function shortRunId(id: string): string {
 
 async function fetchActiveRuns(signal?: AbortSignal): Promise<ActiveRun[]> {
   try {
-    const res = await fetch("/api/swarm/active-runs", { signal });
+    const res = await apiFetch("/api/swarm/active-runs", { signal });
     if (!res.ok) return [];
     const json = (await res.json()) as ActiveRunsResponse;
     return Array.isArray(json.runs) ? json.runs : [];
@@ -64,7 +65,7 @@ async function fetchActiveRuns(signal?: AbortSignal): Promise<ActiveRun[]> {
 
 async function stopRun(runId: string): Promise<boolean> {
   try {
-    const res = await fetch(`/api/swarm/runs/${encodeURIComponent(runId)}/stop`, {
+    const res = await apiFetch(`/api/swarm/runs/${encodeURIComponent(runId)}/stop`, {
       method: "POST",
     });
     return res.ok;

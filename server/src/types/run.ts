@@ -43,6 +43,8 @@ export interface RegionStatus {
 
 export interface SwarmStatus {
   phase: SwarmPhase;
+  /** V2 state machine snapshot (Phase 4 partial SoT). */
+  runStateV2?: { phase: string; pausedReason?: string };
   round: number;
   repoUrl?: string;
   localPath?: string;

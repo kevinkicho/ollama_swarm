@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { RunSummary, RunSummaryDigest } from "../types";
 import { fmtMs } from "./RunHistory";
+import { apiFetch } from "../lib/apiFetch";
 
 interface TimelineEntry extends RunSummaryDigest {
   summary?: RunSummary;
@@ -77,7 +78,7 @@ export function TranscriptTimeline({ parentPath }: { parentPath?: string } = {})
       try {
         const params = new URLSearchParams();
         if (parentPath) params.set("parentPath", parentPath);
-        const res = await fetch(`/api/swarm/runs?${params}`, { signal: ctrl.signal });
+        const res = await apiFetch(`/api/swarm/runs?${params}`, { signal: ctrl.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         if (cancelled) return;
@@ -111,7 +112,7 @@ export function TranscriptTimeline({ parentPath }: { parentPath?: string } = {})
       const ctrl = new AbortController();
       const params = new URLSearchParams({ clonePath });
       if (runId) params.set("runId", runId);
-      const res = await fetch(`/api/swarm/run-summary?${params}`, { signal: ctrl.signal });
+      const res = await apiFetch(`/api/swarm/run-summary?${params}`, { signal: ctrl.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const summary: RunSummary = await res.json();
       setEntries((prev) =>

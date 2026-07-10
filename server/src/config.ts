@@ -293,6 +293,47 @@ const Schema = z.object({
     .enum(["true", "false", "1", "0", "yes", "no"])
     .default("true")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Brain auto-start of follow-up runs. Default off (approve-to-provision):
+  // startRunForProposal requires { approved: true } or this flag.
+  SWARM_BRAIN_AUTO_PROVISION: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Host bind address. Default loopback for the trusted-appliance security
+  // posture (see docs/RELEASE-1.0-PLAN.md). Set 0.0.0.0 only when intentionally
+  // exposing LAN — pair with SWARM_API_TOKEN.
+  SERVER_HOST: z
+    .string()
+    .default("127.0.0.1")
+    .transform((v) => {
+      const t = v.trim();
+      return t.length > 0 ? t : "127.0.0.1";
+    }),
+  // Optional shared secret for /api/* (Bearer or X-Swarm-Token). Empty = open
+  // (local trusted operator). Required in practice when SERVER_HOST is not loopback.
+  SWARM_API_TOKEN: z
+    .string()
+    .optional()
+    .transform((v) => {
+      const t = (v ?? "").trim();
+      return t.length > 0 ? t : undefined;
+    }),
+  // When false (default), reject start-body / env MCP process spawn (RCE surface).
+  SWARM_ALLOW_MCP_SERVERS: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+  // Comma-separated absolute roots. When non-empty, clone/parent paths must
+  // resolve under one of these roots.
+  SWARM_WORKSPACE_ROOTS: z
+    .string()
+    .default("")
+    .transform((v) =>
+      v
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    ),
 });
 
 const parsed = Schema.parse(process.env);

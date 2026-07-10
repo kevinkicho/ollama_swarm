@@ -223,10 +223,28 @@ export function SetupForm() {
                         isSelected ? "border-emerald-500 bg-emerald-900/30" : "border-ink-700 bg-ink-900 hover:bg-ink-800"
                       } ${!isActive ? "opacity-50 cursor-not-allowed" : ""}`}
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <span className="font-medium text-sm">{p.label}</span>
-                        <span className="text-[10px] text-ink-500">
-                          {p.min}–{p.max} agents (rec {p.recommended})
+                        <span className="flex items-center gap-1.5 shrink-0">
+                          {p.maturity && (
+                            <span
+                              className={`text-[9px] uppercase tracking-wide px-1.5 py-0.5 rounded border ${
+                                p.maturity === "core"
+                                  ? "border-emerald-600/60 text-emerald-400"
+                                  : p.maturity === "supported"
+                                    ? "border-sky-600/60 text-sky-400"
+                                    : p.maturity === "experimental"
+                                      ? "border-amber-600/60 text-amber-400"
+                                      : "border-ink-600 text-ink-400"
+                              }`}
+                              title="Release maturity — see docs/RELEASE-1.0-PLAN.md"
+                            >
+                              {p.maturity}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-ink-500">
+                            {p.min}–{p.max} agents (rec {p.recommended})
+                          </span>
                         </span>
                       </div>
                       <div className="text-[10px] text-ink-400 mt-0.5 line-clamp-2">{p.summary}</div>

@@ -284,10 +284,10 @@ function sleep(ms) {
 // Score a single run from its summary.json. Higher score = better.
 // Components:
 //  - completion (40 pts): completed cleanly = 40, stopped/timeout = 20, failed = 0
-//  - throughput (30 pts): commits + transcript activity normalized
+//  - throughput (30 pts): commits for code; quality judge for analysis (no chatty free points)
 //  - efficiency (20 pts): tokens per minute (lower = better)
 //  - hunk-quality (10 pts): cascade efficiency from stale/commit ratios
-//  - conformance (0 pts): reserved (#295 not aggregated yet)
+//  - conformance (0–10): from summary.conformance when present (mean score scaled)
 export function scoreRun(summary, task) {
   if (!summary || typeof summary !== "object") {
     return { total: 0, components: { completion: 0, throughput: 0, efficiency: 0, hunkQuality: 0, conformance: 0 }, notes: "no summary" };
@@ -298,30 +298,28 @@ export function scoreRun(summary, task) {
   let completion = 0;
   if (stopReason === "completed") completion = 40;
   else if (stopReason === "user" || stopReason === "wall_clock") completion = 20;
-  else if (stopReason === "failed") completion = 0;
+  else if (stopReason === "failed" || stopReason === "crash") completion = 0;
+  else if (typeof stopReason === "string" && stopReason.startsWith("provider-quota")) completion = 15;
+  else if (stopReason === "no-progress") completion = 10;
   else completion = 10;
 
   // Throughput (30): for code tasks, weight commits heavily; for
-  // analysis tasks weight transcript activity OR judge-quality if a
-  // qualityScore was supplied (lever #2, 2026-05-02 — see qualityJudge.mjs).
+  // analysis tasks require qualityScore (judge) — chatty transcripts alone
+  // score 0 (Phase 6 honesty, 2026-07-09).
   let throughput = 0;
   const commits = summary.filesChanged ?? 0;
-  const transcriptCount = (summary.transcript?.length ?? summary.agents?.reduce?.((a, b) => a + (b.turns ?? 0), 0)) ?? 0;
   if (task.expectFilesChanged) {
     // scale: 1 file = 6, 5+ files = full 30
     throughput = Math.min(30, commits * 6);
   } else if (typeof task.qualityScore === "number") {
-    // 2026-05-02 (lever #2): when a quality judge ran, replace the
-    // transcript-volume proxy with the judge's 0-100 score scaled to
-    // 0-30. This is the actual differentiator between discussion
-    // presets — pre-fix, every analysis run got ~30 free pts for
-    // emitting any transcript at all.
     throughput = Math.round((task.qualityScore / 100) * 30);
-  } else {
-    // analysis without judge (back-compat): scale on transcript
-    // volume up to 30. Will be deprecated once every analysis task
-    // has a qualityRubric.
+  } else if (task.allowTranscriptThroughput === true) {
+    // Explicit opt-in for legacy scoreboards only.
+    const transcriptCount = (summary.transcript?.length ?? summary.agents?.reduce?.((a, b) => a + (b.turns ?? 0), 0)) ?? 0;
     throughput = Math.min(30, Math.round(transcriptCount * 2));
+  } else {
+    // analysis without judge: 0 throughput (do not reward chat volume)
+    throughput = 0;
   }
 
   // Efficiency (20): tokens per minute. Lower is better; bias toward
@@ -334,10 +332,18 @@ export function scoreRun(summary, task) {
   else if (tokPerMin < 200_000) efficiency = Math.round(20 - ((tokPerMin - 50_000) / 150_000) * 15);
   else efficiency = 5;
 
-  // Conformance (0): reserved slot — #295 emits live samples but
-  // doesn't aggregate into summary.json yet. Default to 0 (neutral)
-  // so it doesn't inflate scores. Restore to 10 when aggregation lands.
-  const conformance = 0;
+  // Conformance (0–10): use aggregated score from summary when present.
+  let conformance = 0;
+  const conf =
+    summary.conformanceScore ??
+    summary.conformance?.mean ??
+    summary.conformance?.score ??
+    summary.metrics?.conformance;
+  if (typeof conf === "number" && Number.isFinite(conf)) {
+    // Accept 0–1 or 0–100 scales.
+    const norm = conf <= 1 ? conf * 100 : conf;
+    conformance = Math.max(0, Math.min(10, Math.round((norm / 100) * 10)));
+  }
 
   // Hunk quality (10): derived from cascade efficiency. Higher =
   // fewer stale todos, more first-try commits. Directly measures
@@ -358,7 +364,7 @@ export function scoreRun(summary, task) {
   return {
     total,
     components: { completion, throughput, efficiency, hunkQuality, conformance },
-    notes: `${stopReason} · commits=${commits} · ${Math.round(wallS)}s · ${Math.round(tokPerMin)} tok/min · cascade=${((counts?.committed ?? 0) / Math.max(totalTodos, 1) * 100).toFixed(0)}%`,
+    notes: `${stopReason} · commits=${commits} · ${Math.round(wallS)}s · ${Math.round(tokPerMin)} tok/min · cascade=${((counts?.committed ?? 0) / Math.max(totalTodos, 1) * 100).toFixed(0)}% · conf=${conformance}`,
   };
 }
 

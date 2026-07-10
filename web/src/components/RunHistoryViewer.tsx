@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { apiFetch } from "../lib/apiFetch";
 
 interface Run {
   id: string;
@@ -26,7 +27,7 @@ const RunHistoryViewer: React.FC = () => {
         if (filterStatus) params.append('status', filterStatus);
         if (filterDate) params.append('date', filterDate);
         if (filterModel) params.append('model', filterModel);
-        const response = await fetch(`/api/runs?${params.toString()}`);
+        const response = await apiFetch(`/api/runs?${params.toString()}`);
         if (!response.ok) throw new Error('Failed to fetch runs');
         const data: Run[] = await response.json();
         setRuns(data);

@@ -769,6 +769,14 @@ export async function planAndExecute(
       ctx.recordError(err, { causeHint: "user-stop" });
       ctx.appendSystem(`Run halted: ${msg}`);
     } else {
+      // Abort in-flight provider HTTP / streams BEFORE snapshot + summary
+      // work so crash close-out does not leave orphan cloud calls (parity
+      // with discussion runFinallyHooks.beginRunShutdown; e182 pattern).
+      try {
+        ctx.getManager().beginRunShutdown();
+      } catch {
+        /* best-effort */
+      }
       // R17 wiring: classify the crash for the run-end RCA report.
       ctx.recordError(err);
       errored = true;

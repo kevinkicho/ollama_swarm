@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { apiFetch } from "../../lib/apiFetch";
 
 interface ProjectGraphNode {
   id: string;
@@ -99,7 +100,7 @@ export function ProjectGrowthPage({ parentPath }: { parentPath?: string }) {
       if (showStructure) q.set("includeStructure", "true");
       if (opts?.refreshLayers) q.set("refreshLayers", "true");
       if (opts?.refreshLayers || opts?.refreshGraph) q.set("refresh", "true");
-      const res = await fetch(`/api/swarm/project-graph?${q.toString()}`);
+      const res = await apiFetch(`/api/swarm/project-graph?${q.toString()}`);
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);

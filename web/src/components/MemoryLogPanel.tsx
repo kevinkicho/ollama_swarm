@@ -11,6 +11,7 @@
 // commits as a header and the lessons as bullets.
 
 import { useEffect, useState } from "react";
+import { apiFetch } from "../lib/apiFetch";
 
 interface MemoryEntry {
   ts: number;
@@ -43,7 +44,7 @@ export function MemoryLogPanel({ clonePath }: { clonePath: string | undefined })
         // entries from clones with the same name under EVERY known
         // parent path. Lets the panel show prior-clone lessons even
         // when the active parent is fresh.
-        const r = await fetch(`/api/swarm/memory?clonePath=${encodeURIComponent(clonePath as string)}&includeOtherParents=true`);
+        const r = await apiFetch(`/api/swarm/memory?clonePath=${encodeURIComponent(clonePath as string)}&includeOtherParents=true`);
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const body = (await r.json()) as MemoryResponse;
         if (cancelled) return;

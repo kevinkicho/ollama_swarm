@@ -5,10 +5,15 @@ import type { RunSummary } from "./summary.js";
 import { boardCounts as boardCountsExtracted, boardSnapshot as boardSnapshotExtracted, type RunnerUtilContext } from "./runnerUtil.js";
 import { isDrainEligible } from "@ollama-swarm/shared/drainEligibility";
 import { resolveThinkGuardRefereeBudget } from "@ollama-swarm/shared/thinkGuardBudget";
+import { resolveDisplayPhase } from "@ollama-swarm/shared/mapRunPhase";
+import type { RunPhase } from "@ollama-swarm/shared/runStateMachine";
 import { config } from "../../config.js";
 
 export interface StatusContext {
   phase: string;
+  /** V2 state machine snapshot — when set, terminal/pause display prefers V2. */
+  v2Phase?: RunPhase;
+  v2PausedReason?: string;
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   getDrainEligibilityInput?: (partial: { claimed: number; pendingCommit: number }) => import("./drainEligibility.js").DrainEligibilityInput;
   getTodoQueueCounts?: () => { pendingCommit: number };
@@ -96,8 +101,24 @@ export function status(ctx: StatusContext): SwarmStatus {
       )
     : isDrainEligible({ phase: ctx.phase, claimed: counts.claimed, pendingCommit });
 
+  const displayPhase =
+    ctx.v2Phase !== undefined
+      ? resolveDisplayPhase(ctx.phase, {
+          phase: ctx.v2Phase,
+          pausedReason: ctx.v2PausedReason,
+        })
+      : ctx.phase;
+
   return {
-    phase: ctx.phase as import("../../types.js").SwarmPhase,
+    phase: displayPhase as import("../../types.js").SwarmPhase,
+    ...(ctx.v2Phase
+      ? {
+          runStateV2: {
+            phase: ctx.v2Phase,
+            pausedReason: ctx.v2PausedReason,
+          },
+        }
+      : {}),
     ...(ctx.planningSubphase ? { planningSubphase: ctx.planningSubphase } : {}),
     drainEligible,
     round: ctx.round,

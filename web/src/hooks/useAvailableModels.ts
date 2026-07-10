@@ -19,6 +19,7 @@
 
 import { useEffect, useState } from "react";
 import type { Provider } from "@ollama-swarm/shared/providers";
+import { apiFetch } from "../lib/apiFetch";
 
 interface ModelsState {
   models: readonly string[];
@@ -52,7 +53,7 @@ async function fetchModels(provider: Provider): Promise<ModelsState> {
   if (existing) return existing;
   const promise = (async () => {
     try {
-      const r = await fetch(`/api/models?provider=${encodeURIComponent(provider)}`);
+      const r = await apiFetch(`/api/models?provider=${encodeURIComponent(provider)}`);
       if (!r.ok) {
         const next: ModelsState = {
           models: [],

@@ -7,6 +7,7 @@ import { topologyForPreset } from "../components/setup/TopologyGrid";
 import type { Topology } from "../../../shared/src/topology";
 import { detectProvider, type Provider } from "../../../shared/src/providers";
 import { loadRecentRuns, saveRecentRun, type RecentRun } from "../components/setup/RecentRuns";
+import { apiFetch } from "../lib/apiFetch";
 
 // Minimal surface to keep the thin SetupForm working.
 // Full logic can be expanded here later.
@@ -238,7 +239,7 @@ export function useSetupForm(navigate: (path: string) => void) {
           : undefined,
         ambitionTiers: ambitionTiers ? Number(ambitionTiers) : undefined,
       };
-      const res = await fetch("/api/swarm/start", {
+      const res = await apiFetch("/api/swarm/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

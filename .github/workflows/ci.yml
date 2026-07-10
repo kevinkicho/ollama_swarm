@@ -1,25 +1,19 @@
-# #307 (2026-04-28): minimal CI gate. Runs the type-check + the
-# server unit-test suite on every push and PR. Catches regressions
-# the local dev loop misses (e.g. when tsx watch on /mnt/c silently
-# reloads stale code, or when a subtle import path break only
-# surfaces in a fresh checkout).
+# #307 (2026-04-28): CI gate. Type-check + server unit-test suite on every
+# push and PR. Phase 5 (2026-07-09): matrix ubuntu + windows for path/kill
+# regressions.
 #
 # IMPORTANT FOR RELIABILITY:
 #   Run `npm run verify-ci` (or the exact steps below) locally before every push.
 #   This script lives in scripts/verify-ci.mjs and mirrors this workflow 1:1.
 #   Common footguns that still break CI:
 #     * New .ts/.tsx files that were never `git add`ed (→ "Cannot find module")
-#     * Moving code (SetupForm → hooks/presets, etc.) without updating all
-#       fs.readFileSync greps in *Runner.test.ts files
-#     * Adding implicit `any` parameters on callbacks or new Brain/pipeline cfg
-#   The verify script now also fails fast on untracked *.ts *.tsx.
+#     * Moving code without updating *Runner.test.ts greps
+#     * Adding implicit `any` parameters
+#   The verify script also fails fast on untracked *.ts *.tsx.
 #
 # Tests run with OPENCODE_SERVER_PASSWORD=test-only because the
 # zod config schema in server/src/config.ts requires the env var to
-# be set at module-load (see reference_test_command_password.md
-# memory entry).
-#
-# Web side: type-check only — no UI runtime tests in the suite yet.
+# be set at module-load.
 
 name: ci
 
@@ -32,25 +26,19 @@ on:
 
 jobs:
   test:
-    name: Type-check + server tests
-    runs-on: ubuntu-latest
-    # 40 min budget. Locally the suite runs in ~12s with 1100+ tests.
-    # On CI we disable per-file process isolation (CI=true triggers
-    # --test-isolation=none in run-tests.mjs) because 70 cold node
-    # spawns × CI's slow disk = 25+ min, and our tests don't share
-    # global state (each uses its own tmpdir + fresh adapters). With
-    # isolation disabled, CI should land in ~3-5 min.
-    timeout-minutes: 40
+    name: Type-check + tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Node 24
         uses: actions/setup-node@v4
         with:
-          # Use 24.x in CI to get stable --test-isolation=none flag
-          # (was experimental in 22.x). Locally Kevin runs 25.x; both
-          # support the flag we use in CI mode for a 5x speedup over
-          # process isolation.
           node-version: "24.x"
           cache: "npm"
 
@@ -76,3 +64,6 @@ jobs:
 
       - name: Electron stub test (prior data + flags)
         run: node electron/test-stub.cjs
+
+      - name: Eval score unit tests
+        run: node --test eval/score-run.test.mjs

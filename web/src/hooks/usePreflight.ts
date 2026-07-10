@@ -15,6 +15,7 @@
 
 import { useEffect, useState } from "react";
 import type { PreflightState } from "../types";
+import { apiFetch } from "../lib/apiFetch";
 
 export interface UsePreflightResult {
   state: PreflightState | null;
@@ -63,7 +64,7 @@ export function usePreflight(
         let lastErr: unknown;
         for (let attempt = 0; attempt < 2; attempt++) {
           try {
-            const res = await fetch(`/api/swarm/preflight?${params.toString()}`);
+            const res = await apiFetch(`/api/swarm/preflight?${params.toString()}`);
             if (cancelled) return;
             if (!res.ok) {
               const body = await res.json().catch(() => ({}));

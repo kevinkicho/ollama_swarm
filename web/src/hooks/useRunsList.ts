@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { RunSummaryDigest } from "../types";
+import { apiFetch } from "../lib/apiFetch";
 
 /**
  * Shared hook for the sidebar "Run Queue" + "System Metrics" + topbar stats.
@@ -21,7 +22,7 @@ export function useRunsList(parentPath?: string) {
         // yesterday's runs even without an active run in the exact parent.
         params.set("includeOtherParents", "true");
         const qs = params.toString();
-        const res = await fetch(`/api/swarm/runs${qs ? `?${qs}` : ""}`);
+        const res = await apiFetch(`/api/swarm/runs${qs ? `?${qs}` : ""}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const list = Array.isArray(data.runs) ? (data.runs as RunSummaryDigest[]) : [];

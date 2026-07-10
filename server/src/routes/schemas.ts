@@ -114,6 +114,18 @@ export const BrainRejectBody = z.object({
   clonePath: z.string().min(1).max(500).optional(),
 });
 
+/** Approve-to-provision: start a follow-up run from a brain insight/proposal. */
+export const BrainProvisionBody = z.object({
+  proposalId: z.string().min(1).max(200).optional(),
+  title: z.string().min(1).max(500).optional(),
+  description: z.string().max(8000).optional(),
+  category: z.enum(["summary", "lesson", "recommendation", "followup", "research"]).optional(),
+  priority: z.enum(["high", "medium", "low"]).optional(),
+  clonePath: z.string().min(1).max(500),
+  /** Must be true — auto-provision is off by default. */
+  approved: z.literal(true),
+});
+
 import type { Request, Response, NextFunction } from "express";
 
 // Extracted from swarm.ts (2026-05-09 UML-B)

@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTopbarDropdown } from "../lib/topbarDropdown";
+import { apiFetch } from "../lib/apiFetch";
 
 interface UsageBreakdownEntry {
   promptTokens: number;
@@ -152,7 +153,7 @@ export function UsageWidget() {
 
   const fetchUsage = useCallback(async (signal?: AbortSignal) => {
     try {
-      const r = await fetch("/api/usage", { signal });
+      const r = await apiFetch("/api/usage", { signal });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const body = (await r.json()) as UsagePayload;
       setData(body);
@@ -213,7 +214,7 @@ export function UsageWidget() {
 
   const dismissQuota = useCallback(async () => {
     try {
-      await fetch("/api/usage/clear-quota", { method: "POST" });
+      await apiFetch("/api/usage/clear-quota", { method: "POST" });
       setQuota(null);
     } catch {
       // silent — next poll will refresh state anyway

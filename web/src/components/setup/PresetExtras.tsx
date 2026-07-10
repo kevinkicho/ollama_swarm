@@ -27,6 +27,9 @@ import {
 
 export type PresetStatus = "active" | "planned";
 
+/** Release maturity — see docs/RELEASE-1.0-PLAN.md / docs/STATUS.md */
+export type PresetMaturity = "core" | "supported" | "experimental" | "research";
+
 // Task #138 (revised): per-preset directive behavior. Surfaces under
 // the User Directive textarea so users know upfront whether the
 // preset will act on what they type.
@@ -58,6 +61,8 @@ export interface SwarmPreset {
   directive: DirectiveBehavior;
   /** Use-case tags (from docs/swarm-patterns.md research table + STATUS preset matrix). Enables the filter in Swarm Mode card. */
   useCases?: string[];
+  /** Product maturity for 1.0 release freeze (core / supported / experimental / research). */
+  maturity?: PresetMaturity;
 }
 
 // Unit 63: one-click "Multi-hour autonomous" preset. Single source of

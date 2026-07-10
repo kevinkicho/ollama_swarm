@@ -18,6 +18,7 @@
 
 import { useEffect, useRef } from "react";
 import type { SwarmEvent } from "../types";
+import { swarmWsTokenQuery } from "../lib/apiFetch";
 
 export interface UseRunScopedWebSocketOptions {
   /** Run id to subscribe to. When undefined / empty, the hook is a
@@ -60,7 +61,9 @@ export function useRunScopedWebSocket(opts: UseRunScopedWebSocketOptions): void 
       if (cancelled) return;
       const proto = location.protocol === "https:" ? "wss" : "ws";
       let url = `${proto}://${location.hostname}:${__BACKEND_PORT__}/ws?runId=${encodeURIComponent(runId)}`;
-      if (lightRef.current) url += '&light=1';
+      if (lightRef.current) url += "&light=1";
+      const tq = swarmWsTokenQuery();
+      if (tq) url += `&${tq}`;
       onStateChangeRef.current?.("connecting");
       const sock = new WebSocket(url);
       socket = sock;

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { detectProvider, type Provider } from "@ollama-swarm/shared/providers";
+import { apiFetch } from "../lib/apiFetch";
 
 const STORAGE_KEY = "ollama-swarm:system-layer-model";
 
@@ -36,7 +37,7 @@ function writeStoredModel(model: string): void {
 
 async function pushModelToServer(model: string): Promise<SystemLayerApiPayload | null> {
   try {
-    const r = await fetch("/api/system-layer", {
+    const r = await apiFetch("/api/system-layer", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model }),
@@ -74,7 +75,7 @@ export function useSystemLayerModel(): SystemLayerModelState {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch("/api/system-layer");
+        const r = await apiFetch("/api/system-layer");
         if (!r.ok) return;
         const body = (await r.json()) as SystemLayerApiPayload;
         if (cancelled) return;

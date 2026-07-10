@@ -7,6 +7,7 @@ import { copyText } from "../utils/copyText";
 import { truncateLeft } from "./IdentityStrip";
 import { loadRecentRuns, type RecentRun } from "./setup/RecentRuns";
 import { AgentStatsTable, rowsFromPerAgentStats } from "./AgentStatsTable";
+import { apiFetch } from "../lib/apiFetch";
 
 // Unit 56: IdentifiersRow has been deleted as a separate row.
 // - run uuid moved into IdentityStrip's leading chip
@@ -128,7 +129,7 @@ export function RunHistoryDropdown({ parentPath, forceOpenSignal }: { parentPath
           // discovers runs from yesterday / other workspaces (recent runs card
           // uses localStorage; this uses server FS scan of summaries).
           params.set("includeOtherParents", "true");
-          const r = await fetch(`/api/swarm/runs?${params}`, { signal: ctrl.signal });
+          const r = await apiFetch(`/api/swarm/runs?${params}`, { signal: ctrl.signal });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
           const body = await r.json();
           if (cancelled) return;
@@ -541,7 +542,7 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
           clonePath: digest.clonePath,
           ...(digest.runId ? { runId: digest.runId } : {}),
         });
-        const r = await fetch(`/api/swarm/run-summary?${params.toString()}`);
+        const r = await apiFetch(`/api/swarm/run-summary?${params.toString()}`);
         if (!r.ok) {
           if (r.status === 404) {
             // No full summary file yet (run in progress or very recent); fall back to digest info.
@@ -905,7 +906,7 @@ function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose
           </a>
           <button
             onClick={() => {
-              void fetch("/api/swarm/open", {
+              void apiFetch("/api/swarm/open", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ path: digest.clonePath }),

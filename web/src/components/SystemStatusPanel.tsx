@@ -7,6 +7,7 @@ import { InfoTip } from "./setup/InfoTip";
 import { ProviderTabs } from "./setup/ProviderTabs";
 import { ModelSelect } from "./setup/ModelSelect";
 import { SystemProbeTipContent } from "./SystemProbeTip";
+import { apiFetch } from "../lib/apiFetch";
 
 interface HealthData {
   ok: boolean;
@@ -47,8 +48,8 @@ export function SystemStatusPanel({ className = "" }: SystemStatusPanelProps) {
   const fetchStatus = useCallback(async () => {
     try {
       const [healthRes, providersRes] = await Promise.all([
-        fetch("/api/health", { cache: "no-store" }),
-        fetch("/api/providers", { cache: "no-store" }),
+        apiFetch("/api/health", { cache: "no-store" }),
+        apiFetch("/api/providers", { cache: "no-store" }),
       ]);
       if (!healthRes.ok) throw new Error(`health ${healthRes.status}`);
       const healthBody = (await healthRes.json()) as HealthData;
@@ -96,7 +97,7 @@ export function SystemStatusPanel({ className = "" }: SystemStatusPanelProps) {
     setProbeError(null);
     setRetestNote(null);
     try {
-      const res = await fetch("/api/providers/probe", {
+      const res = await apiFetch("/api/providers/probe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ force: true, providers: [provider] }),

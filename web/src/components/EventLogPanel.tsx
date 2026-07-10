@@ -17,6 +17,7 @@ import {
   type DerivedRunState,
   type EventCategory,
 } from "../lib/eventLogUi";
+import { apiFetch } from "../lib/apiFetch";
 
 interface RunSliceSummary {
   sliceIndex: number;
@@ -113,7 +114,7 @@ export const EventLogPanel = memo(function EventLogPanel() {
     const ctrl = new AbortController();
     setLoading(true);
     setError(null);
-    fetch("/api/v2/event-log/runs", { signal: ctrl.signal })
+    apiFetch("/api/v2/event-log/runs", { signal: ctrl.signal })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return (await r.json()) as EventLogResponse;
@@ -149,7 +150,7 @@ export const EventLogPanel = memo(function EventLogPanel() {
     const url = detailTarget.runId
       ? `/api/v2/event-log/runs/${encodeURIComponent(detailTarget.runId)}`
       : `/api/v2/event-log/slices/${detailTarget.sliceIndex}`;
-    fetch(url, { signal: ctrl.signal })
+    apiFetch(url, { signal: ctrl.signal })
       .then(async (r) => {
         if (!r.ok) {
           const body = await r.json().catch(() => ({}));

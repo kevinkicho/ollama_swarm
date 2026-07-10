@@ -11,6 +11,8 @@
     "./modelConfig": "./src/modelConfig.ts",
     "./providers": "./src/providers.ts",
     "./runStateMachine": "./src/runStateMachine.ts",
+    "./mapRunPhase": "./src/mapRunPhase.ts",
+    "./toolLoopStuck": "./src/toolLoopStuck.ts",
     "./stripAgentText": "./src/stripAgentText.ts",
     "./parseAgentJson": "./src/parseAgentJson.ts",
     "./summarizeAgentJson": "./src/summarizeAgentJson.ts",

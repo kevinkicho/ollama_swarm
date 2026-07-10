@@ -5,6 +5,7 @@
 // so multiple consumers share one fetch.
 
 import { useEffect, useState } from "react";
+import { apiFetch } from "../lib/apiFetch";
 
 export interface ProviderStatus {
   available: boolean;
@@ -42,7 +43,7 @@ async function fetchProviders(): Promise<ProvidersState> {
   if (inflight) return inflight;
   inflight = (async () => {
     try {
-      const r = await fetch("/api/providers");
+      const r = await apiFetch("/api/providers");
       if (!r.ok) {
         const next: ProvidersState = {
           providers: null,

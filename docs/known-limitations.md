@@ -6,6 +6,34 @@ we made it, and what would force us to revisit. Anything that becomes a
 
 ---
 
+## Brain does not auto-start runs by default (2026-07-09)
+
+**Choice:** `SWARM_BRAIN_AUTO_PROVISION` defaults to `false`. `startRunForProposal`
+requires `{ approved: true }` unless auto-provision is enabled.
+
+**Why:** Approve-to-provision for release 1.0 — Brain is librarian/operator, not
+an unattended run launcher.
+
+**When to revisit:** Trusted continuous improvement loops with capacity caps.
+
+---
+
+## Host bind defaults to loopback; API token optional (2026-07-09)
+
+**Choice:** `SERVER_HOST` defaults to `127.0.0.1`. `SWARM_API_TOKEN` is optional
+(empty = open API for a single trusted local operator). MCP process spawn from
+start body / env is **off** unless `SWARM_ALLOW_MCP_SERVERS=true`.
+
+**Why:** Trusted-appliance security posture for release 1.0 Phase 1. Binding
+`0.0.0.0` without a token is still possible but logs a loud warning.
+
+**When to revisit:** Multi-user LAN install or reverse-proxy front door —
+require token by default when host is non-loopback.
+
+**See:** `docs/RELEASE-1.0-PLAN.md`.
+
+---
+
 ## Parallel `:cloud` prompts are not throttled in-app (2026-07-08)
 
 **Choice:** When N agents use `:cloud` models in the same phase, all N may call

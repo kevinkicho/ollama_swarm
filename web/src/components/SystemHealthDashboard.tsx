@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { apiFetch } from "../lib/apiFetch";
 
 interface HealthData {
   ok: boolean;
@@ -13,7 +14,7 @@ const SystemHealthDashboard = () => {
   useEffect(() => {
     const fetchHealth = async () => {
       try {
-        const res = await fetch('/api/health');
+        const res = await apiFetch('/api/health');
         const data: HealthData = await res.json();
         setHealth(data);
       } catch {

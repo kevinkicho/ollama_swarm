@@ -3,17 +3,32 @@
 // The brain produces run insights and recommendations. The provisioner
 // can turn a "followup" insight into a new run configuration (new directive,
 // different preset, etc). No longer tied to system code patches.
+//
+// Phase 7 (2026-07-09): approve-to-provision is the default. Auto-start only
+// when SWARM_BRAIN_AUTO_PROVISION=true or opts.approved === true.
 
 import type { RunInsight } from "./brainOverseer.js";
 import { prepareResearchConfig } from "../../researchHelpers.js";
+import { config } from "../../../config.js";
+
+export interface ProvisionStartOpts {
+  /** Explicit user/Brain UI approval for this start (required unless auto-provision is on). */
+  approved?: boolean;
+}
 
 export interface RunProvisioner {
   /** Start a run suggested by a brain insight (e.g. followup). */
-  startRunForProposal(insight: RunInsight, clonePath: string): Promise<string | null>;
+  startRunForProposal(
+    insight: RunInsight,
+    clonePath: string,
+    startOpts?: ProvisionStartOpts,
+  ): Promise<string | null>;
   /** Get the number of active runs. */
   getActiveRunCount(): number;
   /** Check if the system can start a new run. */
   canStartRun(): boolean;
+  /** Whether auto-provision is enabled (env). */
+  isAutoProvisionEnabled(): boolean;
 }
 
 export interface RunProvisionerOpts {
@@ -24,14 +39,35 @@ export interface RunProvisionerOpts {
   /** Optional: called when a brain-initiated run is provisioned. */
   onProvision?: (runId: string | null, insight: RunInsight) => void;
   getSystemPressure?: () => { recordCount: number; atLimit: boolean };
+  /** Override env for tests. */
+  autoProvision?: boolean;
 }
 
 /**
  * Create a run provisioner that can start runs from proposals.
  */
 export function createRunProvisioner(opts: RunProvisionerOpts): RunProvisioner {
+  const autoEnabled = () =>
+    opts.autoProvision !== undefined ? opts.autoProvision : config.SWARM_BRAIN_AUTO_PROVISION;
+
   return {
-    async startRunForProposal(insight: RunInsight, clonePath: string): Promise<string | null> {
+    isAutoProvisionEnabled(): boolean {
+      return autoEnabled();
+    },
+
+    async startRunForProposal(
+      insight: RunInsight,
+      clonePath: string,
+      startOpts?: ProvisionStartOpts,
+    ): Promise<string | null> {
+      if (!autoEnabled() && startOpts?.approved !== true) {
+        console.log(
+          `[brain-provisioner] Approve-to-provision: refusing auto-start for "${insight.title}" `
+            + `(set SWARM_BRAIN_AUTO_PROVISION=true or pass approved: true)`,
+        );
+        return null;
+      }
+
       if (!opts.canStartRun()) {
         console.log(`[brain-provisioner] Cannot start run: at capacity (${opts.getActiveRunCount()}/${opts.maxConcurrentRuns})`);
         return null;

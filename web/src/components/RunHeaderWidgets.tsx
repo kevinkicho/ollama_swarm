@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSwarm } from "../state/store";
 import { displaySwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
+import { apiFetch } from "../lib/apiFetch";
 
 // Simplified run status for the topbar (no granular planning/executing/discussing labels).
 export function PhasePill() {
@@ -82,7 +83,7 @@ function ProviderQueueChip() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const res = await fetch("/api/providers");
+        const res = await apiFetch("/api/providers");
         if (!res.ok || cancelled) return;
         const body = (await res.json()) as {
           gateway?: {

@@ -12,6 +12,7 @@
 
 import { useEffect, useState } from "react";
 import { normalizeDerived, type DerivedRunState } from "../lib/eventLogUi";
+import { apiFetch } from "../lib/apiFetch";
 
 export interface EventLogRun {
   derived: DerivedRunState;
@@ -53,7 +54,7 @@ async function fetchOnce(): Promise<EventLogStreamState> {
   if (inflight) return inflight;
   inflight = (async () => {
     try {
-      const r = await fetch("/api/v2/event-log/runs?limit=200");
+      const r = await apiFetch("/api/v2/event-log/runs?limit=200");
       if (!r.ok) {
         const next: EventLogStreamState = {
           ...(cache ?? DEFAULT_STATE),

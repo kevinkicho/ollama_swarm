@@ -498,8 +498,11 @@ export class BlackboardRunner implements SwarmRunner {
   private allCriteriaResolvedSnapshot(): boolean { return allCriteriaResolvedSnapshotExtracted(this.tierContext()); }
 
   status(): SwarmStatus {
+    const v2 = this.v2Observer.getState();
     return statusExtracted({
       phase: this.phase,
+      v2Phase: v2.phase,
+      v2PausedReason: v2.pausedReason,
       planningSubphase: this.planningSubphase,
       getDrainEligibilityInput: (partial) => this.getDrainEligibilityInput(partial),
       getTodoQueueCounts: () => this.todoQueue.counts(),
