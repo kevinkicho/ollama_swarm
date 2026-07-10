@@ -435,6 +435,7 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
                   agentName: resolveCouncilToolProfile(cfg),
                   webToolsConfig: cfg,
                   signal: controller.signal,
+                  activity: { kind: "council", label: "planner fallback todos" },
                 },
                 cfg.providerFailover,
               );

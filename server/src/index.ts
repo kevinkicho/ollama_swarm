@@ -43,7 +43,7 @@ import {
   OLLAMA_CLOUD_MODELS,
   OPENCODE_GO_MODELS,
 } from "@ollama-swarm/shared/providers";
-import type { SwarmEvent } from "./types.js";
+import type { AgentState, SwarmEvent, SwarmStatus } from "./types.js";
 import { providerGateway } from "./providers/ProviderGateway.js";
 import {
   getProvidersApiResponse,
@@ -224,7 +224,7 @@ broadcaster.attach(wss, (ws) => {
   // active runner's contract/summary instead of the requested run's.
   const runIdFilter = broadcaster.getRunIdFilter(ws);
   const liveStatus = runIdFilter ? orchestrator.statusForRun(runIdFilter) : null;
-  const status = liveStatus || {
+  const status: SwarmStatus = liveStatus ?? {
     // For a specific historical run (e.g. finished blackboard with no live .run-state
     // snapshot for that exact runId because same-clone runs overwrite it), do NOT
     // fall back to the global active status() — that would stamp the wrong run's
@@ -233,17 +233,53 @@ broadcaster.attach(wss, (ws) => {
     // view stays on SwarmView instead of flipping to the "start a swarm" SetupForm.
     // The client's per-run hydrate (via /runs list + /run-summary) + transcript replay
     // will populate the real data (agents, full transcript, summary grid).
-    phase: "stopped" as any,
+    phase: "stopped",
     round: 0,
-    agents: [],
+    agents: [] as AgentState[],
     transcript: [],
     runId: runIdFilter || undefined,
-  } as any;
+  };
   const hydrateRunId = runIdFilter ?? status.runId;
   const stamp = <T extends SwarmEvent>(e: T): T =>
     hydrateRunId && e.runId === undefined ? { ...e, runId: hydrateRunId } : e;
   broadcaster.send(ws, stamp({ type: "swarm_state", phase: status.phase, round: status.round }));
   for (const a of status.agents) broadcaster.send(ws, stamp({ type: "agent_state", agent: a }));
+  // Control-plane activity + mid-stream text — same source as REST /status so a
+  // WS reconnect does not lose "what is this agent doing" until the next prompt.
+  const activitySnap = status.agentActivity;
+  if (activitySnap) {
+    for (const [agentId, rec] of Object.entries(activitySnap)) {
+      const agent = status.agents.find((a: AgentState) => a.id === agentId);
+      const agentIndex =
+        agent?.index ?? (Number(agentId.replace(/^agent-/, "")) || 0);
+      broadcaster.send(ws, stamp({
+        type: "agent_activity",
+        agentId,
+        agentIndex,
+        phase: rec.phase,
+        ts: rec.ts,
+        activityId: rec.activityId,
+        kind: rec.kind,
+        label: rec.label,
+        attempt: rec.attempt,
+        maxAttempts: rec.maxAttempts,
+        reason: rec.reason,
+      }));
+    }
+  }
+  if (status.streaming) {
+    for (const [agentId, entry] of Object.entries(status.streaming)) {
+      const agent = status.agents.find((a: AgentState) => a.id === agentId);
+      const agentIndex =
+        agent?.index ?? (Number(agentId.replace(/^agent-/, "")) || 0);
+      broadcaster.send(ws, stamp({
+        type: "agent_streaming",
+        agentId,
+        agentIndex,
+        text: entry.text,
+      }));
+    }
+  }
   for (const entry of status.transcript) broadcaster.send(ws, stamp({ type: "transcript_append", entry }));
   // Replay contract + summary for reloads of a completed run. Both events only
   // fire once over the live socket, so without this a page refresh after a

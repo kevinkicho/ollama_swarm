@@ -34,6 +34,7 @@ export interface StatusContext {
   cloneContract: (c: ExitContract) => ExitContract;
   agentStates: () => AgentState[];
   getPartialStreams: () => Record<string, { text: string; updatedAt: number }>;
+  getActivitySnapshot?: () => NonNullable<SwarmStatus["agentActivity"]>;
   utilCtx: () => RunnerUtilContext;
 }
 
@@ -146,6 +147,12 @@ export function status(ctx: StatusContext): SwarmStatus {
     board: { todos: board.todos, findings: board.findings, counts },
     latency,
     streaming: ctx.getPartialStreams(),
+    ...((): { agentActivity?: SwarmStatus["agentActivity"] } => {
+      const agentActivity = ctx.getActivitySnapshot?.();
+      return agentActivity && Object.keys(agentActivity).length > 0
+        ? { agentActivity }
+        : {};
+    })(),
     ...(thinkGuardReferee ? { thinkGuardReferee } : {}),
   };
 }

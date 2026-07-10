@@ -660,6 +660,10 @@ async function tryWorkerPrompt(
             onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
             onToolResultHook: toolCoachHook,
             runId: state.cfg.runId,
+            activity: {
+              kind: "worker",
+              label: `repair ${todo.id.slice(0, 8)}`,
+            },
           }, state.cfg.providerFailover);
           const repairText = extractProviderText(repairRaw);
           if (repairText) {

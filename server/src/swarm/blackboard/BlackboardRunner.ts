@@ -500,6 +500,7 @@ export class BlackboardRunner implements SwarmRunner {
       cloneContract: (c) => this.cloneContract(c),
       agentStates: () => this.opts.manager.toStates(),
       getPartialStreams: () => this.opts.manager.getPartialStreams(),
+      getActivitySnapshot: () => this.opts.manager.getActivitySnapshot(),
       utilCtx: () => this.utilCtx(),
     });
   }

@@ -133,6 +133,10 @@ export abstract class DiscussionRunnerBase {
       tokenBudgetRemaining = Math.max(0, this.active.tokenBudget - spent);
     }
     const drainEligible = isDrainEligible(drainInput);
+    const agentActivity =
+      typeof this.opts.manager.getActivitySnapshot === "function"
+        ? this.opts.manager.getActivitySnapshot()
+        : undefined;
     return {
       phase: this.phase,
       round: this.round,
@@ -142,6 +146,9 @@ export abstract class DiscussionRunnerBase {
       agents: this.opts.manager.toStates(),
       transcript: [...this.transcript],
       streaming: this.opts.manager.getPartialStreams(),
+      ...(agentActivity && Object.keys(agentActivity).length > 0
+        ? { agentActivity }
+        : {}),
       drainEligible,
       ...(drainEligible ? {} : { drainIneligibleReason: drainIneligibleReason(drainInput) }),
       earlyStopDetail: this.earlyStopDetail,

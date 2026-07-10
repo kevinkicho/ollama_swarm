@@ -77,6 +77,7 @@ Rules:
         agentName: resolveCouncilToolProfile(cfg),
         signal: controller.signal,
         webToolsConfig: cfg,
+        activity: { kind: "council", label: "audit follow-up todos" },
       });
       const text = extractProviderText(raw);
       if (text === null) return [];
@@ -162,6 +163,7 @@ Rules:
         agentName: resolveCouncilToolProfile(cfg),
         signal: controller.signal,
         webToolsConfig: cfg,
+        activity: { kind: "council", label: "extract actionable todos" },
       });
       const text = extractProviderText(raw);
       if (text === null) {

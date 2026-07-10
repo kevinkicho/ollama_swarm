@@ -97,12 +97,16 @@ function dispatch(ev: SwarmEvent): void {
     pendingEvents.push(ev);
     return;
   }
-  // Throttle high-frequency streaming updates to reduce store churn / re-renders
-  if (ev.type === 'agent_streaming') {
-    const key = `stream-${(ev as any).agentId || 'global'}`;
+  // Throttle high-frequency streaming updates per agent (~20fps). A single
+  // global clock starved multi-agent streams (only one agent updated per 50ms).
+  if (ev.type === "agent_streaming") {
+    const agentId = (ev as { agentId?: string }).agentId ?? "global";
     const now = Date.now();
-    if ((dispatch as any)._lastStream && now - (dispatch as any)._lastStream < 50) return; // ~20fps
-    (dispatch as any)._lastStream = now;
+    const map = ((dispatch as unknown as { _lastStreamByAgent?: Map<string, number> })
+      ._lastStreamByAgent ??= new Map<string, number>());
+    const last = map.get(agentId) ?? 0;
+    if (now - last < 50) return;
+    map.set(agentId, now);
   }
   applyEvent(ev);
 }

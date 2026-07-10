@@ -102,6 +102,7 @@ export async function runSynthesisPass(
       manager: ctx.manager as any,
       agentName: resolveCouncilToolProfile(cfg),
       webToolsConfig: cfg,
+      activity: { kind: "council", label: "synthesis" },
       promptAddendum: "",
       describeError: describeSdkError,
       onToolResultHook: buildCouncilToolCoachHook(lead, {

@@ -80,6 +80,10 @@ export class BaselineRunner implements SwarmRunner {
   }
 
   status(): SwarmStatus {
+    const agentActivity =
+      typeof this.opts.manager.getActivitySnapshot === "function"
+        ? this.opts.manager.getActivitySnapshot()
+        : undefined;
     return {
       phase: this.phase,
       round: 0,
@@ -89,6 +93,9 @@ export class BaselineRunner implements SwarmRunner {
       agents: this.opts.manager.toStates(),
       transcript: [...this.transcript],
       streaming: this.opts.manager.getPartialStreams(),
+      ...(agentActivity && Object.keys(agentActivity).length > 0
+        ? { agentActivity }
+        : {}),
     };
   }
 

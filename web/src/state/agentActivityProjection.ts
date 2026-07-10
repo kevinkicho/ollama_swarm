@@ -74,10 +74,12 @@ export function buildStreamingDockSlots(
     if (!hasLiveStreamingText(id, streaming, streamingMeta)) slotIds.add(id);
   }
 
-  // Stale agent_activity (waiting/retrying) must not resurrect dock slots
-  // after markStatus(ready) — only busy agents get placeholders.
+  // Stale agent_activity must not resurrect dock slots after markStatus(ready).
+  // Align with viewAgentActivity: activity open only while control is busy
+  // (or stream is live — already covered by streaming keys above).
   for (const [id, act] of Object.entries(agentActivity)) {
-    if (!isPreStreamActivityPhase(act.phase)) continue;
+    if (act.phase === "done") continue;
+    if (!isPreStreamActivityPhase(act.phase) && act.phase !== "streaming") continue;
     const agent = agents[id];
     if (agent && BUSY_STATUSES.has(agent.status)) slotIds.add(id);
   }
@@ -88,8 +90,16 @@ export function buildStreamingDockSlots(
       const act = agentActivity[agentId];
       const text = streaming[agentId] ?? "";
       const meta = streamingMeta[agentId];
-      const agentBusy = BUSY_STATUSES.has(agent?.status ?? "ready");
-      const busySince = agent?.thinkingSince ?? act?.startedAt;
+      // Demote sticky thinking when activity session is already done.
+      const stickyThinking =
+        BUSY_STATUSES.has(agent?.status ?? "ready")
+        && act?.phase === "done"
+        && meta?.status !== "live";
+      const agentBusy =
+        BUSY_STATUSES.has(agent?.status ?? "ready") && !stickyThinking;
+      const busySince = agentBusy
+        ? (agent?.thinkingSince ?? act?.startedAt)
+        : undefined;
       const busyElapsedMs =
         busySince != null ? Math.max(0, Date.now() - busySince) : 0;
       const hasTaskLabel = !!(agent?.activityLabel ?? act?.label);
@@ -119,7 +129,13 @@ export function buildStreamingDockSlots(
     })
     .filter((slot) => {
       const agent = agents[slot.agentId];
-      const busy = BUSY_STATUSES.has(agent?.status ?? "ready");
+      const act = agentActivity[slot.agentId];
+      const stickyThinking =
+        BUSY_STATUSES.has(agent?.status ?? "ready")
+        && act?.phase === "done"
+        && slot.meta?.status !== "live";
+      const busy =
+        BUSY_STATUSES.has(agent?.status ?? "ready") && !stickyThinking;
       const hasStream = slot.text.length > 0 || slot.meta?.status === "live";
       return busy || hasStream || slot.meta?.status === "done";
     })

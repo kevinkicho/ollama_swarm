@@ -108,6 +108,30 @@ test("buildStreamingDockSlots — streaming phase is receiving not awaiting", ()
   assert.equal(slots[0].receiving, true);
 });
 
+test("buildStreamingDockSlots — demotes sticky thinking when activity is done", () => {
+  const slots = buildStreamingDockSlots(
+    {
+      "agent-2": {
+        id: "agent-2",
+        index: 2,
+        status: "thinking",
+        thinkingSince: 100,
+      },
+    },
+    {},
+    {},
+    {
+      "agent-2": {
+        phase: "done",
+        ts: 9_000,
+        startedAt: 100,
+        label: "synthesis",
+      },
+    },
+  );
+  assert.equal(slots.length, 0);
+});
+
 test("buildStreamingDockSlots — stale waiting activity does not resurrect dock", () => {
   const slots = buildStreamingDockSlots(
     {
