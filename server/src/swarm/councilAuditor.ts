@@ -28,6 +28,7 @@ export interface CouncilAuditorContext {
     list: () => Agent[];
     markStatus: (id: string, status: string, extra?: Record<string, unknown>) => void;
     recordPromptComplete: (id: string, data: any) => void;
+    markStreamingDone?: (id: string, opts?: { preservePartial?: boolean }) => void;
   };
   appendSystem: (msg: string) => void;
   stopping: () => boolean;
@@ -51,28 +52,46 @@ async function promptAuditor(
     activityLabel: "council audit",
     thinkingSince: Date.now(),
   });
-  const raw = await promptWithFailoverAuto(
-    lead,
-    prompt,
-    {
-      manager: ctx.manager as any,
-      agentName: resolveCouncilToolProfile(cfg),
-      signal,
-      webToolsConfig: cfg,
-      activity: { kind: "council", label: "council audit" },
-      onToolResultHook: buildCouncilToolCoachHook(lead, {
-        getSwarmControl: ctx.getSwarmControl,
-        getCoachAgent: ctx.getCoachAgent,
-        clonePath: cfg.localPath,
+  try {
+    const raw = await promptWithFailoverAuto(
+      lead,
+      prompt,
+      {
+        manager: ctx.manager as any,
+        agentName: resolveCouncilToolProfile(cfg),
+        signal,
+        webToolsConfig: cfg,
+        activity: { kind: "council", label: "council audit" },
+        // Audits should not open-ended-explore for 10+ minutes; emit verdict JSON.
+        maxToolTurns: 12,
+        toolLoopNudge: {
+          atTurn: 7,
+          message:
+            "Stop exploring. Emit the auditor verdict JSON array now (MET/UNMET/WONT-DO per criterion). No more tool calls.",
+        },
+        onToolResultHook: buildCouncilToolCoachHook(lead, {
+          getSwarmControl: ctx.getSwarmControl,
+          getCoachAgent: ctx.getCoachAgent,
+          clonePath: cfg.localPath,
+          runId: cfg.runId,
+          appendSystem: ctx.appendSystem,
+          emit: ctx.emit,
+        }),
         runId: cfg.runId,
-        appendSystem: ctx.appendSystem,
-        emit: ctx.emit,
-      }),
-      runId: cfg.runId,
-    },
-    cfg.providerFailover,
-  );
-  return extractProviderText(raw);
+      },
+      cfg.providerFailover,
+    );
+    return extractProviderText(raw);
+  } finally {
+    // Clear sticky "council audit / thinking" so the dock does not show
+    // agent-1 receiving forever after audit finishes or fails.
+    try {
+      ctx.manager.markStreamingDone?.(lead.id);
+    } catch {
+      /* ignore */
+    }
+    ctx.manager.markStatus(lead.id, "ready", { lastMessageAt: Date.now() });
+  }
 }
 
 function applyAuditorVerdicts(

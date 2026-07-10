@@ -19,6 +19,21 @@ function adviceKey(a: SwarmControlAdvice): string {
   return `${a.ts}|${a.kind}|${a.agentId ?? ""}|${a.tool ?? ""}|${a.action ?? ""}`;
 }
 
+/** Strip tool-XML / pseudo-tags and collapse whitespace for readable cards. */
+function formatControlText(raw: string | undefined): string {
+  if (!raw) return "";
+  let t = raw
+    .replace(/<\/?(?:tool_use|function_call|function|invoke|parameter|arguments|server_name|tool_name)[^>]*>/gi, " ")
+    .replace(/<\/?[a-zA-Z_][\w:-]*\b[^>]*>/g, " ")
+    .replace(/&lt;|&gt;|&amp;/g, (m) => ({ "&lt;": "<", "&gt;": ">", "&amp;": "&" }[m] ?? m))
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+  if (t.length > 1200) t = `${t.slice(0, 1200)}…`;
+  return t || "(empty)";
+}
+
 export function SwarmControlPanel() {
   const runId = useSwarm((s) => s.runId);
   const phase = useSwarm((s) => s.phase);
@@ -106,17 +121,17 @@ export function SwarmControlPanel() {
         ? createPortal(
             <div
               ref={panelRef}
-              className="fixed z-[9999] w-[min(420px,calc(100vw-16px))] max-h-[min(360px,50vh)] overflow-y-auto rounded-lg border border-ink-700 bg-ink-950/95 shadow-xl p-3 text-[11px] text-ink-200"
-              style={{ top: pos.top, left: pos.left }}
+              className="fixed z-[9999] w-[min(440px,calc(100vw-16px))] max-h-[min(420px,60vh)] overflow-y-auto rounded-lg border border-ink-600 bg-ink-950 shadow-2xl shadow-black/60 p-3 text-[11px] text-ink-100"
+              style={{ top: pos.top, left: pos.left, backgroundColor: "#0b1220" }}
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-ink-100 font-semibold">Swarm control</span>
-                <span className="text-ink-500 text-[10px]">
+              <div className="flex items-center justify-between mb-2 gap-2">
+                <span className="text-ink-50 font-semibold">Swarm control</span>
+                <span className="text-ink-400 text-[10px] shrink-0">
                   {live ? "live" : "historical"} · {advice.length} event{advice.length === 1 ? "" : "s"}
                 </span>
               </div>
               {recent.length === 0 ? (
-                <p className="text-ink-500">
+                <p className="text-ink-400 leading-relaxed">
                   No control advice yet. Stall gates and tool coaches emit here when rules or bounded AI intervene.
                 </p>
               ) : (
@@ -124,33 +139,33 @@ export function SwarmControlPanel() {
                   {recent.map((a) => (
                     <li
                       key={adviceKey(a)}
-                      className="rounded border border-ink-800 bg-ink-900/50 px-2 py-1.5"
+                      className="rounded border border-ink-700 bg-ink-900 px-2.5 py-2 shadow-inner"
                     >
-                      <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
-                        <span className="text-[10px] uppercase tracking-wide text-cyan-400/90">
+                      <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                        <span className="text-[10px] uppercase tracking-wide text-cyan-300 font-semibold">
                           {KIND_LABEL[a.kind]}
                         </span>
                         {a.source ? (
-                          <span className="text-[10px] text-ink-500">via {a.source}</span>
+                          <span className="text-[10px] text-ink-400">via {a.source}</span>
                         ) : null}
                         {a.action ? (
-                          <span className={`text-[10px] font-semibold uppercase ${ACTION_STYLE[a.action] ?? "text-ink-300"}`}>
+                          <span className={`text-[10px] font-semibold uppercase ${ACTION_STYLE[a.action] ?? "text-ink-200"}`}>
                             {a.action}
                           </span>
                         ) : null}
                         {a.tool ? (
-                          <span className="text-[10px] text-ink-500 font-mono">{a.tool}</span>
+                          <span className="text-[10px] text-ink-400 font-mono">{a.tool}</span>
                         ) : null}
-                        <span className="text-[10px] text-ink-600 ml-auto tabular-nums">
+                        <span className="text-[10px] text-ink-500 ml-auto tabular-nums">
                           {new Date(a.ts).toLocaleTimeString()}
                         </span>
                       </div>
-                      <p className="text-ink-200 leading-snug whitespace-pre-wrap break-words">
-                        {a.rationale}
+                      <p className="text-ink-100 leading-snug whitespace-pre-wrap break-words max-h-28 overflow-y-auto">
+                        {formatControlText(a.rationale)}
                       </p>
                       {a.plannerHint ? (
-                        <p className="mt-1 text-ink-400 text-[10px] leading-snug border-t border-ink-800 pt-1">
-                          planner: {a.plannerHint}
+                        <p className="mt-1.5 text-ink-300 text-[10px] leading-snug border-t border-ink-700 pt-1.5 whitespace-pre-wrap break-words max-h-20 overflow-y-auto">
+                          <span className="text-ink-400">planner:</span> {formatControlText(a.plannerHint)}
                         </p>
                       ) : null}
                     </li>

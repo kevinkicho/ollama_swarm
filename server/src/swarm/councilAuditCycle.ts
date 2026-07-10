@@ -61,6 +61,42 @@ export interface CouncilAuditHost {
   getTierPromotionRetries: () => number;
   setTierPromotionRetries: (n: number) => void;
   setEarlyStopDetail: (s: string) => void;
+  logDiag?: (entry: unknown) => void;
+}
+
+/** Open-ended stretch work so autonomous runs continue after "all met". */
+function enqueueStretchTodos(
+  host: CouncilAuditHost,
+  cfg: RunConfig,
+  cycle: number,
+  reason: string,
+): number {
+  const directive = (cfg.userDirective ?? "").trim() || "the user directive";
+  const todos = [
+    {
+      description: `Deepen research and documentation for: ${directive.slice(0, 200)}. Add citable findings and close remaining gaps.`,
+      expectedFiles: [] as string[],
+      createdBy: "stretch-research",
+    },
+    {
+      description: `Consolidate, deduplicate, and improve structure of docs produced so far for: ${directive.slice(0, 160)}.`,
+      expectedFiles: [] as string[],
+      createdBy: "stretch-consolidate",
+    },
+  ];
+  const n = postCouncilTodoBatch(
+    (input) => host.postCouncilTodo(input),
+    todos,
+    (msg) => host.appendSystem(msg),
+  );
+  host.logDiag?.({
+    type: "council_stretch_todos",
+    runId: host.getActiveRunId() || cfg.runId,
+    cycle,
+    reason,
+    enqueued: n,
+  });
+  return n;
 }
 
 export async function runCouncilAuditCycle(
@@ -70,7 +106,8 @@ export async function runCouncilAuditCycle(
 ): Promise<"done" | "retry" | "stop"> {
   if (!host.state.contract) return "done";
   if (host.closingRequested()) return "stop";
-  const isAutonomous = cfg.rounds === 0;
+  // Match CouncilRunner.loop: rounds=0 or continuous (startRoute rewrite ~1e6).
+  const isAutonomous = cfg.rounds === 0 || cfg.rounds >= 1_000_000;
 
   host.setPhase("auditing");
 
@@ -233,10 +270,15 @@ export async function runCouncilAuditCycle(
       host.setStuckCycleCount(stuck);
       host.appendSystem(`[audit] Same ${sameUnmet} criteria unmet for ${stuck} cycle(s).`);
       if (stuck >= 3) {
-        host.setEarlyStopDetail(
-          `audit-stuck: same ${sameUnmet} criteria unmet for ${stuck} cycles`,
-        );
+        const reason = `audit-stuck: same ${sameUnmet} criteria unmet for ${stuck} cycles`;
+        host.setEarlyStopDetail(reason);
         host.appendSystem(`[audit] Stuck for ${stuck} cycles — stopping.`);
+        host.logDiag?.({
+          type: "council_stop_reason",
+          runId: host.getActiveRunId() || cfg.runId,
+          cycle,
+          reason,
+        });
         host.setPhase("stopped");
         const { notifyGuardTrip } = await import("./guardNotify.js");
         notifyGuardTrip({
@@ -266,16 +308,57 @@ export async function runCouncilAuditCycle(
       host.appendSystem(
         `[ambition] All criteria met — attempting tier ${host.state.currentTier + 1} promotion.`,
       );
+      host.logDiag?.({
+        type: "council_stop_progress",
+        runId: host.getActiveRunId?.() ?? cfg.runId,
+        cycle,
+        kind: "ambition-tier-up-start",
+        tier: host.state.currentTier + 1,
+      });
       const promoted = await runTierPromotion(host.state, planner, host.maxTiers);
       if (promoted) {
         host.setTierPromotionRetries(0);
-        return "done";
+        host.appendSystem(
+          `[ambition] Tier ${host.state.currentTier} installed — continuing next cycle (standup + research + execute).`,
+        );
+        host.logDiag?.({
+          type: "council_stop_progress",
+          runId: host.getActiveRunId?.() ?? cfg.runId,
+          cycle,
+          kind: "ambition-tier-up-ok",
+          tier: host.state.currentTier,
+          criteria: host.state.contract?.criteria.length,
+        });
+        // Must be "retry" (not "done"): the outer CouncilRunner loop treats
+        // "done" as terminal for non-autonomous runs (rounds > 0). Ambition
+        // ratchet always needs another cycle to execute the new tier's
+        // unmet criteria — including when the user set rounds=0 and when
+        // they set a finite rounds cap that still allows multi-cycle work.
+        return "retry";
       }
       const retries = host.getTierPromotionRetries() + 1;
       host.setTierPromotionRetries(retries);
       if (retries >= 3) {
-        host.setEarlyStopDetail(`ambition-failed: tier promotion failed ${retries} times`);
+        // Prefer stretch work over hard stop on autonomous runs.
+        if (isAutonomous) {
+          const stretch = enqueueStretchTodos(host, cfg, cycle, "ambition-promotion-failed");
+          if (stretch > 0) {
+            host.appendSystem(
+              `[ambition] Tier promotion failed ${retries} times — enqueued ${stretch} stretch todo(s); continuing.`,
+            );
+            host.setTierPromotionRetries(0);
+            return "retry";
+          }
+        }
+        const reason = `ambition-failed: tier promotion failed ${retries} times`;
+        host.setEarlyStopDetail(reason);
         host.appendSystem(`[ambition] Tier promotion failed ${retries} times — stopping.`);
+        host.logDiag?.({
+          type: "council_stop_reason",
+          runId: host.getActiveRunId() || cfg.runId,
+          cycle,
+          reason,
+        });
         host.setPhase("stopped");
         return "stop";
       }
@@ -284,7 +367,24 @@ export async function runCouncilAuditCycle(
       );
       return "retry";
     }
+    if (isAutonomous) {
+      const stretch = enqueueStretchTodos(host, cfg, cycle, "all-criteria-met-open-research");
+      if (stretch > 0) {
+        host.appendSystem(
+          `[ambition] All criteria met (no further tiers) — enqueued ${stretch} stretch todo(s) for open-ended directive; continuing.`,
+        );
+        return "retry";
+      }
+    }
+    const doneReason = "ambition-complete: all criteria met, no further tiers";
     host.appendSystem(`[ambition] All criteria met, no more tiers — stopping.`);
+    host.setEarlyStopDetail(doneReason);
+    host.logDiag?.({
+      type: "council_stop_reason",
+      runId: host.getActiveRunId() || cfg.runId,
+      cycle,
+      reason: doneReason,
+    });
     return "stop";
   }
 
@@ -371,7 +471,25 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
             /* ignore */
           }
         }
+        if (isAutonomous) {
+          const stretch = enqueueStretchTodos(host, cfg, cycle, "planner-fallback-empty");
+          if (stretch > 0) {
+            host.appendSystem(
+              `[planner] Fallback produced nothing — enqueued ${stretch} stretch todo(s); continuing autonomous.`,
+            );
+            host.setConsecutiveEmptyCycles(0);
+            return "retry";
+          }
+        }
+        const reason = "planner-fallback: no todos for unmet criteria";
         host.appendSystem(`[planner] Fallback produced nothing — stopping.`);
+        host.setEarlyStopDetail(reason);
+        host.logDiag?.({
+          type: "council_stop_reason",
+          runId: host.getActiveRunId() || cfg.runId,
+          cycle,
+          reason,
+        });
         return "stop";
       }
     }

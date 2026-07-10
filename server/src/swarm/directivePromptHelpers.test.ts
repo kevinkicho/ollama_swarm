@@ -4,6 +4,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   readDirective,
+  readDirectiveWithAmendments,
+  prependAmendmentsToPrompt,
   buildDirectiveBlock,
   buildInlineDirectiveBlock,
   pickDeliverableTitle,
@@ -26,6 +28,39 @@ describe("readDirective", () => {
       readDirective({ userDirective: "  Refactor auth.  " }),
       { directive: "Refactor auth.", hasDirective: true },
     );
+  });
+});
+
+describe("readDirectiveWithAmendments", () => {
+  it("returns base when no amendments", () => {
+    assert.deepEqual(
+      readDirectiveWithAmendments({ userDirective: "Fix bugs" }, []),
+      { directive: "Fix bugs", hasDirective: true },
+    );
+  });
+
+  it("merges mid-run amendments into directive", () => {
+    const r = readDirectiveWithAmendments(
+      { userDirective: "Fix bugs" },
+      [{ ts: 1, text: "Also add tests" }],
+    );
+    assert.equal(r.hasDirective, true);
+    assert.match(r.directive, /Fix bugs/);
+    assert.match(r.directive, /Also add tests/);
+    assert.match(r.directive, /MID-RUN USER AMENDMENTS/);
+  });
+});
+
+describe("prependAmendmentsToPrompt", () => {
+  it("leaves prompt unchanged when no amendments", () => {
+    assert.equal(prependAmendmentsToPrompt("hello", []), "hello");
+  });
+
+  it("prefixes amendments block", () => {
+    const out = prependAmendmentsToPrompt("body", [{ ts: 1, text: "nudge" }]);
+    assert.match(out, /Mid-run user amendments/);
+    assert.match(out, /nudge/);
+    assert.match(out, /body$/);
   });
 });
 

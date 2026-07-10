@@ -532,6 +532,11 @@ export class BlackboardRunner implements SwarmRunner {
 
   async start(cfg: RunConfig): Promise<void> { await lifecycleStart(this.lifecycleContext(), cfg); }
 
+  /** start() blocks until the blackboard lifecycle finishes. */
+  async waitUntilSettled(): Promise<void> {
+    /* no-op — lifecycleStart is fully awaited inside start() */
+  }
+
   private async planAndExecute(planner: Agent, workers: Agent[], seed: PlannerSeed): Promise<void> { await lifecyclePlanAndExecute(this.lifecycleContext(), planner, workers, seed); }
 
   async drain(): Promise<void> { await lifecycleDrain(this.lifecycleContext()); }

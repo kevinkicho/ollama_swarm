@@ -16,6 +16,12 @@ import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extrac
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
+import {
+  discussionDraftJsonNudge,
+  EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS,
+  DEFAULT_DISCUSSION_DRAFT_PROMPT_WALL_CLOCK_MS,
+} from "../../../shared/src/toolProfiles.js";
+import { isThinkGuardAbort } from "@ollama-swarm/shared/thinkGuardErrors";
 import { describeSdkError } from "./sdkError.js";
 import { buildCheckpoint, writeCheckpoint } from "./checkpoint.js";
 import type { RunAgentOpts } from "./postRoundCritiqueTypes.js";
@@ -26,6 +32,8 @@ import {
   type ToolTraceEntry,
 } from "./toolCallTranscript.js";
 import type { ToolResultHook } from "../tools/ToolDispatcher.js";
+import { config as appConfig } from "../config.js";
+import { createThinkGuardHandler } from "./blackboard/thinkGuardHandler.js";
 
 export interface DiscussionRunAgentHost {
   manager: AgentManager;
@@ -42,24 +50,112 @@ export interface DiscussionRunAgentHost {
   buildDiscussionToolCoachHook: (agent: Agent) => ToolResultHook | undefined;
 }
 
-export async function runDiscussionAgentCore(
-host: DiscussionRunAgentHost,
-agent: Agent,
-prompt: string,
-opts: RunAgentOpts,
-): Promise<string> {
-  const agentName = opts.agentName ?? discussionReaderProfile(host.active);
-  host.manager.markStatus(agent.id, "thinking", {
-    ...(opts.activity?.kind ? { activityKind: opts.activity.kind } : {}),
-    ...(opts.activity?.label ? { activityLabel: opts.activity.label } : {}),
-    thinkingSince: Date.now(),
-  });
+function isDiscussionDraftActivity(opts: RunAgentOpts): boolean {
+  const kind = opts.activity?.kind;
+  return kind === "discussion" || kind === "council-draft" || kind === "draft";
+}
+
+function resolvePartialStreamText(host: DiscussionRunAgentHost, agentId: string): string {
+  try {
+    const partials = host.manager.getPartialStreams?.() ?? {};
+    return partials[agentId]?.text ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function buildFailedDraftBody(msg: string, partialRaw: string): string {
+  const stripped = stripAgentText(partialRaw);
+  const final = stripped.finalText.trim();
+  if (final.length >= 40) {
+    return (
+      final
+      + `\n\n_(draft incomplete — turn ended: ${msg.slice(0, 180)})_`
+    );
+  }
+  const thinkTail = stripped.thoughts.trim().slice(-1500);
+  if (thinkTail.length >= 80) {
+    return (
+      `_(draft failed: ${msg.slice(0, 180)})_\n\n`
+      + `Reasoning salvage:\n${thinkTail}`
+    );
+  }
+  return `_(draft failed: ${msg.slice(0, 240)})_`;
+}
+
+function pushDiscussionEntry(
+  host: DiscussionRunAgentHost,
+  agent: Agent,
+  opts: RunAgentOpts,
+  rawText: string,
+): string {
+  const stripped = stripAgentText(rawText);
+  const summary: TranscriptEntrySummary | undefined =
+    typeof opts.enrichSummary === "function"
+      ? opts.enrichSummary(stripped.finalText)
+      : opts.enrichSummary;
+
+  const toolTrace = takePendingToolTrace(host.pendingToolTraceByAgent, agent.id);
+  const entry: TranscriptEntry = {
+    id: randomUUID(),
+    role: "agent",
+    agentId: agent.id,
+    agentIndex: agent.index,
+    text: stripped.finalText || "(empty response)",
+    ts: Date.now(),
+    ...(summary ? { summary } : {}),
+    ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
+    ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
+    ...(toolTrace ? { toolTrace } : {}),
+  };
+
+  opts.onEntryPushed?.(entry, stripped.finalText);
+  host.transcript.push(entry);
+  host.emit({ type: "transcript_append", entry });
+  host.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
   host.emitAgentState({
     id: agent.id,
     index: agent.index,
-
     sessionId: agent.sessionId,
-    status: "thinking",
+    status: "ready",
+    lastMessageAt: entry.ts,
+  });
+
+  if (host.active?.runId && host.active?.checkpointing) {
+    const ckpt = buildCheckpoint(
+      host.active.runId,
+      host.phase,
+      host.round,
+      agent.index,
+      host.transcript,
+      host.manager.toStates(),
+      host.active,
+    );
+    writeCheckpoint(host.active.localPath, ckpt).catch(() => {});
+  }
+
+  return stripped.finalText || rawText;
+}
+
+export async function runDiscussionAgentCore(
+  host: DiscussionRunAgentHost,
+  agent: Agent,
+  prompt: string,
+  opts: RunAgentOpts,
+): Promise<string> {
+  const agentName = opts.agentName ?? discussionReaderProfile(host.active);
+  const draftMode = isDiscussionDraftActivity(opts);
+  const activity = {
+    kind: opts.activity?.kind ?? (draftMode ? "discussion" : undefined),
+    label: opts.activity?.label,
+    mode: opts.activity?.mode ?? (draftMode ? ("explore" as const) : undefined),
+  };
+
+  // markStatus is the single control-plane write (state + activity waiting).
+  // Do not follow with a partial emitAgentState — that used to wipe labels.
+  host.manager.markStatus(agent.id, "thinking", {
+    ...(activity.kind ? { activityKind: activity.kind } : {}),
+    ...(activity.label ? { activityLabel: activity.label } : {}),
     thinkingSince: Date.now(),
   });
   opts.stats.countTurn(agent.id);
@@ -73,12 +169,38 @@ opts: RunAgentOpts,
   });
 
   try {
+    const getRefereeOn = () =>
+      host.active?.thinkGuardRefereeEnabled ?? appConfig.THINK_GUARD_REFEREE_ENABLED === true;
+
+    // Discussion drafts: salvage partial on think-guard instead of silent fail.
+    const thinkGuardHandler = createThinkGuardHandler({
+      getActive: () => host.active,
+      isStopping: () => host.getStopping(),
+      isDraining: () => false,
+      appendSystem: (t) => host.appendSystem(t),
+      logDiag: host.logDiag,
+      runId: host.active?.runId,
+      activity: {
+        kind: activity.kind ?? "discussion",
+        label: activity.label,
+        mode: activity.mode ?? "explore",
+      },
+      promptExcerpt: prompt.slice(0, 2000),
+      signal: controller.signal,
+      clonePath: host.active?.localPath,
+    });
+
     const res = await promptWithFailoverAuto(agent, prompt, {
-      onTokens: ({ promptTokens, responseTokens }) => opts.stats.recordTokens(agent.id, promptTokens, responseTokens),
+      onTokens: ({ promptTokens, responseTokens }) =>
+        opts.stats.recordTokens(agent.id, promptTokens, responseTokens),
       signal: controller.signal,
       manager: host.manager,
       agentName,
-      ...(opts.activity ? { activity: opts.activity } : {}),
+      activity: {
+        kind: activity.kind ?? "discussion",
+        label: activity.label,
+        mode: activity.mode,
+      },
       webToolsConfig: host.active,
       mcpServers: host.active?.mcpServers,
       onTool: makeBufferedToolHandler(host.pendingToolTraceByAgent, agent.id),
@@ -87,6 +209,19 @@ opts: RunAgentOpts,
       logDiag: host.logDiag,
       runId: host.active?.runId,
       describeError: describeSdkError,
+      refereeOn: getRefereeOn(),
+      getRefereeOn,
+      minThinkCharsForReferee: host.active?.thinkGuardRefereeMinThinkChars,
+      getMinThinkCharsForReferee: () => host.active?.thinkGuardRefereeMinThinkChars,
+      thinkGuardHandler,
+      // Emit-biased draft rounds: fewer tool turns + earlier "write draft now" nudge.
+      ...(draftMode
+        ? {
+            maxToolTurns: EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS,
+            toolLoopNudge: discussionDraftJsonNudge(),
+            promptWallClockMs: DEFAULT_DISCUSSION_DRAFT_PROMPT_WALL_CLOCK_MS,
+          }
+        : {}),
       ...(opts.modelOverride && opts.modelOverride !== agent.model
         ? { modelOverride: opts.modelOverride }
         : {}),
@@ -125,7 +260,6 @@ opts: RunAgentOpts,
         host.emitAgentState({
           id: agent.id,
           index: agent.index,
-    
           sessionId: agent.sessionId,
           status: "retrying",
           retryAttempt: attempt,
@@ -162,69 +296,34 @@ opts: RunAgentOpts,
       recordJunkPostRetry: (id, j) => opts.stats.recordJunkPostRetry(id, j),
       appendSystem: (msg) => host.appendSystem(msg),
     });
-    const stripped = stripAgentText(text);
 
-    // Compute summary: either from enrichSummary callback, static value, or undefined
-    const summary: TranscriptEntrySummary | undefined =
-      typeof opts.enrichSummary === "function"
-        ? opts.enrichSummary(stripped.finalText)
-        : opts.enrichSummary;
-
-    const toolTrace = takePendingToolTrace(host.pendingToolTraceByAgent, agent.id);
-    const entry: TranscriptEntry = {
-      id: randomUUID(),
-      role: "agent",
-      agentId: agent.id,
-      agentIndex: agent.index,
-      text: stripped.finalText || "(empty response)",
-      ts: Date.now(),
-      ...(summary ? { summary } : {}),
-      ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
-      ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
-      ...(toolTrace ? { toolTrace } : {}),
-    };
-
-    // Hook for multiWriter collection or other post-entry logic
-    opts.onEntryPushed?.(entry, stripped.finalText);
-
-    host.transcript.push(entry);
-    host.emit({ type: "transcript_append", entry });
-    // streaming_end is owned by promptWithRetry → markStreamingDone; a second
-    // emit here raced ahead of agent_state ready and recreated dock bubbles.
-    host.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
-    host.emitAgentState({
-      id: agent.id,
-      index: agent.index,
-
-      sessionId: agent.sessionId,
-      status: "ready",
-      lastMessageAt: entry.ts,
-    });
-
-    // Direction 6: checkpoint after each agent turn (when configured)
-    if (host.active?.runId && host.active?.checkpointing) {
-      const ckpt = buildCheckpoint(
-        host.active.runId,
-        host.phase,
-        host.round,
-        agent.index,
-        host.transcript,
-        host.manager.toStates(),
-        host.active,
-      );
-      writeCheckpoint(host.active.localPath, ckpt).catch(() => {});
-    }
-
-    return text;
+    return pushDiscussionEntry(host, agent, opts, text);
   } catch (err) {
     const msg = watchdog.getAbortReason() ?? describeSdkError(err);
     host.appendSystem(`[${agent.id}] error: ${msg}`);
-    host.manager.markStreamingDone(agent.id);
+    host.manager.markStreamingDone(agent.id, { preservePartial: true });
+
+    // Always post a draft bubble when this turn was a discussion draft —
+    // silent missing rounds were worse than a partial/failed draft.
+    const partialFromGuard = isThinkGuardAbort(err) ? err.partialText : "";
+    const partialFromStream = resolvePartialStreamText(host, agent.id);
+    const partialRaw =
+      (partialFromStream && partialFromStream.length >= (partialFromGuard?.length ?? 0)
+        ? partialFromStream
+        : partialFromGuard) || partialFromStream || "";
+
+    if (opts.enrichSummary || draftMode) {
+      const body = buildFailedDraftBody(msg, partialRaw);
+      host.appendSystem(
+        `[${agent.id}] salvage draft posted (${body.length} chars) after error.`,
+      );
+      return pushDiscussionEntry(host, agent, opts, body);
+    }
+
     host.manager.markStatus(agent.id, "failed", { error: msg });
     host.emitAgentState({
       id: agent.id,
       index: agent.index,
-
       sessionId: agent.sessionId,
       status: "failed",
       error: msg,

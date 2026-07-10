@@ -20,7 +20,7 @@ describe("applyFileHunks — create path (currentText === null)", () => {
       { op: "append", file: "new.ts", content: "b" },
     ]);
     assert.equal(r.ok, false);
-    assert.match(r.ok ? "" : r.error, /expected exactly one "create" hunk, got 2/);
+    assert.match(r.ok ? "" : r.error, /expected exactly one "create" or "write" hunk, got 2/);
   });
 
   it("rejects a replace op against a non-existent file", () => {
@@ -28,7 +28,14 @@ describe("applyFileHunks — create path (currentText === null)", () => {
       { op: "replace", file: "new.ts", search: "foo", replace: "bar" },
     ]);
     assert.equal(r.ok, false);
-    assert.match(r.ok ? "" : r.error, /expected "create"/);
+    assert.match(r.ok ? "" : r.error, /expected "create" or "write"/);
+  });
+
+  it("creates via write when file is missing", () => {
+    const r = applyFileHunks(null, [
+      { op: "write", file: "new.ts", content: "export const y = 2;\n" },
+    ]);
+    assert.deepEqual(r, { ok: true, newText: "export const y = 2;\n" });
   });
 
   it("rejects an append op against a non-existent file", () => {
@@ -305,5 +312,71 @@ describe("applyHunks — multi-file dispatch", () => {
     const hunks: Hunk[] = [{ op: "replace", file: "a.txt", search: "hello\n", replace: "hi\n" }];
     const r = applyHunks({ "a.txt": "hello\nworld\n" }, hunks);
     assert.equal(r.ok, true);
+  });
+});
+
+describe("applyFileHunks — write and replace_between", () => {
+  it("write replaces entire existing file body", () => {
+    const r = applyFileHunks("old entire body\nline2\n", [
+      { op: "write", file: "f.md", content: "# New\n" },
+    ]);
+    assert.deepEqual(r, { ok: true, newText: "# New\n" });
+  });
+
+  it("replace_between replaces from start through endExclusive (exclusive)", () => {
+    const original = [
+      "# Head",
+      "",
+      "## Keep Me",
+      "intro",
+      "",
+      "## Council Decision Package",
+      "fake stuff",
+      "more fake",
+      "",
+      "## 5-Year Plan",
+      "later",
+      "",
+    ].join("\n");
+    const r = applyFileHunks(original, [
+      {
+        op: "replace_between",
+        file: "roadmap.md",
+        start: "## Council Decision Package",
+        endExclusive: "## 5-Year Plan",
+        replace: "## Manufacturing roadmap\nreal plan\n\n",
+      },
+    ]);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.match(r.newText, /## Keep Me/);
+    assert.match(r.newText, /## Manufacturing roadmap/);
+    assert.match(r.newText, /## 5-Year Plan/);
+    assert.doesNotMatch(r.newText, /fake stuff/);
+  });
+
+  it("replace_between without endExclusive replaces through EOF", () => {
+    const r = applyFileHunks("a\n## Drop\nold\n", [
+      {
+        op: "replace_between",
+        file: "f.md",
+        start: "## Drop",
+        replace: "## New\nok\n",
+      },
+    ]);
+    assert.deepEqual(r, { ok: true, newText: "a\n## New\nok\n" });
+  });
+
+  it("replace_between fails when start is missing", () => {
+    const r = applyFileHunks("hello", [
+      {
+        op: "replace_between",
+        file: "f.md",
+        start: "## Missing",
+        replace: "x",
+      },
+    ]);
+    assert.equal(r.ok, false);
+    assert.match(r.ok ? "" : r.error, /"start" text not found/);
   });
 });

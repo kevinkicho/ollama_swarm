@@ -33,6 +33,45 @@ export function readDirective(cfg: { userDirective?: string }): DirectiveContext
   return { directive: trimmed, hasDirective: trimmed.length > 0 };
 }
 
+/**
+ * Merge base directive with mid-run amendments (HITL steer /amend).
+ * Used by discussion presets so /api/swarm/say steer and /amend reach
+ * agent prompts, not only the transcript.
+ */
+export function readDirectiveWithAmendments(
+  cfg: { userDirective?: string },
+  amendments?: ReadonlyArray<{ ts: number; text: string }>,
+): DirectiveContext {
+  const base = readDirective(cfg);
+  const nudges = (amendments ?? [])
+    .map((a) => (a.text ?? "").trim())
+    .filter((t) => t.length > 0);
+  if (nudges.length === 0) return base;
+  const block =
+    (base.hasDirective ? `${base.directive}\n\n` : "") +
+    `=== MID-RUN USER AMENDMENTS (authoritative; apply on top of original directive) ===\n` +
+    nudges.map((t, i) => `${i + 1}. ${t}`).join("\n") +
+    `\n=== END AMENDMENTS ===`;
+  return { directive: block, hasDirective: true };
+}
+
+/** Prefix a prompt with a compact amendments block when any exist. */
+export function prependAmendmentsToPrompt(
+  prompt: string,
+  amendments?: ReadonlyArray<{ ts: number; text: string }>,
+): string {
+  const nudges = (amendments ?? [])
+    .map((a) => (a.text ?? "").trim())
+    .filter((t) => t.length > 0);
+  if (nudges.length === 0) return prompt;
+  return (
+    `[Mid-run user amendments — honor these]\n` +
+    nudges.map((t, i) => `${i + 1}. ${t}`).join("\n") +
+    `\n[End amendments]\n\n` +
+    prompt
+  );
+}
+
 /** Options for the USER DIRECTIVE block. Both fields optional. */
 export interface DirectiveBlockOptions {
   /** Optional clarifier appended inside the delimiter, e.g.

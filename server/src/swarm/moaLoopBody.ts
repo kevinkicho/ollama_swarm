@@ -38,6 +38,7 @@ export interface MoaLoopBodyHost {
   ollamaBaseUrl: string | undefined;
   transcript: TranscriptEntry[];
   getStopping: () => boolean;
+  getDrainRequested?: () => boolean;
   getDerivedRubric: () => DerivedRubric | null;
   setDerivedRubric: (r: DerivedRubric | null) => void;
   setStartedAt: (ts: number) => void;
@@ -186,6 +187,11 @@ export async function runMoaLoopBody(
   });
   for (let round = 1; round <= rounds; round++) {
     if (host.getStopping()) break;
+    if (host.getDrainRequested?.() && round > 1) {
+      host.appendSystem(`[drain] Soft stop — ending MoA after round ${round - 1}.`);
+      host.setEarlyStopDetail("user-drain: finished current round");
+      break;
+    }
     const guard = checkBudgetGuards({
       tokenBaseline,
       tokenBudget: cfg.tokenBudget,

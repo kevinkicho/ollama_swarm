@@ -46,7 +46,7 @@ import {
   collectAllFiles,
 } from "./BaselineRunner.js";
 import { pickProvider } from "../providers/pickProvider.js";
-import { tokenTracker } from "../services/ollamaProxy.js";
+
 
 export interface WrapUpApplyInput {
   /** Synthesized "next action" — usually the top action text from
@@ -155,16 +155,16 @@ export async function runWrapUpApplyPhase(
         signal: abortController.signal,
         agentId: input.agent.id,
       });
-      if (result.usage) {
-        tokenTracker.add({
-          ts: Date.now(),
-          promptTokens: result.usage.promptTokens,
-          responseTokens: result.usage.responseTokens,
-          durationMs: Date.now() - t0,
-          model: input.model,
-          path: `/wrap-up-apply (${provider.id})`,
-        });
-      }
+      const { recordChatUsage } = await import("../services/ollamaProxy.js");
+      recordChatUsage({
+        promptTokens: result.usage?.promptTokens,
+        responseTokens: result.usage?.responseTokens,
+        promptText: prompt,
+        responseText: result.text,
+        durationMs: Date.now() - t0,
+        model: input.model,
+        path: `/wrap-up-apply (${provider.id})`,
+      });
       if (result.finishReason === "error") {
         throw new Error(result.errorMessage ?? "wrap-up apply: provider error");
       }

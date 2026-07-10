@@ -19,7 +19,7 @@ export interface RunAgentOpts {
   /** Called after the transcript entry is pushed (for multiWriter collection, etc.) */
   onEntryPushed?: (entry: TranscriptEntry, strippedText: string) => void;
   /** Optional agent_activity label for the streaming dock. */
-  activity?: { kind?: string; label?: string };
+  activity?: { kind?: string; label?: string; mode?: "explore" | "emit" };
   /** Stats instance to record timing/retry/junk metrics. If provided,
    *  onTiming/onRetry/recordTokens are wired automatically. */
   stats: {

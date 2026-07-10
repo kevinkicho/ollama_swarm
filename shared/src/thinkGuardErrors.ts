@@ -16,6 +16,8 @@ export interface ThinkGuardTrip {
 
 export interface ThinkGuardSession {
   startedAt: number;
+  /** Last time a stream chunk was observed (for idle-based MS caps). */
+  lastChunkAt: number;
   cumulativeText: string;
   lastTrip?: ThinkGuardTrip;
   softTierTripped: boolean;
@@ -27,6 +29,7 @@ export interface ThinkGuardSession {
 export function createThinkGuardSession(startedAt = Date.now()): ThinkGuardSession {
   return {
     startedAt,
+    lastChunkAt: startedAt,
     cumulativeText: "",
     softTierTripped: false,
     budgetExtended: false,

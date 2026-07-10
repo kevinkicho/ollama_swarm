@@ -19,6 +19,7 @@ import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { reconcileCriteriaFromSkips } from "./councilSkipReconcile.js";
 import type { PostTodoInput } from "./blackboard/TodoQueue.js";
 import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
+import { runCouncilResearchStandup } from "./councilResearchStandup.js";
 
 export interface CouncilRunCycleHost {
   state: CouncilAdapterState;
@@ -106,6 +107,28 @@ export async function runCouncilCycle(
       await runCycle1Discussion(host, cfg, cycle);
     } else {
       await runCycleStandup(host, cfg, cycle);
+    }
+
+    // Optional collective research standup (opt-in). Default is independent
+    // research via per-todo literature pass only (cfg.councilSharedResearch).
+    if (!host.closingRequested() && cfg.councilSharedResearch === true) {
+      try {
+        const notes = await runCouncilResearchStandup({
+          manager: host.manager,
+          cfg,
+          cycle,
+          appendSystem: (t, s) => host.appendSystem(t, s),
+          closingRequested: () => host.closingRequested(),
+        });
+        if (notes) {
+          const prev = host.state.progressContext ?? "";
+          host.state.progressContext =
+            `[Research standup — cycle ${cycle}]\n${notes}\n[End research standup]\n\n` + prev;
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        host.appendSystem(`[research] Standup skipped (${msg}).`);
+      }
     }
   }
 

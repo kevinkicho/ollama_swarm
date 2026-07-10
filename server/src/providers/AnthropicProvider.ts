@@ -74,12 +74,25 @@ export const TOOL_SCHEMAS: Record<
     },
   },
   propose_hunks: {
-    description: "Phase 2 (writeMode: multi): Propose file modifications as hunks during your turn. The runner collects proposals from all agents and reconciles them.",
+    description:
+      "Dry-run or apply search/replace/write/replace_between hunks against the clone. " +
+      "Returns success previews or failure with nearby file excerpts so you can fix anchors mid-turn. " +
+      "Default is dry-run; set apply:true to write files. Still emit final JSON hunks for the runner commit.",
     input_schema: {
       type: "object",
       properties: {
-        hint: { type: "string", description: "optional hint about the hunks you'll propose" },
+        hunks: {
+          type: "array",
+          description:
+            "Hunk array: replace | replace_between | write | create | append | delete (same shape as final worker JSON)",
+          items: { type: "object" },
+        },
+        apply: {
+          type: "boolean",
+          description: "When true, write successful hunks to disk. Default false (dry-run only).",
+        },
       },
+      required: ["hunks"],
     },
   },
   web_fetch: {

@@ -124,6 +124,8 @@ export interface ChatResult {
   contentOnly?: string;
   /** Raw thinking text from this turn. */
   thinkingOnly?: string;
+  /** Token counts from final stream frame when Ollama/cloud provides them. */
+  usage?: { promptTokens: number; responseTokens: number };
 }
 
 function createOllamaTimeoutController(
@@ -328,11 +330,25 @@ export async function chat(opts: any): Promise<ChatResult> {
         }
         if (frameTouched) emitStream();
         if (parsed.done) {
+          // Native Ollama fields (local + many cloud models).
           if (typeof parsed.prompt_eval_count === "number") {
             promptTokens = parsed.prompt_eval_count;
           }
           if (typeof parsed.eval_count === "number") {
             responseTokens = parsed.eval_count;
+          }
+          // OpenAI-compat usage block (some cloud / proxy paths).
+          const u = (parsed as { usage?: {
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            input_tokens?: number;
+            output_tokens?: number;
+          } }).usage;
+          if (u) {
+            const pt = u.prompt_tokens ?? u.input_tokens;
+            const rt = u.completion_tokens ?? u.output_tokens;
+            if (typeof pt === "number" && pt > 0) promptTokens = pt;
+            if (typeof rt === "number" && rt > 0) responseTokens = rt;
           }
         }
       }
@@ -356,5 +372,8 @@ export async function chat(opts: any): Promise<ChatResult> {
     ...(toolCalls.length > 0 ? { toolCalls } : {}),
     contentOnly: content,
     thinkingOnly: thinking || undefined,
+    ...(promptTokens + responseTokens > 0
+      ? { usage: { promptTokens, responseTokens } }
+      : {}),
   };
 }

@@ -97,6 +97,7 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
   const { totalPromptTokens, totalResponseTokens } = computeRunTokenTotals(
     input.startedAt,
     input.endedAt,
+    input.config.runId,
   );
   return {
     runId: input.config.runId,

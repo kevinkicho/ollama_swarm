@@ -142,6 +142,46 @@ describe("applyStatusSnapshotToStore", () => {
     assert.equal(store.getState().round, 2);
     assert.equal(store.getState().transcript.length, 2); // entry + RUN-START divider
   });
+
+  it("hydrates agentActivity from status snapshot for sidebar reconnect", () => {
+    const store = createSwarmStore();
+    const snap = {
+      phase: "executing",
+      round: 1,
+      agents: [
+        {
+          id: "agent-1",
+          index: 1,
+          status: "thinking",
+          thinkingSince: 1_700_000_000_000,
+          activityLabel: "standup",
+        },
+      ],
+      transcript: [],
+      runId: "run-act",
+      agentActivity: {
+        "agent-1": {
+          phase: "waiting" as const,
+          ts: 1_700_000_000_100,
+          startedAt: 1_700_000_000_000,
+          label: "standup",
+          kind: "council",
+          activityId: "agent-1-1",
+        },
+      },
+      streaming: {
+        "agent-1": { text: "partial draft", updatedAt: 1_700_000_000_200 },
+      },
+    } as SwarmStatusSnapshot;
+
+    applyStatusSnapshotToStore(store, "run-act", snap);
+    const act = store.getState().agentActivity["agent-1"];
+    assert.equal(act?.phase, "waiting");
+    assert.equal(act?.label, "standup");
+    assert.equal(act?.startedAt, 1_700_000_000_000);
+    // Streaming restored after activity (activity hydrate must not clear it).
+    assert.equal(store.getState().streaming["agent-1"], "partial draft");
+  });
 });
 
 describe("shouldDropTerminalGuardedEvent", () => {

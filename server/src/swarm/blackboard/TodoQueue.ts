@@ -508,6 +508,27 @@ export class TodoQueue {
    *  description / files / anchors / kind / command before re-pending
    *  it. expectedAnchors=undefined keeps prior anchors; an explicit
    *  empty array clears them (matches Board.replan policy). */
+  /**
+   * Re-open a failed or soft-skipped todo for another agent attempt.
+   * Preserves retries / reason history via retries counter (not cleared).
+   * Used by council cycle settlement so the cycle does not advance until
+   * every agent has had a chance (or max attempts exhausted).
+   */
+  reopenForRetry(id: string): void {
+    const t = this.findOrThrow(id);
+    if (t.status !== "failed" && t.status !== "skipped") {
+      throw new Error(
+        `Cannot reopen todo ${id}: status=${t.status} (only failed|skipped allowed)`,
+      );
+    }
+    t.status = "pending";
+    t.workerId = undefined;
+    t.startedAt = undefined;
+    t.endedAt = undefined;
+    // Keep last reason in retries trail — clear for clean re-prompt.
+    t.reason = undefined;
+  }
+
   reset(
     id: string,
     updates?: {

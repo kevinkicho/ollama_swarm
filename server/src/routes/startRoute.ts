@@ -239,25 +239,20 @@ export function registerStartRoute(
       return;
     }
     try {
-      // Task #132: continuous mode replaces rounds with an effectively-
-      // unbounded value (1M). The runners see this same cfg.rounds in
-      // their for-loop, but a budget cap is guaranteed to stop the run
-      // long before round 1M. Avoids touching every runner's loop.
-      // If the user explicitly set rounds=0 (blackboard autonomous mode),
-      // honor that over the continuous override so tierRunner can detect
-      // autonomous mode via active?.rounds === 0.
-      const explicitRounds = parsed.data.rounds;
-      let effectiveRounds: number;
-      if (explicitRounds != null && explicitRounds > 0) {
-        // Explicit non-zero rounds always win (auditor-invocation cap for blackboard).
-        effectiveRounds = explicitRounds;
-      } else if (explicitRounds === 0) {
-        effectiveRounds = 0;
-      } else if (parsed.data.continuous) {
-        effectiveRounds = 1_000_000;
-      } else {
-        effectiveRounds = parsed.data.preset === "blackboard" ? 0 : 3;
+      // Task #132 + autonomous-preset gate: rounds=0 / continuous only
+      // for blackboard + council. Other presets used to run zero cycles
+      // (empty for-loop) or silently clamp — reject with a clear 400.
+      const { resolveEffectiveRounds } = await import("../swarm/autonomousPresets.js");
+      const roundsResolved = resolveEffectiveRounds({
+        preset: parsed.data.preset,
+        rounds: parsed.data.rounds,
+        continuous: parsed.data.continuous,
+      });
+      if (!roundsResolved.ok) {
+        res.status(400).json({ error: roundsResolved.error });
+        return;
       }
+      const effectiveRounds = roundsResolved.rounds;
       // R4 wiring (2026-05-04): pre-flight cost projector. When the
       // user has set maxCostUsd AND the projected spend already
       // exceeds it on Day 1, refuse rather than start a run that's
@@ -307,6 +302,7 @@ export function registerStartRoute(
             : undefined,
         councilContract: parsed.data.councilContract,
         councilSharedExplore: parsed.data.councilSharedExplore,
+        councilSharedResearch: parsed.data.councilSharedResearch,
         proposition:
           parsed.data.proposition && parsed.data.proposition.length > 0
             ? parsed.data.proposition

@@ -6,7 +6,7 @@ import { detectProvider, type Provider } from "@ollama-swarm/shared/providers";
 import { config } from "../config.js";
 import { pickProvider } from "./pickProvider.js";
 import type { ChatOpts, ChatResult } from "./SessionProvider.js";
-import { tokenTracker } from "../services/ollamaProxy.js";
+
 
 export type CircuitState = "closed" | "open" | "half-open";
 
@@ -255,19 +255,9 @@ class ProviderGatewayImpl {
           const t0 = Date.now();
           const { modelString: _ms, priority: _pri, brainInitiated: _bi, ...chatOpts } = job.opts;
           const result = await session.chat({ ...chatOpts, model: modelId, runId: job.runId, brainInitiated: job.runId ? (job.opts as any).brainInitiated : undefined });
-          if (result.usage) {
-            tokenTracker.add(
-              {
-                ts: Date.now(),
-                promptTokens: result.usage.promptTokens,
-                responseTokens: result.usage.responseTokens,
-                durationMs: Date.now() - t0,
-                model: job.opts.modelString,
-                path: `/gateway (${session.id})`,
-              },
-              job.runId,
-            );
-          }
+          // Usage is recorded by promptWithRetry.recordChatUsage (single site)
+          // to avoid double-counting when the gateway is enabled.
+          void t0; // duration measured by caller
           this.recordSuccess(provider);
           job.resolve(result);
         } catch (err) {

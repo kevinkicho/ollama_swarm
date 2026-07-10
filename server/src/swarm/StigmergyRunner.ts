@@ -123,7 +123,7 @@ export class StigmergyRunner extends DiscussionRunnerBase {
 
     this.setPhase("discussing");
     this.startedAt = Date.now();
-    void this.loop(cfg, destPath);
+    await this.runTrackedLoop(() => this.loop(cfg, destPath));
   }
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {

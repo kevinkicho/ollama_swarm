@@ -41,7 +41,7 @@ import simpleGit from "simple-git";
 // Note: forward-references (the helpers are defined below the class
 // in the same file) — TypeScript hoists exports so this works.
 import { pickProvider } from "../providers/pickProvider.js";
-import { tokenTracker } from "../services/ollamaProxy.js";
+import { recordChatUsage } from "../services/ollamaProxy.js";
 
 export interface BaselineResult {
   /** How many hunks the worker proposed in the WINNING attempt. */
@@ -60,6 +60,7 @@ export class BaselineRunner implements SwarmRunner {
   private stopping = false;
   private active?: RunConfig;
   private startedAt?: number;
+  private loopPromise: Promise<void> | null = null;
   // T-Item-1 (2026-05-04): track per-attempt outcome so a parent
   // harness (BaselineSwarmHarness) can score this runner without
   // scraping the transcript.
@@ -124,6 +125,16 @@ export class BaselineRunner implements SwarmRunner {
     this.setPhase("stopped");
   }
 
+  async waitUntilSettled(): Promise<void> {
+    if (this.loopPromise) {
+      try {
+        await this.loopPromise;
+      } catch {
+        /* terminal phase already set */
+      }
+    }
+  }
+
   async start(cfg: RunConfig): Promise<void> {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.transcript = [];
@@ -131,11 +142,13 @@ export class BaselineRunner implements SwarmRunner {
     this.active = cfg;
     this.startedAt = undefined;
 
-    void this.loop(cfg).catch((err) => {
+    // Baseline does not extend DiscussionRunnerBase — track settle manually.
+    this.loopPromise = this.loop(cfg).catch((err) => {
       const msg = err instanceof Error ? err.message : String(err);
       this.appendSystem(`Baseline crashed: ${msg}`);
       this.setPhase("failed");
     });
+    await this.loopPromise;
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
@@ -226,16 +239,16 @@ export class BaselineRunner implements SwarmRunner {
           signal: abortController.signal,
           agentId: agent.id,
         });
-        if (result.usage) {
-          tokenTracker.add({
-            ts: Date.now(),
-            promptTokens: result.usage.promptTokens,
-            responseTokens: result.usage.responseTokens,
-            durationMs: Date.now() - t0,
-            model: cfg.model,
-            path: `/sdk-direct (${provider.id})${attempts > 1 ? ` attempt-${attempt}` : ""}`,
-          });
-        }
+        recordChatUsage({
+          promptTokens: result.usage?.promptTokens,
+          responseTokens: result.usage?.responseTokens,
+          promptText: prompt,
+          responseText: result.text,
+          durationMs: Date.now() - t0,
+          model: cfg.model,
+          path: `/sdk-direct (${provider.id})${attempts > 1 ? ` attempt-${attempt}` : ""}`,
+          runId: cfg.runId,
+        });
         if (result.finishReason === "error") {
           throw new Error(result.errorMessage ?? "session provider chat error");
         }
@@ -387,16 +400,15 @@ export class BaselineRunner implements SwarmRunner {
         signal: input.abortController.signal,
         agentId: input.agent.id,
       });
-      if (cresult.usage) {
-        tokenTracker.add({
-          ts: Date.now(),
-          promptTokens: cresult.usage.promptTokens,
-          responseTokens: cresult.usage.responseTokens,
-          durationMs: Date.now() - t0,
-          model: input.model,
-          path: `/baseline-self-critique (${provider.id})`,
-        });
-      }
+      recordChatUsage({
+        promptTokens: cresult.usage?.promptTokens,
+        responseTokens: cresult.usage?.responseTokens,
+        promptText: critiquePrompt,
+        responseText: cresult.text,
+        durationMs: Date.now() - t0,
+        model: input.model,
+        path: `/baseline-self-critique (${provider.id})`,
+      });
       if (cresult.finishReason === "error" || cresult.finishReason === "aborted") {
         return null;
       }

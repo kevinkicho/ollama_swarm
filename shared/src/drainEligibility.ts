@@ -1,4 +1,4 @@
-/** Drain is only meaningful when worker execution has in-flight work to preserve. */
+/** Drain is available for soft-stop once a run has started (not only mid-execution). */
 
 export interface DrainEligibilityInput {
   phase: string;
@@ -9,42 +9,37 @@ export interface DrainEligibilityInput {
   workerThinking?: boolean;
 }
 
-const NON_EXEC_PHASES = new Set<string>([
+/** Terminal / not-yet-started phases — Drain is a no-op (use Stop only when active stop is available). */
+const NO_DRAIN_PHASES = new Set<string>([
   "idle",
-  "cloning",
-  "spawning",
-  "booting",
-  "seeding",
-  "planning",
-  "discussing",
-  "auditing",
+  "stopped",
+  "stopping",
+  "completed",
+  "failed",
 ]);
 
+/**
+ * Soft-stop is available for any live run phase, including early seeding/cloning.
+ * Finish in-flight work when present; otherwise controlled soft exit vs hard Stop.
+ * (User can always escalate with hard Stop.)
+ */
 export function isDrainEligible(input: DrainEligibilityInput): boolean {
   if (input.claimed > 0) return true;
   if (input.pendingCommit > 0) return true;
-  if (NON_EXEC_PHASES.has(input.phase)) return false;
-  if (input.phase !== "executing" && input.phase !== "paused" && input.phase !== "draining") {
-    return false;
-  }
   if ((input.replanPending ?? 0) > 0) return true;
   if (input.replanRunning) return true;
   if (input.workerThinking) return true;
-  return false;
+  if (NO_DRAIN_PHASES.has(input.phase)) return false;
+  // Any other phase (cloning, spawning, seeding, discussing, planning, executing, …)
+  return true;
 }
 
 export function drainIneligibleReason(input: DrainEligibilityInput): string {
-  if (NON_EXEC_PHASES.has(input.phase)) {
-    if (input.workerThinking && input.phase === "auditing") {
-      return "phase=auditing (lead-agent audit in progress — Drain only applies to worker todos; use Stop)";
-    }
-    if (input.workerThinking && (input.phase === "discussing" || input.phase === "seeding")) {
-      return `phase=${input.phase} (council planning/discussion — use Stop; Drain enables during executing when workers have claims)`;
-    }
-    return `phase=${input.phase} (no worker claims yet — use Stop for immediate exit)`;
+  if (NO_DRAIN_PHASES.has(input.phase)) {
+    return `phase=${input.phase} (run not active — Drain unavailable)`;
   }
-  if (input.claimed === 0 && input.pendingCommit === 0) {
-    return "no in-flight worker claims or pending commits";
+  if (!isDrainEligible(input)) {
+    return "drain not applicable";
   }
   return "drain not applicable";
 }

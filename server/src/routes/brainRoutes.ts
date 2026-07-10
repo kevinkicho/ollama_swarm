@@ -488,6 +488,7 @@ Use the tables and recommender data.`;
         })),
       ];
 
+      const t0Brain = Date.now();
       const result = await provider.chat({
         model: modelId,
         messages: chatMessages,
@@ -501,6 +502,17 @@ Use the tables and recommender data.`;
               brainInitiated: true,
             }
           : {}),
+      });
+      const { recordChatUsage } = await import("../services/ollamaProxy.js");
+      recordChatUsage({
+        promptTokens: result.usage?.promptTokens,
+        responseTokens: result.usage?.responseTokens,
+        promptText: chatMessages.map((m) => m.content).join("\n"),
+        responseText: result.text,
+        durationMs: Date.now() - t0Brain,
+        model: modelId,
+        path: `/brain-chat (${provider.id})`,
+        runId: brainRunId,
       });
 
       let text = result.text;

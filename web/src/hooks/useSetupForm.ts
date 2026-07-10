@@ -88,6 +88,10 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [roundsInput, setRoundsInput] = useState(0);
   const [userDirective, setUserDirective] = useState("");
   const [webTools, setWebTools] = useState(true);
+  /** Council: shared contract explore (default off — independent explore). */
+  const [councilSharedExplore, setCouncilSharedExplore] = useState(false);
+  /** Council: collective research standup each cycle (default off). */
+  const [councilSharedResearch, setCouncilSharedResearch] = useState(false);
   const [mcpServers, setMcpServers] = useState("");
   const [wallClockCapMin, setWallClockCapMin] = useState("0");
   const [ambitionTiers, setAmbitionTiers] = useState("");
@@ -223,6 +227,13 @@ export function useSetupForm(navigate: (path: string) => void) {
         rounds: roundsInput,
         ...(directiveTrimmed ? { userDirective: directiveTrimmed } : {}),
         webTools,
+        ...(preset.id === "council" || preset.id === "blackboard"
+          ? {
+              councilSharedExplore: councilSharedExplore || undefined,
+              councilSharedResearch:
+                preset.id === "council" && councilSharedResearch ? true : undefined,
+            }
+          : {}),
         mcpServers,
         // Per-agent provider/model from the Topology grid (including header
         // bulk-apply). Discussion presets spawn via resolveModelForTopologyIndex;
@@ -302,6 +313,8 @@ export function useSetupForm(navigate: (path: string) => void) {
     roundsInput, setRoundsInput,
     userDirective, setUserDirective,
     webTools, setWebTools,
+    councilSharedExplore, setCouncilSharedExplore,
+    councilSharedResearch, setCouncilSharedResearch,
     mcpServers, setMcpServers,
     wallClockCapMin, setWallClockCapMin,
     ambitionTiers, setAmbitionTiers,

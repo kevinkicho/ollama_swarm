@@ -30,12 +30,28 @@ export interface CouncilProgressHost {
 }
 
 export function appendCouncilTerminalMessage(host: CouncilProgressHost): void {
-  if (host.closingRequested()) return;
-  if (host.getEarlyStopDetail()) {
-    host.appendSystem(`[audit] Council stopped: ${host.getEarlyStopDetail()}`);
+  const detail = host.getEarlyStopDetail();
+  if (host.closingRequested() && !detail) {
+    host.appendSystem("[audit] Council stopped: user stop/drain.");
+    host.emit({
+      type: "error",
+      message: "council_stop_reason: user stop/drain",
+    } as SwarmEvent);
+    return;
+  }
+  if (detail) {
+    host.appendSystem(`[audit] Council stopped: ${detail}`);
+    host.emit({
+      type: "error",
+      message: `council_stop_reason: ${detail}`,
+    } as SwarmEvent);
     return;
   }
   host.appendSystem("Council complete.");
+  host.emit({
+    type: "error",
+    message: "council_stop_reason: complete",
+  } as SwarmEvent);
 }
 
 export function syncProgressContext(host: CouncilProgressHost): void {
@@ -93,12 +109,14 @@ export function recordTodoSettled(
   cycle: number,
   info: {
     description: string;
-    expectedFiles: readonly string[];
+    expectedFiles?: readonly string[] | null;
     outcome: "completed" | "skipped" | "failed";
     detail?: string;
   },
 ): void {
-  const files = [...info.expectedFiles];
+  // Guard: missing/non-array expectedFiles crashed runs (88f8c1e5) when
+  // settlement callback omitted the field.
+  const files = Array.isArray(info.expectedFiles) ? [...info.expectedFiles] : [];
   if (info.outcome === "completed") {
     appendLedgerObservation(host.progressLedger, {
       kind: "commit",

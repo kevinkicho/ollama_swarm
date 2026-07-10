@@ -162,6 +162,24 @@ export class AgentManager {
     string,
     { activityId: string; kind?: string; label?: string }
   >();
+  /**
+   * Last agent_activity record per agent — included in REST /status so
+   * reconnect/hydrate restores sidebar labels and phase (not WS-only).
+   */
+  private readonly lastActivityByAgent = new Map<
+    string,
+    {
+      phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+      ts: number;
+      startedAt: number;
+      activityId?: string;
+      kind?: string;
+      label?: string;
+      attempt?: number;
+      maxAttempts?: number;
+      reason?: string;
+    }
+  >();
   // Kill guard: once killAll() completes, any stale setAgentState calls
   // that race with the clear (e.g., a prompt catch-block running on a
   // microtask after the kill) are silently dropped instead of re-adding
@@ -317,6 +335,10 @@ export class AgentManager {
       this.agentStates.set(a.id, stopped);
       this.onState(stopped);
       this.endStreamingUi(a.id);
+      const priorAct = this.lastActivityByAgent.get(a.id);
+      if (priorAct && priorAct.phase !== "done") {
+        this.emitAgentActivity(a.id, a.index, "done", { activityId: priorAct.activityId });
+      }
       this.promptActivityByAgent.delete(a.id);
     }
 
@@ -411,19 +433,83 @@ export class AgentManager {
       reason?: string;
     } = {},
   ): void {
-    if (this.suppressStreamingFor.has(agentId)) return;
+    // Suppress media noise during warmup — but never drop terminal "done"
+    // (and allow retrying) so the sidebar can demote after a real prompt.
+    if (this.suppressStreamingFor.has(agentId) && phase !== "done" && phase !== "retrying") {
+      return;
+    }
+    const ts = Date.now();
+    const prior = this.lastActivityByAgent.get(agentId);
+    const freshSession =
+      (phase === "queued" || phase === "waiting")
+      && (!prior || prior.phase === "done" || prior.activityId !== extra.activityId);
+    const startedAt = freshSession ? ts : (prior?.startedAt ?? ts);
+    const record = {
+      phase,
+      ts,
+      startedAt,
+      activityId: extra.activityId ?? prior?.activityId,
+      kind: extra.kind ?? prior?.kind,
+      label: extra.label ?? prior?.label,
+      attempt: extra.attempt ?? prior?.attempt,
+      maxAttempts: extra.maxAttempts ?? prior?.maxAttempts,
+      reason:
+        phase === "done"
+          ? undefined
+          : extra.reason !== undefined
+            ? extra.reason
+            : prior?.reason,
+    };
+    this.lastActivityByAgent.set(agentId, record);
     this.onEvent({
       type: "agent_activity",
       agentId,
       agentIndex,
       phase,
-      ts: Date.now(),
+      ts,
       ...extra,
     });
   }
 
   getPromptActivity(agentId: string): { activityId: string; kind?: string; label?: string } | undefined {
     return this.promptActivityByAgent.get(agentId);
+  }
+
+  /** Current mirror state for an agent (prompt layer / status ownership). */
+  getState(agentId: string): AgentState | undefined {
+    return this.agentStates.get(agentId);
+  }
+
+  /** Snapshot of last activity per agent for REST /status hydrate. */
+  getActivitySnapshot(): Record<
+    string,
+    {
+      phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+      ts: number;
+      startedAt: number;
+      activityId?: string;
+      kind?: string;
+      label?: string;
+      attempt?: number;
+      maxAttempts?: number;
+      reason?: string;
+    }
+  > {
+    const out: Record<string, {
+      phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+      ts: number;
+      startedAt: number;
+      activityId?: string;
+      kind?: string;
+      label?: string;
+      attempt?: number;
+      maxAttempts?: number;
+      reason?: string;
+    }> = {};
+    for (const [id, rec] of this.lastActivityByAgent) {
+      out[id] = { ...rec };
+    }
+    return out;
   }
 
   /** Resolve label/kind for promptWithRetry — prefers runner markStatus, then opts. */
@@ -541,17 +627,50 @@ export class AgentManager {
   // route their direct emits through the same single source of truth
   // setAgentState writes to (mirror + broadcast in lockstep).
   recordAgentState(s: AgentState): void {
-    // Auto-fill model from the Agent object if missing. Most runner
-    // callsites build AgentState without model; this ensures the
-    // agentStates mirror always carries the current model.
-    if (s.model === undefined) {
-      const a = this.agents.get(s.id);
-      if (a?.model) {
-        this.setAgentState({ ...s, model: a.model });
-        return;
+    // Merge with existing mirror so partial runner emits (status-only)
+    // cannot wipe activityLabel / thinkingSince / model set by markStatus.
+    const existing = this.agentStates.get(s.id);
+    const agent = this.agents.get(s.id);
+    const busy =
+      s.status === "thinking" || s.status === "retrying";
+    const merged: AgentState = {
+      ...existing,
+      ...s,
+      id: s.id,
+      index: s.index ?? existing?.index ?? agent?.index ?? 0,
+      model: s.model ?? existing?.model ?? agent?.model,
+      sessionId: s.sessionId ?? existing?.sessionId ?? agent?.sessionId,
+      thinkingSince:
+        busy
+          ? (s.thinkingSince ?? existing?.thinkingSince)
+          : undefined,
+      activityKind:
+        busy
+          ? (s.activityKind ?? existing?.activityKind)
+          : s.activityKind,
+      activityLabel:
+        busy
+          ? (s.activityLabel ?? existing?.activityLabel)
+          : s.activityLabel,
+      activityAttempt:
+        busy
+          ? (s.activityAttempt ?? existing?.activityAttempt)
+          : s.activityAttempt,
+      activityMaxAttempts:
+        busy
+          ? (s.activityMaxAttempts ?? existing?.activityMaxAttempts)
+          : s.activityMaxAttempts,
+    };
+    if (!busy) {
+      merged.thinkingSince = undefined;
+      if (s.status === "ready" || s.status === "stopped" || s.status === "failed") {
+        merged.activityKind = undefined;
+        merged.activityLabel = undefined;
+        merged.activityAttempt = undefined;
+        merged.activityMaxAttempts = undefined;
       }
     }
-    this.setAgentState(s);
+    this.setAgentState(merged);
   }
 
   // Improvement #4 from 2026-04-23 retro: per-agent first-prompt

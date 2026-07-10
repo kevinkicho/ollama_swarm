@@ -281,6 +281,26 @@ export function applyStatusSnapshotToStore(
       for (const sample of samples) s.pushLatencySample(agentId, sample);
     }
   }
+  // Restore control-plane activity BEFORE streaming so we do not use
+  // setAgentActivity (which clears stream buffers on fresh waiting sessions).
+  if (snap.agentActivity && Object.keys(snap.agentActivity).length > 0) {
+    const cur = store.getState().agentActivity;
+    const next = { ...cur };
+    for (const [agentId, rec] of Object.entries(snap.agentActivity)) {
+      next[agentId] = {
+        phase: rec.phase,
+        ts: rec.ts,
+        startedAt: rec.startedAt ?? rec.ts,
+        activityId: rec.activityId,
+        kind: rec.kind,
+        label: rec.label,
+        attempt: rec.attempt,
+        maxAttempts: rec.maxAttempts,
+        reason: rec.reason,
+      };
+    }
+    store.setState({ agentActivity: next });
+  }
   if (snap.streaming) {
     for (const [agentId, entry] of Object.entries(snap.streaming)) {
       s.setStreaming(agentId, entry.text);

@@ -12,9 +12,9 @@
 // we fail closed with a clear reason — the replanner can then retry with a
 // more specific anchor, or the worker can try again.
 //
-// Three ops: replace (the common case), create (new file), append (end-of-file
-// additions where there's no stable anchor to replace against, e.g. CHANGELOG
-// entries). That's enough to cover everything workers actually need.
+// Ops: replace (exact anchor), create, append, delete, plus bulk-friendly
+// write (full file) and replace_between (heading/section without needing the
+// omitted middle of a windowed file in the prompt).
 //
 // This module is pure + side-effect free + unit-testable. The runner groups
 // worker-emitted hunks by file, reads the current file content, calls
@@ -24,7 +24,21 @@ export type Hunk =
   | { op: "replace"; file: string; search: string; replace: string }
   | { op: "create"; file: string; content: string }
   | { op: "append"; file: string; content: string }
-  | { op: "delete"; file: string };
+  | { op: "delete"; file: string }
+  /** Full-file body. Works on existing or missing files (creates when missing). */
+  | { op: "write"; file: string; content: string }
+  /**
+   * Replace from the first unique `start` marker through (not including)
+   * `endExclusive` when set, or through EOF when omitted. Lets workers edit
+   * large sections without pasting the omitted middle into `search`.
+   */
+  | {
+      op: "replace_between";
+      file: string;
+      start: string;
+      endExclusive?: string;
+      replace: string;
+    };
 
 export type ApplyFileResult =
   | { ok: true; newText: string }
@@ -49,24 +63,22 @@ export function applyFileHunks(
     return { ok: true, newText: currentText ?? "" };
   }
 
-  // Path A: file didn't exist yet. The only valid shape is exactly one
-  // "create" hunk. Anything else is a programming error (the worker doesn't
-  // know the file state; the runner does).
+  // Path A: file didn't exist yet. Valid: single create, or single write.
   if (currentText === null) {
     if (hunks.length !== 1) {
       return {
         ok: false,
-        error: `file does not exist — expected exactly one "create" hunk, got ${hunks.length}`,
+        error: `file does not exist — expected exactly one "create" or "write" hunk, got ${hunks.length}`,
       };
     }
     const only = hunks[0];
-    if (only.op !== "create") {
-      return {
-        ok: false,
-        error: `file does not exist — got op "${only.op}", expected "create"`,
-      };
+    if (only.op === "create" || only.op === "write") {
+      return { ok: true, newText: only.content };
     }
-    return { ok: true, newText: only.content };
+    return {
+      ok: false,
+      error: `file does not exist — got op "${only.op}", expected "create" or "write"`,
+    };
   }
 
   // Path B: file exists. Walk the hunks in order, mutating the working
@@ -78,18 +90,57 @@ export function applyFileHunks(
       case "create":
         return {
           ok: false,
-          error: `hunk[${i}] op "create": file already exists — use "replace" or "append"`,
+          error: `hunk[${i}] op "create": file already exists — use "replace", "replace_between", "write", or "append"`,
         };
+      case "write":
+        text = h.content;
+        break;
       case "append":
         text = text + h.content;
         break;
       case "delete":
         // Delete the file — return empty string to signal deletion
         return { ok: true, newText: "" };
+      case "replace_between": {
+        const start = h.start;
+        if (!start) {
+          return { ok: false, error: `hunk[${i}] op "replace_between": empty "start" marker` };
+        }
+        const startCount = countOccurrences(text, start);
+        if (startCount === 0) {
+          return {
+            ok: false,
+            error: `hunk[${i}] op "replace_between": "start" text not found in file`,
+          };
+        }
+        if (startCount > 1) {
+          return {
+            ok: false,
+            error: `hunk[${i}] op "replace_between": "start" text matches ${startCount} times — must be unique; add surrounding context`,
+          };
+        }
+        const startIdx = text.indexOf(start);
+        let endIdx = text.length;
+        if (h.endExclusive != null && h.endExclusive.length > 0) {
+          const end = h.endExclusive;
+          const from = startIdx + start.length;
+          const rel = text.indexOf(end, from);
+          if (rel === -1) {
+            return {
+              ok: false,
+              error: `hunk[${i}] op "replace_between": "endExclusive" text not found after start`,
+            };
+          }
+          // endExclusive must not appear again between start and first end if we want unique section;
+          // first match after start is the section boundary (heading-style usage).
+          endIdx = rel;
+        }
+        text = text.slice(0, startIdx) + h.replace + text.slice(endIdx);
+        break;
+      }
       case "replace": {
         let search = h.search;
         let count = countOccurrences(text, search);
-        let usedNormalized = false;
 
         // Fuzzy fallback: trailing whitespace and line-ending drift are
         // the most common source of search mismatches. Try normalized
@@ -101,7 +152,6 @@ export function applyFileHunks(
             if (normCount === 1) {
               search = normalized;
               count = 1;
-              usedNormalized = true;
             }
           }
         }
@@ -139,7 +189,7 @@ export function applyFileHunks(
           }
         }
         const idx = text.indexOf(search);
-        text = text.slice(0, idx) + h.replace + text.slice(idx + h.search.length);
+        text = text.slice(0, idx) + h.replace + text.slice(idx + search.length);
         break;
       }
       default: {

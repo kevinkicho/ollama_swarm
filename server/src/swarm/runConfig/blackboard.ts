@@ -7,9 +7,9 @@ export interface RunConfigBlackboard {
    */
   councilContract?: boolean;
   /**
-   * When council contract is on: one lead planner explores, then all agents
-   * emit-only drafts from the shared brief (default true). Set false to
-   * restore per-agent explore→emit.
+   * When council contract is on: one lead explores, then all agents emit-only
+   * drafts from the shared brief. Default **false** (independent explore→emit
+   * per agent). Set true for shared-explore contract drafting.
    */
   councilSharedExplore?: boolean;
   /**

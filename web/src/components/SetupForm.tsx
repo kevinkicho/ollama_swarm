@@ -81,10 +81,11 @@ export function SetupForm() {
   let estimateLabel = '';
   if (estSeconds && estSeconds > 0) {
     estimateLabel = `~${formatDurationSeconds(estSeconds)}`;
-  } else if (presetId === 'blackboard') {
-    estimateLabel = 'autonomous • blackboard';
+  } else if (presetId === 'blackboard' || (presetId === 'council' && rounds === 0)) {
+    estimateLabel = presetId === 'blackboard' ? 'autonomous • blackboard' : 'autonomous • council';
   } else if (rounds === 0) {
-    estimateLabel = 'autonomous';
+    // Server rejects rounds=0 for non-autonomous presets
+    estimateLabel = 'invalid (set rounds ≥ 1)';
   }
 
   // Color estimate based on cap fit (mirrors WallClockEstimate logic) + live suffix
@@ -402,6 +403,42 @@ export function SetupForm() {
             </span>
           </label>
 
+          {form.preset.id === "council" || form.preset.id === "blackboard" ? (
+            <div className="mt-2 space-y-1.5 pl-1 border-l border-ink-700/60">
+              <label className="flex items-center gap-2 text-xs text-ink-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={form.councilSharedExplore}
+                  onChange={(e) => form.setCouncilSharedExplore(e.target.checked)}
+                  className="rounded border-ink-600 bg-ink-900 text-emerald-500 focus:ring-emerald-500/40"
+                />
+                <span>
+                  Shared contract explore
+                  <span className="text-ink-500 ml-1">
+                    (default off — each agent explores independently; on = one shared explore brief)
+                  </span>
+                </span>
+              </label>
+              {form.preset.id === "council" ? (
+                <label className="flex items-center gap-2 text-xs text-ink-300 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={form.councilSharedResearch}
+                    onChange={(e) => form.setCouncilSharedResearch(e.target.checked)}
+                    disabled={!form.webTools}
+                    className="rounded border-ink-600 bg-ink-900 text-emerald-500 focus:ring-emerald-500/40 disabled:opacity-40"
+                  />
+                  <span>
+                    Shared research standup each cycle
+                    <span className="text-ink-500 ml-1">
+                      (default off — independent literature research per todo; needs web tools)
+                    </span>
+                  </span>
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="mt-2 text-xs">
             <div className="flex items-center gap-1">
               <label className="text-ink-400">MCP Servers (optional extra tools like advanced fetch/search):</label>
@@ -522,15 +559,19 @@ export function SetupForm() {
           <div className="grid sm:grid-cols-2 gap-4">
             <Field
               label="Rounds"
-              hint="0 = autonomous (until ratchet satisfied or cap hit)"
+              hint={
+                form.preset?.id === "blackboard" || form.preset?.id === "council"
+                  ? "0 = autonomous (ambition ratchet / continuous until Stop or cap)"
+                  : "≥1 required. rounds=0 is only for blackboard & council (server rejects others)"
+              }
             >
               <input
                 type="number"
                 value={form.roundsInput}
                 onChange={(e) => form.setRoundsInput(Number(e.target.value))}
                 className="input"
-                min={0}
-                placeholder="0"
+                min={form.preset?.id === "blackboard" || form.preset?.id === "council" ? 0 : 1}
+                placeholder={form.preset?.id === "blackboard" || form.preset?.id === "council" ? "0" : "3"}
               />
             </Field>
 

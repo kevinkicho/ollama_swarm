@@ -51,14 +51,16 @@ export interface RunnerOpts {
 // Every preset implementation fulfills this contract so the top-level
 // Orchestrator can dispatch to it without caring which pattern is running.
 export interface SwarmRunner {
+  /**
+   * Run the preset to completion (or until stop/drain). Discussion
+   * presets await their internal loop so callers (pipeline, orchestrator
+   * settle) know when the run is truly finished — not merely seeded.
+   */
   start(cfg: RunConfig): Promise<void>;
   stop(): Promise<void>;
-  // Task #167: soft-stop. Optional — when undefined, the orchestrator
-  // falls back to stop(). Blackboard implements it: workers finish
-  // their currently-claimed todo, no new claims permitted, then
-  // escalate to hard stop. Discussion presets have nothing analogous
-  // (their parallel-round structure can't be cleanly drained
-  // mid-round) so they leave it undefined and get hard-stop.
+  // Soft-stop: finish the current unit of work then close out.
+  // Blackboard: finish claimed todos. Discussion: finish current round
+  // then exit (drainRequested). When undefined, orchestrator hard-stops.
   drain?(): Promise<void>;
   status(): SwarmStatus;
   // 2026-05-02: opts param threads /api/swarm/say's intent + targetAgent
@@ -69,6 +71,12 @@ export interface SwarmRunner {
     opts?: { intent?: "suggest" | "steer" | "ask"; targetAgent?: string },
   ): void;
   isRunning(): boolean;
+  /**
+   * Resolve when the run has fully settled (loop finished / terminal phase).
+   * Optional for legacy fakes; DiscussionRunnerBase + Blackboard implement it.
+   * After await start(), this is typically already resolved.
+   */
+  waitUntilSettled?(): Promise<void>;
   // For Brain proactive suggestions during run
   appendSystemMessage?(text: string, summary?: TranscriptEntrySummary): void;
   /** Mid-run limit extension (rounds, wall-clock cap, token budget). */

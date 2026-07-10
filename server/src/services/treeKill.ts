@@ -1,28 +1,31 @@
-import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
 
-// Fire-and-forget process-tree kill. On Windows `child.kill()` (or SIGTERM)
-// only terminates the immediate child — for opencode agents that's the
-// cmd.exe shell wrapper spawn-with-`shell:true` creates, leaving the real
-// opencode.exe grandchild orphaned and still holding its port. `taskkill /T`
-// walks the tree and `/F` force-terminates. On POSIX we fall back to the
-// signal path, where Node's own signal forwarding is reliable.
+// Process-tree kill. On Windows `child.kill()` (or SIGTERM) only terminates
+// the immediate child — for opencode agents that's the cmd.exe shell wrapper
+// spawn-with-`shell:true` creates, leaving the real opencode.exe grandchild
+// orphaned and still holding its port. `taskkill /T /F` walks the tree.
+// Windows path is synchronous so callers that exit right after do not race
+// a fire-and-forget spawn. On POSIX we fall back to the signal path.
 export function treeKill(child: ChildProcess | undefined): void {
   if (!child || child.pid === undefined) return;
   if (child.killed || child.exitCode !== null) return;
 
   if (process.platform === "win32") {
+    // Prefer sync taskkill so callers that exit immediately after treeKill
+    // (dev supervisor, agent teardown) do not race a fire-and-forget spawn.
     try {
-      const k = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+      const r = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 8_000,
       });
-      k.on("error", () => {
+      if (r.error || (r.status !== 0 && r.status !== 128 && r.status !== 1)) {
         try {
           child.kill();
         } catch {
           /* ignore */
         }
-      });
+      }
     } catch {
       try {
         child.kill();
@@ -55,15 +58,15 @@ export function treeKill(child: ChildProcess | undefined): void {
 // holding a port. On Windows uses `taskkill /PID <pid> /T /F` (same as
 // treeKill); on POSIX does a two-stage SIGTERM then SIGKILL with a
 // small delay between them so well-behaved processes can clean up.
-// Fire-and-forget. Errors swallowed — caller should verify with
-// isProcessAlive if it needs to know for sure.
+// Errors swallowed — caller should verify with isProcessAlive if needed.
 export function killByPid(pid: number): void {
   if (!Number.isInteger(pid) || pid <= 0) return;
   if (process.platform === "win32") {
     try {
-      spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
+        timeout: 8_000,
       });
     } catch {
       /* ignore */

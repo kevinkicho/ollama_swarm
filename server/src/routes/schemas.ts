@@ -191,6 +191,8 @@ export const StartBody = z.object({
   roles: z.array(SwarmRoleSchema).min(1).max(16).optional(),
   councilContract: z.boolean().optional(),
   councilSharedExplore: z.boolean().optional(),
+  /** Council: collective research standup each cycle (default off — independent research). */
+  councilSharedResearch: z.boolean().optional(),
   proposition: z.string().trim().max(2000).optional(),
   // Unit 34: per-run ambition ratchet cap. 0 = explicitly disabled; 1-20
   // enables with that many tiers max. Absent = inherit from env.

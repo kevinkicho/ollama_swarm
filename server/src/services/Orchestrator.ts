@@ -57,9 +57,13 @@ export class WorkspaceBusyError extends Error {
 }
 
 export interface OrchestratorOpts {
-  /** Mint one AgentManager per run so concurrent runs don't share
-   *  agent ids, streaming buffers, or killAll() scope. */
-  createManager: (runId: string) => AgentManager;
+  /**
+   * One RunEventHub per run with all sinks (WS / event log / debug).
+   * Manager + runners share this hub — never create a second sink-less hub.
+   */
+  createHub: (runId: string) => RunEventHub;
+  /** Mint one AgentManager per run bound to the run's hub. */
+  createManager: (runId: string, hub: RunEventHub) => AgentManager;
   repos: RepoService;
   emit: (e: SwarmEvent) => void;
   logDiag?: (record: unknown) => void;
@@ -192,7 +196,12 @@ export class Orchestrator {
     // Deeper slice: instantiate extracted BrainIntegration (replaces inline brain fields/methods).
     this.brain = new BrainIntegration({
       maxConcurrentRuns: this.opts.maxConcurrentRuns,
-      emit: (e: any, cat?: string) => { if (this.activeRun?.hub) this.activeRun.hub.emit(e, (cat as any) || "brain"); },
+      // Base WS/diag emit only — BrainIntegration routes to the correct
+      // per-run hub via event.runId (multi-tenant safe).
+      emit: (e: any) => {
+        this.opts.emit(e);
+      },
+      getLiveRunCount: () => this.countLiveRuns(),
       getRunsSize: () => this.runs.size,
       getStartInProgress: () => this.startInProgress,
       getActiveRun: () => this.activeRun,
@@ -207,7 +216,47 @@ export class Orchestrator {
   }
 
   getActiveRunCount(): number {
-    return this.runs.size;
+    return this.countLiveRuns();
+  }
+
+  /** Runs whose runner still reports isRunning() (excludes terminal ghosts). */
+  private countLiveRuns(): number {
+    let n = 0;
+    for (const run of this.runs.values()) {
+      if (run.isRunning()) n++;
+    }
+    return n;
+  }
+
+  /**
+   * Resolve an active run by exact id only. Prefix matching was removed —
+   * under concurrency it could stop/drain the wrong run.
+   */
+  private getRunExact(runId: string): ActiveRun | undefined {
+    if (!runId) return undefined;
+    return this.runs.get(runId);
+  }
+
+  /**
+   * Unified remove path: teardown ActiveRun + drop from the map.
+   * Keeps runPaths for post-run status/history.
+   */
+  private async removeRun(
+    run: ActiveRun,
+    opts: {
+      stopRunner?: boolean;
+      terminalPhase?: import("../types.js").SwarmPhase;
+      terminalReason?: string;
+    } = {},
+  ): Promise<void> {
+    tokenTracker.setCurrentPreset(undefined, run.runId);
+    const stillRunning = run.isRunning();
+    await run.teardown({
+      stopRunner: opts.stopRunner ?? stillRunning,
+      terminalPhase: opts.terminalPhase,
+      terminalReason: opts.terminalReason,
+    });
+    this.runs.delete(run.runId);
   }
 
   setBrainChatHistory(runId: string, history: Array<{ role: string; content: string }>) {
@@ -231,9 +280,10 @@ export class Orchestrator {
   }
 
   /** Drop runs that reached a terminal phase but remain in the map.
-   *  Must NOT call stop() — that rewrites the summary as user-stopped
+   *  Must NOT call runner.stop() — that rewrites the summary as user-stopped
    *  and used to kill booting runs (phase idle) when a second start ran
-   *  cleanup before runner.start() advanced phase. */
+   *  cleanup before runner.start() advanced phase. Uses dispose/teardown
+   *  with stopRunner:false so clone lock + amendments still release. */
   private async cleanupStaleRuns(): Promise<void> {
     for (const [id, run] of [...this.runs.entries()]) {
       if (run.isRunning()) continue;
@@ -241,7 +291,8 @@ export class Orchestrator {
       const terminal =
         phase === "stopped" || phase === "completed" || phase === "failed";
       if (!terminal) continue;
-      run.dispose();
+      // stopRunner:false — runner already terminal; only free resources.
+      await run.teardown({ stopRunner: false, ensureSummary: true });
       this.runs.delete(id);
     }
   }
@@ -510,33 +561,23 @@ export class Orchestrator {
   }
 
   /** T-Item-MultiTenant Phase 5 (2026-05-04): stop ONE run by id.
-   *  Returns true on success, false when runId isn't active. Mirrors
-   *  the legacy stop() cleanup but scoped to one entry. */
+   *  Returns true on success, false when runId isn't active. Exact id only. */
   async stopRun(runId: string): Promise<boolean> {
-    let run = this.runs.get(runId);
-    if (!run && runId) {
-      // tolerant prefix match (UI sometimes passes short id)
-      for (const [k, v] of this.runs.entries()) {
-        if (k.startsWith(runId) || runId.startsWith(k)) { run = v; break; }
-      }
-    }
+    const run = this.getRunExact(runId);
     if (!run) {
-      // Already terminated (known from runPaths or recoverable snapshot).
-      // Treat stop as successful no-op so clients don't get spurious errors
-      // and UI state stays consistent.
-      const known = this.runPaths.get(runId) ||
-        (runId && [...this.runPaths.keys()].some(k => k.startsWith(runId) || runId.startsWith(k)));
-      if (known) return true;
+      // Already terminated (exact id known from runPaths) → successful no-op.
+      if (runId && this.runPaths.has(runId)) return true;
       return false;
     }
-
-    // Clearing tokenTracker...
-    tokenTracker.setCurrentPreset(undefined, run.runId);
-
-    await run.stop();
-    // Guarantee terminal snapshot
-    run.forceTerminalSnapshot("stopped", "user-stop");
-    this.runs.delete(run.runId);
+    const live = run.isRunning();
+    await this.removeRun(run, {
+      stopRunner: live,
+      // Only force "stopped" when we actually interrupt a live run —
+      // natural-complete ghosts keep their completed summary.
+      ...(live
+        ? { terminalPhase: "stopped" as const, terminalReason: "user-stop" }
+        : {}),
+    });
     return true;
   }
 
@@ -662,194 +703,232 @@ export class Orchestrator {
     }
     this.startInProgress = true;
 
-    let amendmentsOpened = false;
     let runId: string | undefined;
+    /** True after tryAcquireLock succeeds and ownership not yet transferred to ActiveRun. */
+    let orphanCloneLock = false;
+    /** True after this.runs.set — ActiveRun owns the lock thereafter. */
+    let registeredInMap = false;
 
     try {
       // T-Item-MultiTenant Phase 4 (2026-05-04): cap on concurrent runs.
       await this.cleanupStaleRuns();
       const cap = this.opts.maxConcurrentRuns ?? 4;
-      if (this.runs.size >= cap) {
+      const live = this.countLiveRuns();
+      if (live >= cap) {
         throw new Error(
-          `Concurrent-run cap reached (${this.runs.size}/${cap}). Stop a run before starting another.`,
+          `Concurrent-run cap reached (${live}/${cap}). Stop a run before starting another.`,
         );
       }
-    // Drift check: validate prompt assertions before starting the run.
-    // Non-blocking — drift warnings are informational. The run proceeds
-    // regardless, but the user sees drift warnings in the system transcript.
-    {
-      try {
-        const { checkPromptDrift } = await import("../swarm/blackboard/prompts/driftGuard.js");
-        const drift = await checkPromptDrift();
-        if (!drift.ok) {
-          const names = [...new Set(drift.failures.map((f) => f.prompt))].join(", ");
-          this.log.warn('prompt drift detected', {
-            failed: drift.failedAssertions,
-            total: drift.totalAssertions,
-            names,
+      // Drift check: validate prompt assertions before starting the run.
+      // Non-blocking — drift warnings are informational.
+      {
+        try {
+          const { checkPromptDrift } = await import("../swarm/blackboard/prompts/driftGuard.js");
+          const drift = await checkPromptDrift();
+          if (!drift.ok) {
+            const names = [...new Set(drift.failures.map((f) => f.prompt))].join(", ");
+            this.log.warn("prompt drift detected", {
+              failed: drift.failedAssertions,
+              total: drift.totalAssertions,
+              names,
+              runId,
+            });
+          }
+        } catch {
+          // best-effort
+        }
+      }
+
+      runId = randomUUID();
+      // Single hub for the whole run: manager control plane + runner domain events.
+      const runHub = this.opts.createHub(runId);
+      cfg.runId = runId;
+      this.brain.registerClonePath(cfg.localPath);
+
+      const resolvedLocal = nodePath.resolve(cfg.localPath);
+      for (const [otherId, otherRun] of this.runs.entries()) {
+        if (nodePath.resolve(otherRun.cfg.localPath) === resolvedLocal) {
+          throw new WorkspaceBusyError(otherId, cfg.localPath);
+        }
+      }
+
+      const lockResult = tryAcquireLock({ clonePath: cfg.localPath, runId });
+      if (!lockResult.acquired) {
+        const heldBy = lockResult.heldBy
+          ? ` (held by pid=${lockResult.heldBy.pid} runId=${lockResult.heldBy.runId} on ${lockResult.heldBy.hostname})`
+          : "";
+        throw new Error(
+          `Clone path is locked by another swarm process${heldBy}. ${lockResult.reason}`,
+        );
+      }
+      orphanCloneLock = true;
+
+      const persister = new RunStatePersister(cfg.localPath);
+      const startedAt = Date.now();
+      const manager = this.opts.createManager(runId, runHub);
+      const runHolder: { runner: SwarmRunner | null } = { runner: null };
+      const buildCtx: BuildRunnerContext = {
+        runId,
+        startedAt,
+        persister,
+        manager,
+        getRunner: () => runHolder.runner!,
+        hub: runHub,
+      };
+      const runner = await this.buildRunner(cfg.preset, cfg, buildCtx);
+      runHolder.runner = runner;
+
+      tokenTracker.setCurrentPreset(cfg.preset, runId);
+      tokenTracker.clearQuotaState(runId);
+
+      let rolesForRunStarted: string[] | undefined;
+      if (cfg.preset === "role-diff") {
+        const catalog = selectRoleCatalog({
+          customRoles: cfg.roles,
+          userDirective: cfg.userDirective,
+          dynamicRoles: cfg.dynamicRoles,
+        });
+        rolesForRunStarted = [];
+        for (let i = 1; i <= cfg.agentCount; i++) {
+          rolesForRunStarted.push(roleForAgent(i, catalog).name);
+        }
+      }
+
+      const runConfig: SwarmStatusRunConfig = buildSwarmStatusRunConfig(cfg, rolesForRunStarted);
+      cfg.thinkGuardRefereeCallsUsed = cfg.thinkGuardRefereeCallsUsed ?? 0;
+      const activeRun = this.createActiveRun(
+        runId,
+        startedAt,
+        cfg,
+        runConfig,
+        runner,
+        manager,
+        persister,
+        true, // holdsCloneLock — ownership transferred to ActiveRun
+        runHub,
+      );
+      this.runs.set(runId, activeRun);
+      registeredInMap = true;
+      orphanCloneLock = false; // ActiveRun owns release now
+
+      this.runPaths.set(runId, {
+        clonePath: cfg.localPath,
+        preset: cfg.preset,
+        startedAt: Date.now(),
+      });
+
+      const parentOfLocal = nodePath.dirname(resolvedLocal);
+      this.lastParentPath = parentOfLocal;
+      writePersistedLastParent(this.lastParentPath);
+      const parentsToRemember = [parentOfLocal, resolvedLocal];
+      this.knownParentPaths = [
+        ...parentsToRemember,
+        ...this.knownParentPaths.filter((p) => !parentsToRemember.includes(p)),
+      ].slice(0, 32);
+      writePersistedKnownParents(this.knownParentPaths);
+
+      this.opts.emit({
+        type: "run_started",
+        runId,
+        startedAt,
+        ...runConfig,
+      });
+
+      this.amendments.open(runId);
+
+      const trimmedDirective = cfg.userDirective?.trim();
+      this.setupConformanceAndDriftMonitors(activeRun, runId, trimmedDirective, cfg);
+
+      // Fire-and-forget: HTTP /start returns runId immediately. Most discussion
+      // presets also fire-and-forget their internal loop (void this.loop), so
+      // runner.start() resolves after seed/spawn — NOT when the run is done.
+      // We must wait until the runner is no longer live before reaping.
+      void (async () => {
+        try {
+          await runner.start(cfg);
+          // Discussion presets now await their loop inside start().
+          // Backstop: waitUntilSettled / isRunning poll for any remaining
+          // fire-and-forget children (or mid-stop races).
+          if (typeof runner.waitUntilSettled === "function") {
+            await runner.waitUntilSettled();
+          }
+          while (this.runs.has(runId!) && activeRun.isRunning()) {
+            await new Promise((r) => setTimeout(r, 2_000));
+          }
+          if (cfg.chainTo && this.runs.has(runId!)) {
+            // Chain may call stopRun; if it no-ops early, we still reap below.
+            try {
+              await this.scheduleForwardChain(cfg, runId!, runner, cfg.chainTo);
+            } catch (chainErr) {
+              this.log.warn("forward-chain failed", {
+                runId,
+                error: chainErr instanceof Error ? chainErr.message : String(chainErr),
+              });
+            }
+          }
+          // Natural completion (or chain finished without removing): free
+          // lock + map slot without re-calling runner.stop().
+          if (this.runs.has(runId!) && !activeRun.isTornDown() && !activeRun.isRunning()) {
+            await this.removeRun(activeRun, { stopRunner: false });
+          }
+        } catch (err) {
+          const rid = runId ?? "unknown";
+          this.log.error("start inner failure for run", {
+            runId: rid,
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          });
+          try {
+            if (this.runs.has(rid)) {
+              await this.removeRun(activeRun, {
+                stopRunner: true,
+                terminalPhase: "failed",
+                terminalReason: "start-failed",
+              });
+            } else if (!activeRun.isTornDown()) {
+              await activeRun.teardown({ stopRunner: true });
+            }
+          } catch (stopErr) {
+            this.log.warn("stop after failure failed", { error: stopErr });
+          }
+          try {
+            this.opts.emit({
+              type: "error",
+              message: `Start failed: ${err instanceof Error ? err.message : String(err)}`,
+              runId: rid,
+            } as any);
+          } catch (emitErr) {
+            this.log.warn("failed to emit start error", { error: emitErr });
+          }
+        }
+      })();
+
+      return runId;
+    } catch (err) {
+      // Setup failed before (or without) map registration — release orphan lock.
+      if (orphanCloneLock && runId && cfg.localPath) {
+        try {
+          releaseLock({ clonePath: cfg.localPath, runId });
+        } catch (lockErr) {
+          this.log.warn("start-orphan-lock-release-failed", {
+            error: lockErr instanceof Error ? lockErr.message : String(lockErr),
             runId,
           });
         }
-      } catch {
-        // Drift check is best-effort. If the registry module can't be loaded
-        // (e.g., during tests without full source tree), silently skip.
+        orphanCloneLock = false;
       }
-    }
-    // T-Item-MultiTenant Phase 3: mint runId FIRST so we can build the
-    // ActiveRun atomically. 2026-05-02 (persistence lever #2): persister
-    // construction moved into ActiveRun build below.
-    runId = randomUUID();
-    const runHub = new RunEventHub({ runId, reqId: cfg.reqId });
-    // Task #36: forward the minted runId into cfg so the runner can
-    // include it in buildSummary → summary.json. Otherwise the runId
-    // only lives in memory + the WS run_started event, never making
-    // it to disk where the history dropdown reads digests from.
-    cfg.runId = runId;
-    this.brain.registerClonePath(cfg.localPath);
-    // One active writer per clone (git + lock). Other workspaces may run concurrently.
-    const resolvedLocal = nodePath.resolve(cfg.localPath);
-    for (const [otherId, otherRun] of this.runs.entries()) {
-      if (nodePath.resolve(otherRun.cfg.localPath) === resolvedLocal) {
-        throw new WorkspaceBusyError(otherId, cfg.localPath);
-      }
-    }
-    // R8 wiring (2026-05-04): acquire the cross-process clone lock.
-    // If another server process (or another run on this server) is
-    // already operating on this clone path, fail fast — concurrent
-    // edits to the same clone would corrupt git state.
-    const lockResult = tryAcquireLock({ clonePath: cfg.localPath, runId });
-    if (!lockResult.acquired) {
-      const heldBy = lockResult.heldBy
-        ? ` (held by pid=${lockResult.heldBy.pid} runId=${lockResult.heldBy.runId} on ${lockResult.heldBy.hostname})`
-        : "";
-      throw new Error(
-        `Clone path is locked by another swarm process${heldBy}. ${lockResult.reason}`,
-      );
-    }
-    const holdsCloneLock = true;
-    const persister = new RunStatePersister(cfg.localPath);
-    const startedAt = Date.now();
-    const manager = this.opts.createManager(runId);
-    const runHolder: { runner: SwarmRunner | null } = { runner: null };
-    const buildCtx: BuildRunnerContext = {
-      runId,
-      startedAt,
-      persister,
-      manager,
-      getRunner: () => runHolder.runner!,
-      hub: runHub,
-    };
-    const runner = await this.buildRunner(cfg.preset, cfg, buildCtx);
-    runHolder.runner = runner;
-    // Task #125: tag every Ollama call made during this run with its
-    // preset, so the usage dashboard can break down "blackboard ate
-    // 60% of today's tokens" etc. Cleared in stop().
-    tokenTracker.setCurrentPreset(cfg.preset, runId);
-    // Task #137: clear any prior run's quota-exhausted flag so this
-    // run gets to probe the wall fresh. If the rate window has
-    // reset / the user upgraded their plan / etc., the new run finds
-    // out by trying. The flag re-trips immediately if not.
-    tokenTracker.clearQuotaState(runId);
-    // Unit 52a + 52c + 52d: anchor for the UI's runtime ticker,
-    // identity strip, and identifiers row. Single source of truth
-    // across all 7 runners. Fires BEFORE runner.start so a slow clone
-    // or spawn counts toward user-visible runtime.
-    // Task #42: resolve per-agent role names for role-diff so the UI
-    // can render role labels in AgentPanel. Other presets leave this
-    // undefined — runs with no role catalog get the generic worker
-    // label. Uses the same catalog + wrap semantics as roleForAgent
-    // in RoundRobinRunner so the UI matches what actually ran.
-    let rolesForRunStarted: string[] | undefined;
-    if (cfg.preset === "role-diff") {
-      // 2026-05-02 (improvement #2): selectRoleCatalog auto-picks
-      // BUILD_ROLES vs DEFAULT_ROLES based on whether a userDirective
-      // is set. User-supplied custom roles still win.
-      const catalog = selectRoleCatalog({
-        customRoles: cfg.roles,
-        userDirective: cfg.userDirective,
-        // T198b (2026-05-04): forward dynamicRoles flag.
-        dynamicRoles: cfg.dynamicRoles,
-      });
-      rolesForRunStarted = [];
-      for (let i = 1; i <= cfg.agentCount; i++) {
-        rolesForRunStarted.push(roleForAgent(i, catalog).name);
-      }
-    }
-    // Pattern 9: build the runConfig snapshot once and reuse — same fields
-    // go to the WS run_started event AND the REST status() snapshot.
-    const runConfig: SwarmStatusRunConfig = buildSwarmStatusRunConfig(cfg, rolesForRunStarted);
-    cfg.thinkGuardRefereeCallsUsed = cfg.thinkGuardRefereeCallsUsed ?? 0;
-    const activeRun = this.createActiveRun(runId, startedAt, cfg, runConfig, runner, manager, persister, holdsCloneLock, runHub);
-    this.runs.set(runId, activeRun);
-    this.runPaths.set(runId, {
-      clonePath: cfg.localPath,
-      preset: cfg.preset,
-      startedAt: Date.now(),
-    });
-    // Cache parent dir so /api/swarm/runs can keep showing historical
-    // runs in this folder even after this run terminates. Persisted
-    // to /tmp so a dev-server restart doesn't lose it.
-    const parentOfLocal = nodePath.dirname(resolvedLocal);
-    this.lastParentPath = parentOfLocal;
-    writePersistedLastParent(this.lastParentPath);
-    // #238 + #240: append to known-parents list (LRU on duplicates).
-    // Track both the clone parent and the project root itself so
-    // /api/swarm/runs?includeOtherParents discovers direct-workspace
-    // runs whose summaries live under <project>/logs/<runId>/.
-    const parentsToRemember = [parentOfLocal, resolvedLocal];
-    this.knownParentPaths = [
-      ...parentsToRemember,
-      ...this.knownParentPaths.filter((p) => !parentsToRemember.includes(p)),
-    ].slice(0, 32);
-    writePersistedKnownParents(this.knownParentPaths);
-    this.opts.emit({
-      type: "run_started",
-      runId,
-      startedAt,
-      ...runConfig,
-    });
-    // #299: open the amendments buffer for this run. /api/swarm/amend
-    // appends here; runners read via getAmendments(runId) on each turn.
-    this.amendments.open(runId);
-    amendmentsOpened = true;
-    // #295: spin up the conformance monitor when the run carries a
-    // user directive. Polls Ollama every 90s with a "rate 0–100 how
-    // on-topic is the recent transcript?" prompt. Skipped entirely
-    // for runs without a directive (nothing to grade against) and
-    // when CONFORMANCE_MONITOR=off in the env (escape hatch).
-    const trimmedDirective = cfg.userDirective?.trim();
-    this.setupConformanceAndDriftMonitors(activeRun, runId, trimmedDirective, cfg);
-    // Start the runner asynchronously (fire-and-forget) so the /start response returns the runId
-    // immediately. The run executes in background; completion/errors handled inside runner (finally, catch).
-    void (async () => {
-      try {
-        await runner.start(cfg);
-        if (cfg.chainTo) {
-          void this.scheduleForwardChain(cfg, runId, runner, cfg.chainTo);
+      // If we registered then threw before fire-and-forget (unlikely), reap.
+      if (registeredInMap && runId) {
+        const run = this.runs.get(runId);
+        if (run && !run.isTornDown()) {
+          try {
+            await this.removeRun(run, { stopRunner: false });
+          } catch {
+            /* ignore */
+          }
         }
-      } catch (err) {
-        const rid = (typeof runId === 'string' ? runId : 'unknown');
-        this.log.error('start inner failure for run', {
-          runId: rid,
-          error: err instanceof Error ? err.message : String(err),
-          stack: err instanceof Error ? err.stack : undefined,
-        });
-        try {
-          await activeRun.stop();
-        } catch (stopErr) {
-          this.log.warn('stop after failure failed', { error: stopErr });
-        }
-        this.runs.delete(rid);
-        // emit error to client if possible
-        try {
-          this.opts.emit({ type: 'error', message: `Start failed: ${err instanceof Error ? err.message : String(err)}`, runId: rid } as any);
-        } catch (emitErr) {
-          this.log.warn('failed to emit start error', { error: emitErr });
-        }
-        // rethrow not needed since fire-and-forget
       }
-    })();
-    return runId;
+      throw err;
     } finally {
       this.startInProgress = false;
     }
@@ -869,16 +948,10 @@ export class Orchestrator {
 
   /** Per-run soft stop. Returns false when runId isn't active. */
   async drainRun(runId: string): Promise<boolean> {
-    let run = this.runs.get(runId);
-    if (!run && runId) {
-      for (const [k, v] of this.runs.entries()) {
-        if (k.startsWith(runId) || runId.startsWith(k)) { run = v; break; }
-      }
-    }
+    const run = this.getRunExact(runId);
     if (!run) {
-      const known = this.runPaths.get(runId) ||
-        (runId && [...this.runPaths.keys()].some(k => k.startsWith(runId) || runId.startsWith(k)));
-      if (known) return true;
+      // Already terminated (exact id known from runPaths) → successful no-op.
+      if (runId && this.runPaths.has(runId)) return true;
       return false;
     }
     if (typeof run.runner.drain === "function") {
@@ -909,39 +982,10 @@ export class Orchestrator {
   }
 
   async stop(): Promise<void> {
-    // T-Item-MultiTenant Phase 3: stop the active run (legacy single-
-    // arg API targets most-recent-started). Phase 5 will add an
-    // explicit stopRun(runId) for per-run targeting.
+    // Legacy single-arg API → most-recently-started run, same teardown as stopRun.
     const active = this.activeRun;
     if (!active) return;
-    try {
-      await active.runner.stop();
-    } finally {
-      // #295 fix: backstop for the conformance monitor — covers the
-      // explicit /api/swarm/stop path. Natural-completion path
-      // self-stops via isActive() in the poll loop.
-      active.conformanceMonitor?.stop();
-      // #302: same backstop for the embedding drift monitor.
-      active.embeddingDriftMonitor?.stop();
-      // Task #125: clear preset tag — calls between runs (e.g. an
-      // exploratory direct curl to the proxy) bucket as "(idle)".
-      tokenTracker.setCurrentPreset(undefined, active.runId);
-      // 2026-05-02 (persistence lever #2): flush any pending snapshot
-      // so terminal phase is on disk before we drop the persister.
-      active.persister.stop();
-      // R8 wiring: release the clone lock so the path is reusable.
-      if (active.holdsCloneLock) {
-        try {
-          releaseLock({ clonePath: active.cfg.localPath, runId: active.runId });
-        } catch (err) {
-          this.log.warn('stop-release-lock-failed', { error: err instanceof Error ? err.message : String(err), runId: active.runId });
-        }
-      }
-      this.amendments.close(active.runId);
-      // Drop the ActiveRun from the map. The next start gets a fresh
-      // slate rather than inheriting the previous runner's terminal phase.
-      this.runs.delete(active.runId);
-    }
+    await this.stopRun(active.runId);
   }
 
   // T192 (2026-05-04): forward chain — see services/forwardChain.ts

@@ -14,6 +14,8 @@ export interface DiscussionLoopHost {
   manager: AgentManager;
   emit: (e: SwarmEvent) => void;
   getStopping: () => boolean;
+  /** Soft-drain: finish current round then stop starting new ones. */
+  getDrainRequested?: () => boolean;
   getEarlyStopDetail: () => string | undefined;
   setEarlyStopDetail: (d: string | undefined) => void;
   getRound: () => number;
@@ -97,6 +99,21 @@ export function checkRoundBudget(
   tokenBaseline: ReturnType<typeof snapshotLifetimeTokens>,
 ): boolean {
   if (host.getStopping()) return false;
+  // Soft drain: allow the previous round to finish; do not start a new one.
+  if (host.getDrainRequested?.() && r > 1) {
+    host.appendSystem(
+      `[drain] Soft stop — skipping remaining rounds after round ${r - 1}.`,
+    );
+    if (!host.getEarlyStopDetail()) {
+      host.setEarlyStopDetail("user-drain: finished current round");
+    }
+    return false;
+  }
+  if (host.getDrainRequested?.() && r === 1) {
+    // Drain requested before any round completed — still allow r=1 so
+    // we don't leave a run with zero discussion; exit after it via
+    // next check or loop exit. If drain lands mid-r1, next r fails.
+  }
   const guard = checkBudgetGuards({
     tokenBaseline,
     tokenBudget: cfg.tokenBudget,

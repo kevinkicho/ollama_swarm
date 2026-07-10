@@ -26,10 +26,24 @@ export class PipelineRunner implements SwarmRunner {
   }> = [];
   private currentRunner: SwarmRunner | null = null;
   private factory: RunnerFactory;
+  /** True if any non-terminal phase failed (used for final status). */
+  private hadPhaseFailure = false;
 
   constructor(opts: RunnerOpts, factory: RunnerFactory) {
     this.opts = opts;
     this.factory = factory;
+  }
+
+  async waitUntilSettled(): Promise<void> {
+    // start() is blocking (awaits each phase + child settle).
+  }
+
+  async drain(): Promise<void> {
+    if (this.currentRunner?.drain) {
+      await this.currentRunner.drain();
+      return;
+    }
+    await this.stop();
   }
 
   status(): SwarmStatus {
@@ -63,6 +77,8 @@ export class PipelineRunner implements SwarmRunner {
     const pipeline: PipelineConfig = cfg.pipeline ?? DEFAULT_PIPELINE;
     this.active = cfg;
     this.running = true;
+    this.stopping = false;
+    this.hadPhaseFailure = false;
     this.transcript = [];
     this.phaseResults = [];
 
@@ -125,25 +141,62 @@ export class PipelineRunner implements SwarmRunner {
       this.currentRunner = runner;
 
       try {
+        // Child start() awaits its full loop (discussion presets).
         await runner.start(phaseConfig);
+        if (typeof runner.waitUntilSettled === "function") {
+          await runner.waitUntilSettled();
+        }
       } catch (err) {
+        this.hadPhaseFailure = true;
         const msg = err instanceof Error ? err.message : String(err);
-        this.opts.logDiag?.({ type: 'pipeline-phase-failure', i, preset: phase.preset, error: msg, runId: this.active?.runId });
+        this.opts.logDiag?.({
+          type: "pipeline-phase-failure",
+          i,
+          preset: phase.preset,
+          error: msg,
+          runId: this.active?.runId,
+        });
         this.appendSystem(
           `[Pipeline] Phase ${i + 1} (${phase.preset}) failed: ${msg.slice(0, 200)}.`,
         );
-        // For first phase, treat planning failure as run failure instead of continuing.
-        // This matches expectation that if planning (e.g. council) can't produce usable output, the execution shouldn't proceed as "completed".
-        if (i === 0) {
-          this.running = false;
-          this.setPhase("failed");
-          throw err;  // propagate so orchestrator/ActiveRun sees failure
-        }
-        this.appendSystem("Continuing to next phase.");
+        // Fail-closed: any phase failure ends the pipeline (no silent
+        // "completed" with a broken middle).
+        this.phaseResults.push({
+          preset: phase.preset,
+          status: "failed",
+          transcript: runner.status().transcript ?? [],
+          deliverable: undefined,
+          agents: runner.status().agents || [],
+        });
+        this.running = false;
+        this.setPhase("failed");
+        this.currentRunner = null;
+        throw err;
       }
 
       const runnerStatus = runner.status();
       const deliverable = await readDeliverable(cfg, phase.preset, i);
+
+      if (runnerStatus.phase === "failed") {
+        this.hadPhaseFailure = true;
+        this.appendSystem(
+          `[Pipeline] Phase ${i + 1} (${phase.preset}) ended failed — stopping pipeline.`,
+        );
+        this.phaseResults.push({
+          preset: phase.preset,
+          status: "failed",
+          transcript: runnerStatus.transcript,
+          deliverable,
+          agents: runnerStatus.agents || [],
+        });
+        for (const entry of runnerStatus.transcript) {
+          this.transcript.push(entry);
+        }
+        this.running = false;
+        this.setPhase("failed");
+        this.currentRunner = null;
+        throw new Error(`Pipeline phase ${i + 1} (${phase.preset}) failed`);
+      }
 
       this.phaseResults.push({
         preset: phase.preset,
@@ -154,12 +207,8 @@ export class PipelineRunner implements SwarmRunner {
       });
 
       for (const entry of runnerStatus.transcript) {
-        // Phase 10 removal: transcript entries are concatenated transparently.
-        // No phaseIndex/phasePreset tagging (phase state emitters removed).
         this.transcript.push(entry);
       }
-
-      // Phase 10: no currentPhase/phases state updates on the composite (emitters removed).
 
       this.appendSystem(
         `[Pipeline] Completed phase ${i + 1}/${pipeline.phases.length}: ${phase.preset}`,
@@ -170,12 +219,10 @@ export class PipelineRunner implements SwarmRunner {
     this.running = false;
 
     const lastPhaseCfg = pipeline.phases[pipeline.phases.length - 1];
-    // Phase 10: autonomous exec detection is now purely based on rounds===0 for the last phase
-    // (the blackboard exec phase uses rounds=0 so its own runner manages terminal state).
     const lastWasAutonomousExec = !!(lastPhaseCfg && lastPhaseCfg.rounds === 0);
 
     if (!this.stopping && !lastWasAutonomousExec) {
-      this.setPhase("completed");
+      this.setPhase(this.hadPhaseFailure ? "failed" : "completed");
     }
 
     if (!lastWasAutonomousExec) {

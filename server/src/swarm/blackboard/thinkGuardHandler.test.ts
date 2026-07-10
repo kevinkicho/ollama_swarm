@@ -4,6 +4,8 @@ import { ThinkGuardAbortError } from "@ollama-swarm/shared/thinkGuardErrors";
 import type { RunConfig } from "../SwarmRunner.js";
 import {
   createThinkGuardHandler,
+  createDiscussionThinkGuardHandler,
+  isDiscussionDraftKind,
   isThinkGuardRefereeEligible,
   resolveRecoveryRefereeOn,
   resolveThinkGuardRefereeOn,
@@ -191,6 +193,55 @@ describe("createThinkGuardHandler", () => {
       repetition: { repeats: 6, rLen: 80 },
     });
     const result = await handler!.handleAbort(err);
+    assert.deepEqual(result, { type: "rethrow" });
+  });
+
+  it("discussion kind always gets a salvage handler (no referee gate)", () => {
+    assert.equal(isDiscussionDraftKind("discussion"), true);
+    const handler = createThinkGuardHandler({
+      getActive: () => runCfg({ thinkGuardRefereeEnabled: false }),
+      isStopping: () => false,
+      isDraining: () => false,
+      appendSystem: () => {},
+      activity: { kind: "discussion", mode: "explore", label: "draft r1" },
+    });
+    assert.ok(handler);
+  });
+});
+
+describe("createDiscussionThinkGuardHandler", () => {
+  it("soft abort with partial text → continuation then salvage", async () => {
+    const systems: string[] = [];
+    const handler = createDiscussionThinkGuardHandler({
+      appendSystem: (m) => systems.push(m),
+      activity: { kind: "discussion", label: "draft r1" },
+    });
+    const err = abortErr({
+      tier: 1,
+      thinkChars: 20_000,
+      partialText: "<think>auditing streamlit indentation</think>\n{\"issues\":[]}",
+    });
+    const first = await handler.handleAbort(err);
+    assert.equal(first.type, "continuation_prompt");
+    const second = await handler.handleAbort(err);
+    assert.equal(second.type, "return_partial");
+    if (second.type === "return_partial") {
+      assert.match(second.text, /issues/);
+    }
+    assert.ok(systems.some((s) => /discussion/i.test(s)));
+  });
+
+  it("hard loop with almost no text → rethrow", async () => {
+    const handler = createDiscussionThinkGuardHandler({
+      appendSystem: () => {},
+    });
+    const err = abortErr({
+      tier: 2,
+      thinkChars: 50_000,
+      partialText: "xx",
+      repetition: { repeats: 6, rLen: 40 },
+    });
+    const result = await handler.handleAbort(err);
     assert.deepEqual(result, { type: "rethrow" });
   });
 });

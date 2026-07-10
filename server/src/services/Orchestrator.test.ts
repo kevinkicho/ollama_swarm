@@ -149,7 +149,7 @@ describe("scanForRunParents — discovers logs/{runId}/ directories with summary
 // prompts) and MoA (same gap). The 7 other discussion runners use the
 // [HUMAN] formatter on the transcript path so they were unaffected.
 
-test("Orchestrator: cleanupStaleRuns disposes terminal runs without stop()", () => {
+test("Orchestrator: cleanupStaleRuns reaps terminal runs without runner.stop()", () => {
   assert.match(
     ORCHESTRATOR_SRC,
     /if \(run\.isRunning\(\)\) continue;\s*const phase = run\.runner\.status/,
@@ -157,8 +157,8 @@ test("Orchestrator: cleanupStaleRuns disposes terminal runs without stop()", () 
   );
   assert.match(
     ORCHESTRATOR_SRC,
-    /if \(!terminal\) continue;\s*run\.dispose\(\)/,
-    "terminal cleanup must dispose, not stop() — stop() marks user-stopped",
+    /if \(!terminal\) continue;[\s\S]*?teardown\(\{\s*stopRunner:\s*false/,
+    "terminal cleanup must not call runner.stop() — that marks user-stopped",
   );
 });
 

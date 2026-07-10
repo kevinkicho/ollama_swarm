@@ -17,11 +17,20 @@ export type AgentActivityView = {
   effectiveStatus: AgentState["status"];
   /** Wall-clock anchor for elapsed labels (thinkingSince or stream startedAt). */
   busySince?: number;
+  /** Primary card line: task + phase + elapsed when busy. */
+  primaryLine: string;
 };
 
 export type AgentActivityViewOpts = {
   streamingMeta?: StreamingMeta;
   streamingText?: string;
+  /** When run completed cleanly, stopped → "done". */
+  runCompletedCleanly?: boolean;
+  /** Preformatted elapsed (e.g. "12s"); optional. */
+  elapsed?: string | null;
+  retryAttempt?: number;
+  retryMax?: number;
+  retryReason?: string;
 };
 
 function hasLiveStreaming(
@@ -35,7 +44,18 @@ function activityImpliesBusy(phase: AgentActivityView["phase"]): boolean {
   return phase === "streaming" || isPreStreamActivityPhase(phase);
 }
 
-/** Promote ready → thinking when control/data plane signals are still in flight. */
+const IDLE_STATUSES = new Set<AgentState["status"]>([
+  "ready",
+  "stopped",
+  "failed",
+  "spawning",
+]);
+
+/**
+ * Promote ready → thinking when control/data plane signals are still in flight.
+ * Never demotes here — demotion is owned by viewAgentActivity (display) and
+ * server markStatus(ready).
+ */
 export function patchAgentForLiveSignals(
   agent: AgentState | undefined,
   opts: {
@@ -50,8 +70,16 @@ export function patchAgentForLiveSignals(
   const now = opts.now ?? Date.now();
   const actPhase = opts.activity?.phase;
   const streamLive = hasLiveStreaming(opts.streamingMeta, opts.streamingText);
-  const actBusy = actPhase ? activityImpliesBusy(actPhase) : false;
+  // Only promote from live stream or from activity while session is open.
+  // Do not promote from stale waiting activity alone when control is idle
+  // (matches dock: stale activity must not resurrect busy).
+  const actBusy =
+    actPhase
+    && activityImpliesBusy(actPhase)
+    && actPhase !== "done"
+    && streamLive; // activity-only promote requires live stream; pure waiting needs markStatus
   if (!streamLive && !actBusy) return undefined;
+  if (!streamLive && actPhase && isPreStreamActivityPhase(actPhase)) return undefined;
   const busySince =
     agent.thinkingSince
     ?? opts.streamingMeta?.startedAt
@@ -66,36 +94,114 @@ export function patchAgentForLiveSignals(
   };
 }
 
+/**
+ * Single projection for sidebar (and dock-aligned busy semantics).
+ *
+ * Durable rules:
+ * 1. Live stream ⇒ busy (data plane lag-fill).
+ * 2. agent_state thinking/retrying ⇒ busy UNLESS activity is already "done"
+ *    and stream is not live (session closed; ready was missed → demote).
+ * 3. Activity busy phases only count when control is busy OR stream is live
+ *    (stale waiting after ready does NOT keep the card busy — dock rule).
+ */
 export function viewAgentActivity(
   agent: AgentState,
   act?: AgentActivityRecord,
   opts: AgentActivityViewOpts = {},
 ): AgentActivityView {
   const streamLive = hasLiveStreaming(opts.streamingMeta, opts.streamingText);
-  const phase =
-    act?.phase
-    ?? (streamLive ? "streaming" : agent.status === "thinking" ? "waiting" : agent.status === "retrying" ? "retrying" : "idle");
-  const label = agent.activityLabel ?? act?.label;
-  const isWaiting = isPreStreamActivityPhase(phase) && !streamLive;
+  const controlBusy =
+    agent.status === "thinking" || agent.status === "retrying";
+  const activityDone = act?.phase === "done";
+  const sessionOpen = !!act && activityImpliesBusy(act.phase);
+
+  // Stale activity after ready: ignore for busy (same as dock).
+  const activityBusy =
+    sessionOpen && (controlBusy || streamLive);
+
+  // Session closed but agent_state still thinking → demote display.
+  const stickyThinking = controlBusy && activityDone && !streamLive;
+
   const busy =
-    agent.status === "thinking"
-    || agent.status === "retrying"
-    || streamLive
-    || activityImpliesBusy(phase);
+    streamLive
+    || (controlBusy && !stickyThinking)
+    || activityBusy;
+
+  const phase: AgentActivityView["phase"] =
+    stickyThinking
+      ? "idle"
+      : act?.phase
+        ?? (streamLive
+          ? "streaming"
+          : agent.status === "thinking"
+            ? "waiting"
+            : agent.status === "retrying"
+              ? "retrying"
+              : "idle");
+
+  const label = agent.activityLabel ?? act?.label;
+  const isWaiting = busy && isPreStreamActivityPhase(phase) && !streamLive;
+
   const effectiveStatus: AgentState["status"] =
-    agent.status === "retrying" || phase === "retrying"
-      ? "retrying"
-      : busy
-        ? "thinking"
-        : agent.status;
-  const busySince =
-    agent.thinkingSince
-    ?? opts.streamingMeta?.startedAt
-    ?? act?.startedAt;
+    stickyThinking
+      ? "ready"
+      : agent.status === "retrying" || phase === "retrying"
+        ? "retrying"
+        : busy
+          ? "thinking"
+          : agent.status;
+
+  const busySince = busy
+    ? agent.thinkingSince
+      ?? opts.streamingMeta?.startedAt
+      ?? act?.startedAt
+    : undefined;
+
   let statusWord: string = agent.status;
-  if (effectiveStatus === "retrying") statusWord = "retrying";
+  if (agent.status === "stopped" && opts.runCompletedCleanly) statusWord = "done";
+  else if (stickyThinking) statusWord = "ready";
+  else if (effectiveStatus === "retrying") statusWord = "retrying";
   else if (busy && phase === "streaming") statusWord = "streaming";
   else if (busy && isWaiting) statusWord = label?.trim() || "waiting";
+  else if (busy) statusWord = label?.trim() || "thinking";
+  else if (IDLE_STATUSES.has(agent.status)) statusWord = statusWord;
+
+  const elapsed = opts.elapsed ?? null;
+  const retryAttempt = opts.retryAttempt ?? agent.retryAttempt;
+  const retryMax = opts.retryMax ?? agent.retryMax;
+  const retryReason = opts.retryReason ?? agent.retryReason;
+
+  let primaryLine: string;
+  if (agent.status === "stopped" && opts.runCompletedCleanly) {
+    primaryLine = "done";
+  } else if (effectiveStatus === "retrying") {
+    primaryLine =
+      retryAttempt && retryMax
+        ? `retrying ${retryAttempt}/${retryMax}${retryReason ? ` · ${retryReason}` : ""}${elapsed ? ` · ${elapsed}` : ""}`
+        : `retrying${elapsed ? ` · ${elapsed}` : ""}`;
+  } else if (busy) {
+    const task = label?.trim();
+    const phaseWord = isWaiting
+      ? "waiting"
+      : phase === "streaming"
+        ? "streaming"
+        : "thinking";
+    const parts: string[] = [];
+    if (task) parts.push(task);
+    if (!task || task.toLowerCase() !== phaseWord) parts.push(phaseWord);
+    if (elapsed) parts.push(elapsed);
+    if (
+      agent.activityAttempt
+      && agent.activityMaxAttempts
+      && agent.activityMaxAttempts > 1
+    ) {
+      parts.push(`(${agent.activityAttempt}/${agent.activityMaxAttempts})`);
+    }
+    primaryLine = parts.join(" · ");
+  } else {
+    primaryLine = statusWord;
+  }
+
   return {
     phase,
     label,
@@ -105,6 +211,7 @@ export function viewAgentActivity(
     isBusy: busy,
     effectiveStatus,
     busySince,
+    primaryLine,
   };
 }
 

@@ -6,11 +6,19 @@ export type { ThinkGuardSession, ThinkGuardTrip } from "./thinkGuardErrors.js";
 
 /** Hard abort think-only streams before they grow into multi-minute loops. */
 export const THINK_STREAM_HARD_MAX_CHARS = 160_000;
+/**
+ * Idle MS without a new stream chunk while still think-only.
+ * While the provider keeps streaming, this clock resets — absolute ceiling
+ * is THINK_STREAM_HARD_ABSOLUTE_MAX_MS.
+ */
 export const THINK_STREAM_HARD_MAX_MS = 120_000;
+/** Absolute ceiling even when chunks keep arriving (safety net). */
+export const THINK_STREAM_HARD_ABSOLUTE_MAX_MS = 600_000;
 
-/** Soft tier — referee checkpoint when flag on (70% of hard). */
+/** Soft tier — referee checkpoint when flag on (70% of hard idle). */
 export const THINK_STREAM_SOFT_MAX_CHARS = 112_000;
 export const THINK_STREAM_SOFT_MAX_MS = 84_000;
+export const THINK_STREAM_SOFT_ABSOLUTE_MAX_MS = 420_000;
 
 export const THINK_STREAM_SOFT_MIN_THINK_FOR_MS = 5_000;
 export const THINK_STREAM_BUDGET_EXTEND_CHARS_RATIO = 0.4;
@@ -152,6 +160,10 @@ function makeTrip(tier: 1 | 2, reason: string, metrics: ThinkGuardTripMetrics): 
   return { tier, reason, metrics };
 }
 
+function idleMs(session: ThinkGuardSession): number {
+  return Math.max(0, Date.now() - (session.lastChunkAt || session.startedAt));
+}
+
 export function checkSoft(raw: string, session: ThinkGuardSession): ThinkGuardTrip | null {
   const metrics = thinkMetrics(raw, session);
   if (!metrics) return null;
@@ -160,15 +172,23 @@ export function checkSoft(raw: string, session: ThinkGuardSession): ThinkGuardTr
   if (metrics.thinkChars >= lim.softChars) {
     return makeTrip(1, `think stream exceeded ${lim.softChars.toLocaleString()} chars (soft)`, metrics);
   }
-  if (
-    metrics.thinkChars > THINK_STREAM_SOFT_MIN_THINK_FOR_MS
-    && metrics.thinkElapsedMs >= lim.softMs
-  ) {
-    return makeTrip(
-      1,
-      `think-only stream exceeded ${Math.round(lim.softMs / 1000)}s (soft)`,
-      metrics,
-    );
+  // Time trips use idle-since-last-chunk when the stream is still producing
+  // tokens; absolute ceiling still applies for runaway streams.
+  if (metrics.thinkChars > THINK_STREAM_SOFT_MIN_THINK_FOR_MS) {
+    if (metrics.thinkElapsedMs >= lim.softAbsoluteMs) {
+      return makeTrip(
+        1,
+        `think-only stream exceeded ${Math.round(lim.softAbsoluteMs / 1000)}s absolute (soft)`,
+        metrics,
+      );
+    }
+    if (idleMs(session) >= lim.softMs) {
+      return makeTrip(
+        1,
+        `think-only stream idle ${Math.round(lim.softMs / 1000)}s without new chunks (soft)`,
+        metrics,
+      );
+    }
   }
   const repSoft = detectRepetitiveTailSoft(
     extractThinkTags(raw).thoughts,
@@ -191,15 +211,21 @@ export function checkHard(raw: string, session: ThinkGuardSession): ThinkGuardTr
   if (metrics.thinkChars >= lim.hardChars) {
     return makeTrip(2, `think stream exceeded ${lim.hardChars.toLocaleString()} chars`, metrics);
   }
-  if (
-    metrics.thinkChars > THINK_STREAM_SOFT_MIN_THINK_FOR_MS
-    && metrics.thinkElapsedMs >= lim.hardMs
-  ) {
-    return makeTrip(
-      2,
-      `think-only stream exceeded ${Math.round(lim.hardMs / 1000)}s`,
-      metrics,
-    );
+  if (metrics.thinkChars > THINK_STREAM_SOFT_MIN_THINK_FOR_MS) {
+    if (metrics.thinkElapsedMs >= lim.hardAbsoluteMs) {
+      return makeTrip(
+        2,
+        `think-only stream exceeded ${Math.round(lim.hardAbsoluteMs / 1000)}s absolute`,
+        metrics,
+      );
+    }
+    if (idleMs(session) >= lim.hardMs) {
+      return makeTrip(
+        2,
+        `think-only stream idle ${Math.round(lim.hardMs / 1000)}s without new chunks`,
+        metrics,
+      );
+    }
   }
   const rep = detectRepetitiveTailHard(extractThinkTags(raw).thoughts);
   if (rep) {
@@ -217,6 +243,8 @@ function effectiveLimits(session: ThinkGuardSession): {
   hardChars: number;
   softMs: number;
   hardMs: number;
+  softAbsoluteMs: number;
+  hardAbsoluteMs: number;
 } {
   const charMul = session.budgetExtended ? 1 + THINK_STREAM_BUDGET_EXTEND_CHARS_RATIO : 1;
   const msMul = session.budgetExtended ? 1 + THINK_STREAM_BUDGET_EXTEND_MS_RATIO : 1;
@@ -225,6 +253,8 @@ function effectiveLimits(session: ThinkGuardSession): {
     hardChars: Math.round(THINK_STREAM_HARD_MAX_CHARS * charMul),
     softMs: Math.round(THINK_STREAM_SOFT_MAX_MS * msMul),
     hardMs: Math.round(THINK_STREAM_HARD_MAX_MS * msMul),
+    softAbsoluteMs: Math.round(THINK_STREAM_SOFT_ABSOLUTE_MAX_MS * msMul),
+    hardAbsoluteMs: Math.round(THINK_STREAM_HARD_ABSOLUTE_MAX_MS * msMul),
   };
 }
 
@@ -245,6 +275,7 @@ export function checkThinkStream(
   opts: { refereeOn: boolean; minThinkCharsForReferee?: number },
 ): ThinkGuardTrip | null {
   session.cumulativeText = raw;
+  session.lastChunkAt = Date.now();
   if (!opts.refereeOn) return checkHard(raw, session);
   const minThink = opts.minThinkCharsForReferee ?? 30_000;
   if (shouldRunSoftTier(raw, session, minThink)) {
@@ -261,6 +292,7 @@ export function checkThinkStream(
 export function createThinkStreamGuard(startedAt = Date.now()) {
   const session: ThinkGuardSession = {
     startedAt,
+    lastChunkAt: startedAt,
     cumulativeText: "",
     softTierTripped: false,
     budgetExtended: false,

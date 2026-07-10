@@ -19,7 +19,7 @@ import type { RepoService } from "../services/RepoService.js";
 import type { SwarmEvent } from "../types.js";
 import { extractText } from "./extractText.js";
 import { collectAllFiles } from "./BaselineRunner.js";
-import { tokenTracker } from "../services/ollamaProxy.js";
+
 import { pickProvider } from "../providers/pickProvider.js";
 import {
   runWrapUpApplyPhase,
@@ -164,16 +164,16 @@ export async function runSynthesizerHunks(
       signal: new AbortController().signal,
       agentId: input.agent.id,
     });
-    if (result.usage) {
-      tokenTracker.add({
-        ts: Date.now(),
-        promptTokens: result.usage.promptTokens,
-        responseTokens: result.usage.responseTokens,
-        durationMs: Date.now() - t0,
-        model: input.model,
-        path: `/synthesizer-hunks (${provider.id})`,
-      });
-    }
+    const { recordChatUsage } = await import("../services/ollamaProxy.js");
+    recordChatUsage({
+      promptTokens: result.usage?.promptTokens,
+      responseTokens: result.usage?.responseTokens,
+      promptText: prompt,
+      responseText: result.text,
+      durationMs: Date.now() - t0,
+      model: input.model,
+      path: `/synthesizer-hunks (${provider.id})`,
+    });
     if (result.finishReason === "error") {
       throw new Error(result.errorMessage ?? "synthesizer hunks: provider error");
     }

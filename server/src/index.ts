@@ -175,28 +175,30 @@ const broadcaster = new Broadcaster(eventLogger);
 // PID tracker for orphan process reclamation (across restarts).
 const pidTracker = new AgentPidTracker(repoRoot);
 
-function createAgentManager(runId: string): AgentManager {
-  // Per-run hub to organize pipes (realtime, persistent history, debug).
-  // This replaces direct broadcaster + eventLogger calls for better organization.
+/** One hub per run with all durable sinks. Manager + runners must share this. */
+function createRunHub(runId: string): RunEventHub {
   const hub = new RunEventHub({ runId });
   hub.registerSink(createBroadcasterSink(broadcaster));
   hub.registerSink(createEventLoggerSink(eventLogger));
-  // Debug sink for per-run categorized debug file
   hub.registerSink(createDebugSink(runId, config.LOG_DIR ?? path.join(repoRoot, "logs")));
+  return hub;
+}
 
+function createAgentManager(runId: string, hub: RunEventHub): AgentManager {
   return new AgentManager(
     (s) => hub.emitAgent({ type: "agent_state", agent: s }),
     (e) => hub.emit({ ...(e.runId === undefined ? { ...e, runId } : e) }),
-    // Diagnostic records still go to persistent log (via hub or direct for now).
     (rec) => eventLogger.log(rec),
     pidTracker,
   );
 }
 const repos = new RepoService();
 const orchestrator = new Orchestrator({
+  createHub: createRunHub,
   createManager: createAgentManager,
   repos,
-  // Emit now goes through per-run hubs created in createAgentManager for unified pipes.
+  // Fallback emit for unscoped events (no ActiveRun hub). Per-run traffic
+  // goes through the shared RunEventHub (broadcast sink) only once.
   emit: (e) => broadcaster.broadcast(e),
   logDiag: (rec) => eventLogger.log(rec),
   // V2 Step 1: Ollama base URL (proxy-aware) for the Ollama-direct
@@ -453,6 +455,22 @@ app.get("/api/usage", (req, res) => {
   const runId = typeof req.query.runId === "string" ? req.query.runId : undefined;
   // Task #159: opportunistic auto-clear on every poll (cheap).
   maybeClearStaleTransient(runId);
+
+  // Historical spend lives in per-run summary JSON under clone parents
+  // (often tens of millions of tokens). The in-process JSONL buffer was
+  // often empty when cloud providers omitted usage — merge summaries in
+  // so the topbar reflects real multi-day usage.
+  try {
+    const parents = [
+      ...orchestrator.getKnownParentPaths(),
+      orchestrator.getLastParentPath(),
+      process.cwd(),
+    ].filter((p): p is string => typeof p === "string" && p.length > 0);
+    tokenTracker.backfillFromRunSummaries(parents);
+  } catch {
+    /* best-effort — never break the usage endpoint */
+  }
+
   res.json({
     last1h: tokenTracker.totalsInWindow(60 * 60_000, "1h", runId),
     last5h: tokenTracker.totalsInWindow(5 * 60 * 60_000, "5h", runId),
@@ -472,6 +490,7 @@ app.get("/api/usage", (req, res) => {
     quota: tokenTracker.getQuotaState(runId),
     globalQuota: tokenTracker.getGlobalQuotaState(),
     proxyPressure: tokenTracker.pressure ? tokenTracker.pressure() : null,
+    source: "tokenTracker+run-summaries",
   });
 });
 
@@ -557,9 +576,11 @@ const shutdown = async (signal: string) => {
   rootLogger.info(`${signal} received — shutting down swarm`);
   try { broadcaster.detach(); } catch { /* ignore */ }
 
-  // tsx watch sends SIGTERM and immediately spawns a replacement — release
-  // the TCP port first so the new process can bind without EADDRINUSE.
-  const fastExit = signal === "SIGTERM";
+  // Release TCP listeners FIRST so ports are free even if later cleanup hangs.
+  // tsx watch sends SIGTERM and immediately spawns a replacement — port must
+  // drop before the new process binds (EADDRINUSE). Same for Ctrl+C / taskkill
+  // races: if we die mid-stopAll, :8243/:11533 must already be closed.
+  const fastExit = signal === "SIGTERM" || signal === "uncaughtException";
   try { wss.close(); } catch { /* ignore */ }
   await new Promise<void>((resolve) => {
     try {
@@ -568,6 +589,9 @@ const shutdown = async (signal: string) => {
     server.close(() => resolve());
     setTimeout(resolve, fastExit ? 400 : 5_000).unref?.();
   });
+  // Proxy is the same Node process but a separate listen() — close it with the
+  // main server, not after orchestrator.stopAll (which can take many seconds).
+  try { await proxy?.stop(); } catch { /* ignore */ }
 
   // Best-effort runner cleanup after the port is free.
   const stopBudgetMs = fastExit ? 3_000 : 20_000;
@@ -579,7 +603,6 @@ const shutdown = async (signal: string) => {
   } catch { /* ignore */ }
   stopProviderHealthScheduler();
   eventLogger.close();
-  try { await proxy?.stop(); } catch { /* ignore */ }
 
   if (!fastExit) {
     // Interactive stop (SIGINT): brief tail for killAll file writes.

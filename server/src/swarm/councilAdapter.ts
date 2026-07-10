@@ -69,6 +69,8 @@ export interface CouncilAdapterState {
   logDiag: (entry: Record<string, unknown>) => void;
   /** Shared with CouncilRunner — tool invocations attach to the next appendAgent bubble. */
   pendingToolTraceByAgent: Map<string, ToolTraceEntry[]>;
+  /** Mid-run HITL amendments (orchestrator AmendmentsBuffer). */
+  getAmendments?: () => Array<{ ts: number; text: string }>;
 }
 
 export function buildCouncilAdapterState(
@@ -81,6 +83,7 @@ export function buildCouncilAdapterState(
   emit: (e: unknown) => void,
   logDiag: (entry: Record<string, unknown>) => void,
   pendingToolTraceByAgent: Map<string, ToolTraceEntry[]>,
+  getAmendments?: () => Array<{ ts: number; text: string }>,
 ): CouncilAdapterState {
   return {
     cfg,
@@ -98,6 +101,7 @@ export function buildCouncilAdapterState(
     runStartedAt: undefined,
     manager,
     repos,
+    getAmendments,
     appendSystem,
     appendAgent,
     emit,
@@ -215,7 +219,18 @@ function councilBuildSeedContext(
     emit: state.emit,
     getTranscript,
     getPlanner: () => planner,
-    directiveWithAmendments: () => state.cfg.userDirective?.trim() || undefined,
+    directiveWithAmendments: () => {
+      const base = state.cfg.userDirective?.trim() ?? "";
+      const amendments = state.getAmendments?.() ?? [];
+      if (amendments.length === 0) return base.length > 0 ? base : undefined;
+      const nudges = amendments
+        .map((a, i) => `[user nudge #${i + 1}] ${a.text.trim()}`)
+        .filter((l) => l.length > 0)
+        .join("\n");
+      const header =
+        "MID-RUN USER NUDGES (treat as additions to the directive):";
+      return base.length > 0 ? `${base}\n\n${header}\n${nudges}` : `${header}\n${nudges}`;
+    },
     scheduleStateWrite: () => {},
     flushBoardBroadcasterSnapshot: () => {},
     v2ObserverApply: () => {},
@@ -266,7 +281,7 @@ export async function runContractDerivation(
 
   const useSharedExplore =
     allAgents.length > 1
-    && (state.cfg.councilSharedExplore ?? true);
+    && state.cfg.councilSharedExplore === true;
 
   const seedDirectEmit = isSeedSufficientForDirectEmit(seed, state.cfg);
   let sharedBrief: string | null = null;

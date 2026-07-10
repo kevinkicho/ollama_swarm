@@ -20,9 +20,11 @@ export function listenerPidsForPort(port) {
       if (r.error || typeof r.stdout !== "string") return [];
       const out = new Set();
       for (const line of r.stdout.split(/\r?\n/)) {
-        const m = /^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)/.exec(line);
-        if (m && Number.parseInt(m[1], 10) === port) {
-          const pid = Number.parseInt(m[2], 10);
+        // IPv4: 0.0.0.0:8243 … LISTENING 1234
+        // IPv6: [::]:8243 … LISTENING 1234
+        const m = /^\s*TCP\s+(\S+):(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
+        if (m && Number.parseInt(m[2], 10) === port) {
+          const pid = Number.parseInt(m[3], 10);
           if (Number.isInteger(pid) && pid > 0) out.add(pid);
         }
       }
@@ -54,8 +56,10 @@ export function listenerPidsForPort(port) {
     if (r.error || typeof r.stdout !== "string") return [];
     const out = new Set();
     for (const line of r.stdout.split(/\r?\n/)) {
-      const portM = /\*:(\d+)\b/.exec(line);
+      // *:8243 or 0.0.0.0:8243 or [::]:8243
+      const portM = /(?::|\*:)(\d+)\b/.exec(line);
       if (!portM || Number.parseInt(portM[1], 10) !== port) continue;
+      if (!/\blisten\b/i.test(line)) continue;
       const pidM = /pid=(\d+)/.exec(line);
       if (pidM) {
         const pid = Number.parseInt(pidM[1], 10);
@@ -74,11 +78,17 @@ export function killPidTree(pid) {
     const r = spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
       stdio: "ignore",
       windowsHide: true,
+      timeout: 8_000,
     });
     return r.status === 0;
   }
   try {
-    process.kill(pid, "SIGTERM");
+    // Negative PID = process group (when child was started detached with its own group).
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      process.kill(pid, "SIGKILL");
+    }
     return true;
   } catch {
     return false;
@@ -111,6 +121,37 @@ export function isPortBindable(port, host = "0.0.0.0") {
     setTimeout(() => done(false), 800);
     probe.listen(port, host);
   });
+}
+
+/**
+ * Fully synchronous free — safe for process.on("exit") / watchdog.
+ * Returns { freed, pidsKilled, stillBusy }.
+ */
+export function freePortSync(port, { retries = 5, delayMs = 200, log } = {}) {
+  const pidsKilled = [];
+  for (let attempt = 0; attempt < retries; attempt++) {
+    const listeners = listenerPidsForPort(port);
+    if (listeners.length === 0) {
+      // No LISTENING owner — treat as free (TIME_WAIT is fine for re-bind with SO_REUSEADDR).
+      return { freed: true, pidsKilled, stillBusy: false };
+    }
+    for (const pid of listeners) {
+      if (!pidsKilled.includes(pid)) pidsKilled.push(pid);
+      killPidTree(pid);
+      if (log) log(`killed PID ${pid} on :${port}`);
+    }
+    // Brief spin — exit handlers can't await.
+    const end = Date.now() + delayMs;
+    while (Date.now() < end) {
+      /* busy wait — only used on shutdown / watchdog */
+    }
+  }
+  const stillBusy = listenerPidsForPort(port).length > 0;
+  return { freed: !stillBusy, pidsKilled, stillBusy };
+}
+
+export function freePortsSync(ports, opts = {}) {
+  return ports.map((port) => ({ port, ...freePortSync(port, opts) }));
 }
 
 /**

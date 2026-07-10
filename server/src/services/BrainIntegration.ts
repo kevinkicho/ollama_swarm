@@ -13,7 +13,11 @@ import { rootLogger } from "./logger.js";
 
 export interface BrainIntegrationOpts {
   maxConcurrentRuns?: number;
+  /** Prefer routing by event.runId when present (multi-tenant safe). */
   emit: (e: any, cat?: string) => void;
+  /** Count of live (isRunning) runs — used for start cap. */
+  getLiveRunCount: () => number;
+  /** Total map size (includes terminal ghosts until reaped). */
   getRunsSize: () => number;
   getStartInProgress: () => boolean;
   getActiveRun: () => ActiveRun | null;
@@ -37,14 +41,32 @@ export class BrainIntegration {
     this.brainReady = import("../swarm/blackboard/brainOverseer/brainService.js").then(
       ({ createBrainService }) => {
         const maxConcurrentRuns = this.opts.maxConcurrentRuns ?? 4;
+        const liveCount = () =>
+          typeof this.opts.getLiveRunCount === "function"
+            ? this.opts.getLiveRunCount()
+            : this.opts.getRunsSize();
         this.brainService = createBrainService({
           maxConcurrentRuns,
           getOrchestrator: () => ({ start: (cfg) => this.opts.startRun(cfg as RunConfig) }),
-          getActiveRunCount: this.opts.getRunsSize,
-          canStartRun: () => !this.opts.getStartInProgress() && this.opts.getRunsSize() < maxConcurrentRuns,
+          getActiveRunCount: liveCount,
+          canStartRun: () =>
+            !this.opts.getStartInProgress() && liveCount() < maxConcurrentRuns,
           emit: (e, cat) => {
-            const active = this.opts.getActiveRun();
-            if (active?.hub) active.hub.emit(e, (cat as any) || "brain");
+            // Route brain events to the owning run hub when runId is known;
+            // fall back to most-recent active only for unscoped system events.
+            const rid =
+              e && typeof e === "object" && typeof (e as { runId?: unknown }).runId === "string"
+                ? (e as { runId: string }).runId
+                : undefined;
+            const target =
+              (rid ? this.opts.getRunById(rid) : undefined) ?? this.opts.getActiveRun();
+            // Prefer the run hub (has broadcast+logger sinks). Fallback only
+            // when no ActiveRun hub exists — never double-emit.
+            if (target?.hub) {
+              target.hub.emit(e, (cat as any) || "brain");
+            } else {
+              this.opts.emit(e, cat);
+            }
           },
           getRunnerForRun: (runId) => {
             const active = this.opts.getRunById(runId);

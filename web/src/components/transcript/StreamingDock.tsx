@@ -166,7 +166,12 @@ function PersistentStreamBubble({
       modelHint: model,
     });
   } else if (isLooping) {
-    subtitle = `⚠ looping (${toolCalls.length} pseudo-tool-calls)`;
+    // Client-side UI heuristic only (repeated stream tail). Server halt is
+    // separate: think-guard hard/soft tiers + tool-loop-stuck — not this badge.
+    subtitle =
+      toolCalls.length > 0
+        ? `⚠ UI loop hint (${toolCalls.length} pseudo-tool-calls) · server may still stream`
+        : `⚠ UI loop hint (repeated text) · server may still stream`;
   } else if (isDone) {
     const endAt = meta?.endedAt ?? meta?.lastTextAt ?? now;
     const totalSec = Math.round(Math.max(0, endAt - (meta?.startedAt ?? endAt)) / 1000);

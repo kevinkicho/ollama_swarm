@@ -713,6 +713,21 @@ export interface SwarmStatusSnapshot {
   // Task #39: per-agent partial-stream text captured server-side so
   // a Ctrl-R mid-stream can restore the in-progress agent turn.
   streaming?: Record<string, { text: string; updatedAt: number }>;
+  /** Last agent_activity per agent for sidebar reconnect hydrate. */
+  agentActivity?: Record<
+    string,
+    {
+      phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+      ts: number;
+      startedAt: number;
+      activityId?: string;
+      kind?: string;
+      label?: string;
+      attempt?: number;
+      maxAttempts?: number;
+      reason?: string;
+    }
+  >;
   // Phase 2a: stigmergy pheromone table for catch-up hydration.
   pheromones?: Record<string, PheromoneEntry>;
   // Phase 2d: map-reduce mapper slice assignments for catch-up.

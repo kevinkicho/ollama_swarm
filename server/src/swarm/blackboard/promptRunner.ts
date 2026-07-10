@@ -346,10 +346,12 @@ export async function promptAgent(
   try {
     const failoverCfg = buildFailoverConfig(ctx);
     const cfg = ctx.getActive();
-    const refereeOn = resolveThinkGuardRefereeOn(activity, cfg, {
-      stopping: ctx.isStopping(),
-      draining: ctx.isDraining(),
-    });
+    const resolveReferee = () =>
+      resolveThinkGuardRefereeOn(activity, ctx.getActive(), {
+        stopping: ctx.isStopping(),
+        draining: ctx.isDraining(),
+      });
+    const refereeOn = resolveReferee();
     const thinkGuardHandlerState = { continuationUsed: false };
     const thinkGuardHandler = isThinkGuardRefereeEligible(activity)
       ? createThinkGuardHandler(
@@ -374,7 +376,9 @@ export async function promptAgent(
       runId: cfg?.runId,
       onToolResultHook: buildToolCoachHook(ctx, agent),
       refereeOn,
+      getRefereeOn: resolveReferee,
       minThinkCharsForReferee: cfg?.thinkGuardRefereeMinThinkChars,
+      getMinThinkCharsForReferee: () => ctx.getActive()?.thinkGuardRefereeMinThinkChars,
       thinkGuardHandler,
       ...(activity ? { activity } : {}),
       formatExpect,

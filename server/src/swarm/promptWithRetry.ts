@@ -11,7 +11,7 @@ import { throwChatProviderError } from "./sdkError.js";
 const CLOUD_FIRST_CHUNK_TIMEOUT_MS = 360_000;
 // Do NOT add in-process :cloud admission / slot queues here — see
 // docs/decisions.md (2026-07-08: No client-side :cloud admission).
-import { tokenTracker } from "../services/ollamaProxy.js";
+import { recordChatUsage } from "../services/ollamaProxy.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { providerGateway } from "../providers/ProviderGateway.js";
 import { config } from "../config.js";
@@ -168,12 +168,21 @@ export interface PromptWithRetryOptions {
   onTool?: (info: { tool: string; ok: boolean; preview: string }) => void;
   /** Optional metadata for agent_activity events when manager is set. */
   activity?: { kind?: string; label?: string; activityId?: string; mode?: "explore" | "emit" };
+  /**
+   * When true, promptWithRetry will not auto markStatus(ready) at settle even
+   * if it opened the thinking session. Callers that chain multi-step work on
+   * the same agent set this (rare). Default: false — prompt layer owns lifecycle.
+   */
+  keepThinking?: boolean;
   /** Hard wall-clock abort (ms). Defaults from profile when unset. */
   promptWallClockMs?: number;
   /** Post-abort think-stream referee (blackboard explore only). */
   thinkGuardHandler?: ThinkGuardHandler;
   refereeOn?: boolean;
+  /** Live re-read so mid-run RECONFIG can enable referee on an in-flight stream. */
+  getRefereeOn?: () => boolean;
   minThinkCharsForReferee?: number;
+  getMinThinkCharsForReferee?: () => number | undefined;
   /** Tool-loop nudge before turn N (1-based). Worker profile gets a default when unset. */
   toolLoopNudge?: { atTurn: number; message: string };
 }
@@ -208,9 +217,9 @@ export async function promptWithRetry(
   const describe = opts.describeError ?? defaultDescribeError;
   const sleep = opts.sleep ?? defaultInterruptibleSleep;
   const agentName = opts.agentName ?? "swarm";
-  // Task #163: capture pre-call lifetime token total so we can emit
-  // a delta to opts.onTokens after the call settles.
-  const tokensBefore = opts.onTokens ? tokenTracker.total() : null;
+  // Agent-stats attribution: fire onTokens once with the same amounts we
+  // ledgered via recordChatUsage (no finally-block tracker delta — that
+  // double-counted and polluted parallel runs).
   let lastErr: unknown;
   let session = opts.manager?.resolvePromptActivity(agent.id, agent.index, opts.activity) ?? {
     activityId: opts.activity?.activityId ?? `${agent.id}-${Date.now()}`,
@@ -230,7 +239,52 @@ export async function promptWithRetry(
       ...extra,
     });
   };
-  try {
+
+  // Prompt layer owns control plane when the caller has not already marked
+  // the agent busy. Closes the "stream dock live / sidebar ready" gap for
+  // any path that only passes manager without markStatus.
+  let ownedStatus = false;
+  const canMark =
+    opts.manager
+    && typeof (opts.manager as { markStatus?: unknown }).markStatus === "function";
+  if (canMark && opts.keepThinking !== true) {
+    const mgr = opts.manager as AgentManager;
+    const cur =
+      typeof mgr.getState === "function" ? mgr.getState(agent.id) : undefined;
+    if (cur?.status !== "thinking" && cur?.status !== "retrying") {
+      mgr.markStatus(agent.id, "thinking", {
+        ...(session.kind ? { activityKind: session.kind } : {}),
+        ...(session.label ? { activityLabel: session.label } : {}),
+        thinkingSince: Date.now(),
+      });
+      ownedStatus = true;
+      // markStatus already emitted waiting activity — keep session ids in sync
+      const pa =
+        typeof mgr.getPromptActivity === "function"
+          ? mgr.getPromptActivity(agent.id)
+          : undefined;
+      if (pa) {
+        session = {
+          activityId: pa.activityId,
+          kind: pa.kind ?? session.kind,
+          label: pa.label ?? session.label,
+          emitQueued: false,
+        };
+      }
+    }
+  }
+
+  const settleOwnedStatus = () => {
+    if (!ownedStatus || !canMark || !opts.manager) return;
+    ownedStatus = false;
+    const mgr = opts.manager as AgentManager;
+    const cur =
+      typeof mgr.getState === "function" ? mgr.getState(agent.id) : undefined;
+    if (!cur || cur.status === "thinking" || cur.status === "retrying") {
+      mgr.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
+    }
+  };
+
   for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     const t0 = Date.now();
     if (attempt > 1 && opts.manager) {
@@ -300,7 +354,9 @@ export async function promptWithRetry(
             composePromptGuardSignals(opts.signal, {
               wallClockMs,
               refereeOn: opts.refereeOn === true,
+              getRefereeOn: opts.getRefereeOn,
               minThinkCharsForReferee: opts.minThinkCharsForReferee,
+              getMinThinkCharsForReferee: opts.getMinThinkCharsForReferee,
               activityKind: opts.activity?.kind,
               session: guardSession,
             });
@@ -347,26 +403,32 @@ export async function promptWithRetry(
             ...(opts.ollamaFormat !== undefined ? { format: opts.ollamaFormat } : {}),
           };
           try {
+            const { provider: pickedProvider, modelId } = pickProvider(effectiveModel);
             const r = config.PROVIDER_GATEWAY
               ? await providerGateway.chat(chatOpts)
-              : await (async () => {
-                  const { provider, modelId } = pickProvider(effectiveModel);
-                  const out = await provider.chat({ ...chatOpts, model: modelId });
-                  if (out.usage) {
-                    tokenTracker.add(
-                      {
-                        ts: Date.now(),
-                        promptTokens: out.usage.promptTokens,
-                        responseTokens: out.usage.responseTokens,
-                        durationMs: Date.now() - t0Provider,
-                        model: agent.model,
-                        path: `/sdk-direct (${provider.id})`,
-                      },
-                      opts.runId,
-                    );
-                  }
-                  return out;
-                })();
+              : await pickedProvider.chat({ ...chatOpts, model: modelId });
+            // Single record site for both gateway + direct paths. Cloud
+            // streams often omit usage — estimate from text when needed.
+            const recorded = recordChatUsage({
+              promptTokens: r.usage?.promptTokens,
+              responseTokens: r.usage?.responseTokens,
+              promptText: promptBody,
+              responseText: r.text,
+              durationMs: Date.now() - t0Provider,
+              model: effectiveModel,
+              path: config.PROVIDER_GATEWAY
+                ? `/gateway (${pickedProvider.id})`
+                : `/sdk-direct (${pickedProvider.id})`,
+              runId: opts.runId,
+            });
+            // Always notify agent-stats (even estimated) so summary
+            // tokensIn/Out stop being null on cloud models.
+            if (opts.onTokens && (recorded.promptTokens > 0 || recorded.responseTokens > 0)) {
+              opts.onTokens({
+                promptTokens: recorded.promptTokens,
+                responseTokens: recorded.responseTokens,
+              });
+            }
             if (r.finishReason === "aborted") {
               const guardErr = extractThinkGuardAbortError(guardSession, guardedSignal);
               if (guardErr && opts.thinkGuardHandler) {
@@ -405,14 +467,43 @@ export async function promptWithRetry(
           opts.manager?.markStreamingDone(agent.id);
         }
         if (result.finishReason === "error") {
-          throwChatProviderError(
-            result.errorMessage ?? "session provider chat error",
-            result.errorCause,
-          );
+          // Discussion drafts: keep partial model text when tool-loop / provider
+          // errors instead of discarding it (silent missing council rounds).
+          const isDiscussion =
+            opts.activity?.kind === "discussion"
+            || opts.activity?.kind === "council-draft"
+            || opts.activity?.kind === "draft";
+          const salvage = (result.text ?? "").trim();
+          if (isDiscussion && salvage.length >= 40) {
+            opts.manager?.recordStreamingText(agent.id, agent.index, result.text);
+            opts.manager?.markStreamingDone(agent.id, { preservePartial: true });
+            res = {
+              data: {
+                parts: [{
+                  type: "text",
+                  text:
+                    salvage
+                    + `\n\n_(draft incomplete — ${String(result.errorMessage ?? "provider error").slice(0, 160)})_`,
+                }],
+              },
+            };
+          } else {
+            throwChatProviderError(
+              result.errorMessage ?? "session provider chat error",
+              result.errorCause,
+            );
+          }
+        } else {
+          res = { data: { parts: [{ type: "text", text: result.text }] } };
         }
-        res = { data: { parts: [{ type: "text", text: result.text }] } };
       }
-      emitActivity("done", { attempt });
+      // When we own status, markStatus(ready) emits activity done.
+      // Otherwise emit done so dock/sidebar can demote without waiting for the runner.
+      if (ownedStatus) {
+        settleOwnedStatus();
+      } else {
+        emitActivity("done", { attempt });
+      }
       opts.onTiming?.({ attempt, elapsedMs: Date.now() - t0, success: true });
       return res;
     } catch (err) {
@@ -420,9 +511,18 @@ export async function promptWithRetry(
       lastErr = err;
       // Watchdog, user stop, or cap already cancelled this turn — do
       // not retry a deliberate abort.
-      if (opts.signal.aborted || isPromptGuardAbort(err)) throw err;
-      if (!isRetryableSdkError(err)) throw err;
-      if (attempt >= RETRY_MAX_ATTEMPTS) throw err;
+      if (opts.signal.aborted || isPromptGuardAbort(err)) {
+        settleOwnedStatus();
+        throw err;
+      }
+      if (!isRetryableSdkError(err)) {
+        settleOwnedStatus();
+        throw err;
+      }
+      if (attempt >= RETRY_MAX_ATTEMPTS) {
+        settleOwnedStatus();
+        throw err;
+      }
       const delayMs = RETRY_BACKOFF_MS[attempt - 1];
       const friendly = shortRetryReason(err);
       const customized = describe(err);
@@ -438,22 +538,17 @@ export async function promptWithRetry(
         delayMs,
       });
       const completed = await sleep(delayMs, opts.signal);
-      if (!completed) throw err;
+      if (!completed) {
+        settleOwnedStatus();
+        throw err;
+      }
     }
   }
   // Unreachable in practice: the loop either returns, throws, or
   // re-loops up to RETRY_MAX_ATTEMPTS times. Keep the final throw so
   // TypeScript doesn't infer `Promise<unknown | undefined>`.
+  settleOwnedStatus();
   throw lastErr ?? new Error("prompt returned no result");
-  } finally {
-    if (tokensBefore && opts.onTokens) {
-      const tokensAfter = tokenTracker.total();
-      opts.onTokens({
-        promptTokens: Math.max(0, tokensAfter.promptTokens - tokensBefore.promptTokens),
-        responseTokens: Math.max(0, tokensAfter.responseTokens - tokensBefore.responseTokens),
-      });
-    }
-  }
 }
 
 function defaultDescribeError(err: unknown): string {

@@ -17,6 +17,10 @@ import { URL } from "node:url";
 import { appendFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  collectSummaryTokenRows,
+  summaryRowsToUsageRecords,
+} from "./usageFromRunSummaries.js";
 
 export interface UsageRecord {
   ts: number;
@@ -166,6 +170,9 @@ class TokenTracker {
   private quotaByRun = new Map<string, QuotaState>();
   /** Upstream-wide Ollama quota when proxy cannot attribute a runId. */
   private globalOllamaQuota: QuotaState | null = null;
+  /** runIds already ingested from summary JSON backfill (avoid doubles). */
+  private summaryBackfillIds = new Set<string>();
+  private summaryBackfillDoneFor = "";
 
   add(r: UsageRecord, runId?: string): void {
     if (runId) r = { ...r, runId };
@@ -174,6 +181,8 @@ class TokenTracker {
     } else if (this.currentPreset && !r.preset) {
       r = { ...r, preset: this.currentPreset };
     }
+    // Never drop a completed call — zero counts still prove traffic existed.
+    // When providers omit usage, callers should pass estimateTokens() values.
     this.records.push(r);
 
     if (this.records.length > CACHE_LIMIT) {
@@ -273,6 +282,7 @@ class TokenTracker {
   }
 
   totalsInWindow(windowMs: number, label: string, runId?: string): UsageWindow {
+    this.ensureHydratedFromDisk();
     const cutoff = Date.now() - windowMs;
     let p = 0;
     let r = 0;
@@ -312,6 +322,7 @@ class TokenTracker {
 
   /** Latest N records — used by the UI to render a recent-calls table. */
   recent(n: number): readonly UsageRecord[] {
+    this.ensureHydratedFromDisk();
     if (this.records.length <= n) return [...this.records];
     return this.records.slice(-n);
   }
@@ -325,9 +336,94 @@ class TokenTracker {
     };
   }
 
+  /**
+   * If memory is empty but the on-disk buffer has rows (server started
+   * before any writes, or a race lost the hydrate), reload once.
+   */
+  ensureHydratedFromDisk(): void {
+    if (this.records.length > 0) return;
+    const fromDisk = loadPersistedRecords();
+    if (fromDisk.length === 0) return;
+    this.records = fromDisk;
+    // Track summary-backfill runIds already on disk so we don't re-add.
+    for (const rec of this.records) {
+      if (rec.runId && rec.path?.startsWith("summary-backfill:")) {
+        this.summaryBackfillIds.add(rec.runId);
+      }
+    }
+  }
+
+  /**
+   * Merge historical totals from run summary JSON under known project
+   * parents into the live tracker (deduped by runId). Replaces weaker
+   * prior backfill rows (e.g. zero-token skip → estimate) when a larger
+   * total is found.
+   */
+  backfillFromRunSummaries(parentPaths: readonly string[]): {
+    added: number;
+    updated: number;
+    scannedParents: number;
+  } {
+    this.ensureHydratedFromDisk();
+    const roots = [...new Set(parentPaths.filter(Boolean))].sort();
+    this.summaryBackfillDoneFor = roots.join("|");
+
+    const rows = collectSummaryTokenRows(roots);
+    const records = summaryRowsToUsageRecords(rows);
+    let added = 0;
+    let updated = 0;
+    for (const rec of records) {
+      const rid = rec.runId;
+      if (!rid) continue;
+      const recTotal = rec.promptTokens + rec.responseTokens;
+      if (recTotal <= 0) continue;
+
+      // Live stream records (non-summary paths) win if they already dominate.
+      const existingLive = this.records.filter(
+        (r) => r.runId === rid && !r.path?.startsWith("summary-"),
+      );
+      if (existingLive.length > 0) {
+        const liveTotal = existingLive.reduce((s, r) => s + r.promptTokens + r.responseTokens, 0);
+        if (liveTotal >= recTotal) {
+          this.summaryBackfillIds.add(rid);
+          continue;
+        }
+      }
+
+      const existingSummaryIdx = this.records.findIndex(
+        (r) => r.runId === rid && r.path?.startsWith("summary-"),
+      );
+      if (existingSummaryIdx >= 0) {
+        const prev = this.records[existingSummaryIdx]!;
+        const prevTotal = prev.promptTokens + prev.responseTokens;
+        if (prevTotal >= recTotal) {
+          this.summaryBackfillIds.add(rid);
+          continue;
+        }
+        // Upgrade estimate / weak backfill to better numbers.
+        this.records[existingSummaryIdx] = rec;
+        this.summaryBackfillIds.add(rid);
+        appendPersistedRecord(rec);
+        updated += 1;
+        continue;
+      }
+
+      this.records.push(rec);
+      this.summaryBackfillIds.add(rid);
+      appendPersistedRecord(rec);
+      added += 1;
+    }
+    if (this.records.length > CACHE_LIMIT) {
+      const overflow = this.records.length - CACHE_LIMIT;
+      this.records.splice(0, Math.max(1, Math.floor(overflow * 1.1)));
+    }
+    return { added, updated, scannedParents: roots.length };
+  }
+
   /** Total tokens since process start. Cheap "lifetime" counter for the
    *  status endpoint. */
   total(): { promptTokens: number; responseTokens: number; calls: number } {
+    this.ensureHydratedFromDisk();
     let p = 0;
     let r = 0;
     for (const rec of this.records) {
@@ -339,6 +435,7 @@ class TokenTracker {
 
   /** Lifetime totals (byModel + byPreset) for UI "All time" view. */
   totalsAllTime(label: string = "lifetime"): UsageWindow {
+    this.ensureHydratedFromDisk();
     let p = 0;
     let r = 0;
     let c = 0;
@@ -481,6 +578,50 @@ function truncateForReason(s: string, max = 160): string {
 
 export const tokenTracker = new TokenTracker();
 
+/** Rough token estimate when a provider omits usage (≈4 chars/token). */
+export function estimateTokensFromText(text: string | undefined | null): number {
+  if (!text) return 0;
+  const n = Math.ceil(text.length / 4);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/**
+ * Record one completed LLM call. Prefer real usage when present; otherwise
+ * estimate from prompt + response text so the topbar is never stuck empty
+ * after real agent work.
+ */
+export function recordChatUsage(input: {
+  promptTokens?: number;
+  responseTokens?: number;
+  promptText?: string;
+  responseText?: string;
+  durationMs: number;
+  model?: string;
+  path?: string;
+  runId?: string;
+}): { promptTokens: number; responseTokens: number } {
+  const promptTokens =
+    input.promptTokens && input.promptTokens > 0
+      ? input.promptTokens
+      : estimateTokensFromText(input.promptText);
+  const responseTokens =
+    input.responseTokens && input.responseTokens > 0
+      ? input.responseTokens
+      : estimateTokensFromText(input.responseText);
+  tokenTracker.add(
+    {
+      ts: Date.now(),
+      promptTokens,
+      responseTokens,
+      durationMs: input.durationMs,
+      model: input.model,
+      path: input.path,
+    },
+    input.runId,
+  );
+  return { promptTokens, responseTokens };
+}
+
 interface ProxyOpts {
   /** Port the proxy listens on (we'll point opencode here). */
   listenPort: number;
@@ -579,7 +720,16 @@ export function startOllamaProxy(opts: ProxyOpts): { stop: () => Promise<void> }
   return {
     stop: () =>
       new Promise<void>((resolve) => {
+        try {
+          // Drop keep-alive sockets so close() completes; otherwise stop()
+          // can hang while the main server already released :8243.
+          (server as { closeAllConnections?: () => void }).closeAllConnections?.();
+        } catch {
+          /* ignore */
+        }
         server.close(() => resolve());
+        // Bound wait — never block process exit on a stuck proxy socket.
+        setTimeout(resolve, 500).unref?.();
       }),
   };
 }
@@ -590,39 +740,15 @@ interface RecordCtx {
   path: string;
 }
 
-function recordTokensFromBody(body: string, ctx: RecordCtx, runId?: string): void {
-  if (!body) return;
-
-  const addWithRun = (rec: UsageRecord | null) => {
-    if (rec) tokenTracker.add(rec, runId); // pass runId for clean per-run isolation
-  };
-
-  // Strategy 1: single JSON response (non-streaming).
-  const trimmed = body.trim();
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-    const parsed = tryParseJson(trimmed);
-    if (parsed) {
-      addWithRun(extractTokens(parsed, ctx));
-      return;
-    }
-  }
-
-  // Strategy 2/3: SSE ("data: ...") or JSONL. Scan lines.
-  // We keep only the *last* record that has usable token counts.
-  // This is safe for incremental bounded buffer above.
-  let captured: UsageRecord | null = null;
-  for (const rawLine of body.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    let payload = line;
-    if (payload.startsWith("data:")) payload = payload.slice(5).trim();
-    if (payload === "[DONE]" || !payload || !payload.startsWith("{")) continue;
-    const parsed = tryParseJson(payload);
-    if (!parsed) continue;
-    const rec = extractTokens(parsed, ctx);
-    if (rec) captured = rec;
-  }
-  addWithRun(captured);
+/**
+ * Proxy-side token scrape DISABLED for ledger writes.
+ * App-layer recordChatUsage (promptWithRetry / chatOnce) is the single
+ * writer — recording here double-counted every local Ollama call that
+ * already went through the SDK path. Quota detection still uses status/body
+ * elsewhere; this stays as a no-op hook so the proxy stream path is unchanged.
+ */
+function recordTokensFromBody(body: string, _ctx: RecordCtx, _runId?: string): void {
+  void body;
 }
 
 function tryParseJson(s: string): unknown {
@@ -633,12 +759,11 @@ function tryParseJson(s: string): unknown {
   }
 }
 
-function extractTokens(obj: unknown, ctx: RecordCtx): UsageRecord | null {
+/** Exported for tests — pure extract without writing the ledger. */
+export function extractTokensFromProxyPayload(obj: unknown, ctx: RecordCtx): UsageRecord | null {
   if (!obj || typeof obj !== "object") return null;
   const o = obj as Record<string, unknown>;
   const usage = (o.usage && typeof o.usage === "object") ? (o.usage as Record<string, unknown>) : null;
-  // Ollama-native fields take precedence (most accurate, always present
-  // on /api/generate). OpenAI-compat usage block is the fallback.
   const promptTokens = numOrZero(o.prompt_eval_count) || numOrZero(usage?.prompt_tokens);
   const responseTokens = numOrZero(o.eval_count) || numOrZero(usage?.completion_tokens);
   if (promptTokens === 0 && responseTokens === 0) return null;

@@ -151,17 +151,31 @@ export function UsageWidget() {
   const closeDropdown = useCallback(() => setOpen(false), []);
   const { panelRef, pos: panelPos, panelStyle } = useTopbarDropdown(open, containerRef, 720, closeDropdown);
 
+  const [loaded, setLoaded] = useState(false);
+
   const fetchUsage = useCallback(async (signal?: AbortSignal) => {
     try {
       const r = await apiFetch("/api/usage", { signal });
+      if (signal?.aborted) return;
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const body = (await r.json()) as UsagePayload;
       setData(body);
-      setHeaderSnap(body.last1h.totalTokens);
+      // Prefer lifetime for the chip — last1h alone shows "0/1h" while all-time
+      // has data (or the reverse). Fall back to last1h total.
+      const lifeTok =
+        (body.lifetime?.promptTokens ?? 0) + (body.lifetime?.responseTokens ?? 0);
+      const hourTok = body.last1h?.totalTokens ?? 0;
+      setHeaderSnap(lifeTok > 0 ? lifeTok : hourTok);
       setQuota(body.quota ?? null);
       setError(null);
+      setLoaded(true);
     } catch (err) {
+      // Poll interval restarts abort in-flight requests — never treat that as failure.
+      if (signal?.aborted) return;
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (err instanceof Error && err.name === "AbortError") return;
       setError(err instanceof Error ? err.message : String(err));
+      setLoaded(true);
     }
   }, []);
 
@@ -195,22 +209,46 @@ export function UsageWidget() {
   const chipBaseCls = "rounded px-2 py-0.5 border transition flex items-center gap-1.5";
   const isPersistent = quota?.kind === "persistent";
   const isTransient = quota?.kind === "transient" || (!!quota && !quota.kind);
+  const lifetimeCalls = data?.lifetime?.calls ?? 0;
+  const lifetimeTok =
+    (data?.lifetime?.promptTokens ?? 0) + (data?.lifetime?.responseTokens ?? 0);
+  const hourTok = data?.last1h?.totalTokens ?? headerSnap;
+  const hourCalls = data?.last1h?.calls ?? 0;
+  const hasAnyUsage = lifetimeCalls > 0 || lifetimeTok > 0 || hourTok > 0;
   const chipCls = isPersistent
     ? `${chipBaseCls} text-rose-100 hover:text-white bg-rose-900/60 hover:bg-rose-900/80 border-rose-700/70 hover:border-rose-600 animate-pulse`
     : isTransient
       ? `${chipBaseCls} text-amber-100 hover:text-white bg-amber-900/40 hover:bg-amber-900/60 border-amber-700/60 hover:border-amber-600`
-      : `${chipBaseCls} text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 border-ink-700 hover:border-ink-600`;
+      : error
+        ? `${chipBaseCls} text-rose-300 hover:text-rose-100 hover:bg-ink-800/70 border-rose-800/50 hover:border-rose-700`
+        : `${chipBaseCls} text-ink-400 hover:text-ink-100 hover:bg-ink-800/70 border-ink-700 hover:border-ink-600`;
   const chipLabel = isPersistent ? "⚠ QUOTA WALL" : isTransient ? "throttled" : "tokens";
+  // Prefer last-1h for the chip when it has traffic; otherwise lifetime.
+  // Distinguish "no records" from "records with 0 counted tokens".
   const chipSubtle = isPersistent
     ? `${quota!.statusCode}`
     : isTransient
       ? `429 burst`
-      : `${fmtTokens(headerSnap)}/1h`;
+      : error
+        ? "error"
+        : !loaded
+          ? "…"
+          : !hasAnyUsage
+            ? "no data"
+            : hourCalls > 0 || hourTok > 0
+              ? `${fmtTokens(hourTok)}/1h`
+              : lifetimeTok > 0
+                ? `${fmtTokens(lifetimeTok)} all`
+                : `${lifetimeCalls} calls`;
   const chipTitle = isPersistent
     ? `Persistent Ollama quota wall (${quota!.statusCode}) — click for details`
     : isTransient
       ? "Transient concurrency throttle — clears automatically. Click for details."
-      : "Token usage — click to expand";
+      : error
+        ? `Token usage failed to load: ${error}`
+        : !hasAnyUsage && loaded
+          ? "No LLM calls recorded yet. Complete at least one agent turn after restarting the server."
+          : `Token usage — ${lifetimeCalls} call(s), ${fmtTokens(lifetimeTok)} all-time · click to expand`;
 
   const dismissQuota = useCallback(async () => {
     try {
@@ -254,13 +292,25 @@ export function UsageWidget() {
               <div className="text-ink-400 text-xs">Loading…</div>
             ) : (
               <>
+                {/* Explicit empty state when tracker has no records. */}
+                {(data.lifetime?.calls ?? 0) === 0 && (data.recent?.length ?? 0) === 0 ? (
+                  <div className="text-[11px] text-ink-400 px-2 py-2 rounded bg-ink-950/50 border border-ink-700/60 space-y-1">
+                    <div className="text-ink-200 font-medium">No data yet</div>
+                    <div>
+                      No LLM calls have been recorded yet. Totals merge live tracking with
+                      historical run summaries under your project logs.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-ink-500 px-1">
+                    Windows include live calls + historical run summaries (estimated when a
+                    summary recorded turns but omitted token counts).
+                  </div>
+                )}
                 {/* Task #213: when all 4 rolling windows show identical
                     numbers, it looks like a display bug but is actually
                     "you have no calls older than 1h". Surface the oldest
-                    record's age so the user can tell. The dev server
-                    restart wipes the in-memory tokenTracker.records
-                    buffer, so after a restart "all-time" is bounded by
-                    process uptime. */}
+                    record's age so the user can tell. */}
                 {(() => {
                   const oldest = data.recent.length > 0 ? data.recent[0].ts : null;
                   const allMatch =
@@ -277,7 +327,7 @@ export function UsageWidget() {
                     <div className="text-[10px] text-ink-500 px-2 py-1 rounded bg-ink-950/40 border border-ink-700/50">
                       All windows show identical numbers because the oldest call
                       is only <span className="text-ink-300 font-mono">{oldestStr}</span> old.
-                      Dev-server restarts wipe the tracker buffer; data accumulates over time.
+                      Tracker history is persisted across restarts (30-day retention).
                     </div>
                   );
                 })()}
@@ -450,12 +500,22 @@ function WindowCard({
   return (
     <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">
       <div className="flex items-baseline justify-between mb-0.5">
-        <div className="text-[10px] uppercase tracking-wider text-ink-500">last {label}</div>
+        <div className="text-[10px] uppercase tracking-wider text-ink-500">
+          {label === "all" ? "all time" : `last ${label}`}
+        </div>
         <div className="text-[10px] text-ink-500">{w.calls} calls</div>
       </div>
-      <div className="font-mono text-sm text-ink-100">{fmtTokens(w.totalTokens)}</div>
+      <div className={`font-mono text-sm ${w.calls === 0 ? "text-ink-500" : "text-ink-100"}`}>
+        {w.calls === 0
+          ? "—"
+          : w.totalTokens === 0
+            ? `${w.calls} call${w.calls === 1 ? "" : "s"}`
+            : fmtTokens(w.totalTokens)}
+      </div>
       <div className="text-[9px] text-ink-500 font-mono">
-        {fmtTokens(w.promptTokens)} in · {fmtTokens(w.responseTokens)} out
+        {w.calls === 0
+          ? "no calls yet"
+          : `${fmtTokens(w.promptTokens)} in · ${fmtTokens(w.responseTokens)} out`}
       </div>
       {pct !== null ? (
         <>

@@ -53,7 +53,9 @@ export class OllamaCloudProvider implements SessionProvider {
       return { role: m.role, content: m.content };
     });
 
-    return ollamaChat({
+    let usagePrompt = 0;
+    let usageResponse = 0;
+    const result = await ollamaChat({
       baseUrl: this.baseUrl,
       model: this.stripCloudSuffix(opts.model),
       messages: ollamaMessages,
@@ -65,9 +67,21 @@ export class OllamaCloudProvider implements SessionProvider {
       agentId: opts.agentId,
       apiKey: this.apiKey,
       runId: opts.runId,
+      // Same as OllamaProvider: capture prompt_eval_count / eval_count (or
+      // cloud-equivalent fields) so tool loops and recordChatUsage get real meters.
+      onTokens: (counts: { promptTokens: number; responseTokens: number }) => {
+        usagePrompt = counts.promptTokens;
+        usageResponse = counts.responseTokens;
+      },
       ...(extra.onChunk ? { onChunk: extra.onChunk } : opts.onChunk ? { onChunk: opts.onChunk } : {}),
       ...(extra.format !== undefined ? { format: extra.format } : opts.format !== undefined ? { format: opts.format } : {}),
       ...(extra.tools && extra.tools.length > 0 ? { tools: extra.tools } : {}),
     });
+    return {
+      ...result,
+      ...(usagePrompt + usageResponse > 0
+        ? { usage: { promptTokens: usagePrompt, responseTokens: usageResponse } }
+        : {}),
+    };
   }
 }

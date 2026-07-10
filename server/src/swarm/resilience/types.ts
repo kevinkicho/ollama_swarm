@@ -103,7 +103,9 @@ export interface PromptWithRetryOptions {
   promptWallClockMs?: number;
   maxToolTurns?: number;
   refereeOn?: boolean;
+  getRefereeOn?: () => boolean;
   minThinkCharsForReferee?: number;
+  getMinThinkCharsForReferee?: () => number | undefined;
   thinkGuardHandler?: import("../blackboard/thinkGuardHandler.js").ThinkGuardHandler;
   toolLoopNudge?: { atTurn: number; message: string };
 }

@@ -12,6 +12,7 @@ import {
   validateHunkPayload,
   WORKER_SYSTEM_PROMPT,
   isLiteratureTodo,
+  extractAnchorsFromTodoDescription,
 } from "./blackboard/prompts/worker.js";
 import { repairAndParseJson } from "./repairJson.js";
 import { buildResearchToolsNote } from "./blackboard/prompts/planner.js";
@@ -64,11 +65,25 @@ export interface WorkerRunnerContext {
     outcome: TodoSettledOutcome;
     detail?: string;
   }) => void;
+  /** Like onTodoSettled but includes the worker agent id (for cycle settlement). */
+  onTodoSettledByAgent?: (
+    agentId: string,
+    info: {
+      todoId: string;
+      description: string;
+      expectedFiles: readonly string[];
+      outcome: TodoSettledOutcome;
+      detail?: string;
+    },
+  ) => void;
   stopping: () => boolean;
   /** Soft drain: finish the in-flight todo, then exit without dequeuing more. */
   draining?: () => boolean;
   /** Aborted on hard stop so hung prompts fail fast. */
   promptSignal?: AbortSignal;
+  /** Register per-worker AbortController so reaper can abort stuck todos. */
+  registerTodoAbort?: (workerId: string, ctrl: AbortController) => void;
+  unregisterTodoAbort?: (workerId: string) => void;
   getSwarmControl?: () => SwarmControlCenter;
   getCoachAgent?: () => Agent | undefined;
   emit?: (e: SwarmEvent) => void;
@@ -281,36 +296,43 @@ async function runCouncilWorker(
       state.todoQueue.complete(todo.id);
       emitCouncilTodoCommitted(state.emit, todo.id);
       completed++;
-      ctx.onTodoSettled?.({
+      const settled = {
         todoId: todo.id,
         description: todo.description,
-        expectedFiles: todo.expectedFiles,
-        outcome: "completed",
-      });
+        expectedFiles: [...(todo.expectedFiles ?? [])],
+        outcome: "completed" as const,
+      };
+      ctx.onTodoSettled?.(settled);
+      ctx.onTodoSettledByAgent?.(agent.id, settled);
       await new Promise((r) => setTimeout(r, WORKER_COOLDOWN_MS + Math.floor(Math.random() * 500)));
     } else if (result.outcome === "skipped") {
+      // Record agent before skip clears workerId.
+      const settled = {
+        todoId: todo.id,
+        description: todo.description,
+        expectedFiles: [...(todo.expectedFiles ?? [])],
+        outcome: "skipped" as const,
+        detail: result.reason,
+      };
+      ctx.onTodoSettledByAgent?.(agent.id, settled);
       state.todoQueue.skip(todo.id, result.reason);
       emitCouncilTodoSkipped(state.emit, state.todoQueue, todo.id);
       skipped++;
-      ctx.onTodoSettled?.({
+      ctx.onTodoSettled?.(settled);
+    } else {
+      const settled = {
         todoId: todo.id,
         description: todo.description,
-        expectedFiles: todo.expectedFiles,
-        outcome: "skipped",
-        detail: result.reason,
-      });
-    } else {
+        expectedFiles: [...(todo.expectedFiles ?? [])],
+        outcome: "failed" as const,
+        detail: result.error,
+      };
+      ctx.onTodoSettledByAgent?.(agent.id, settled);
       state.todoQueue.fail(todo.id, result.error);
       emitCouncilTodoFailed(state.emit, state.todoQueue, todo.id);
       failed++;
       ctx.recordFailure?.(todo.id, todo.description, result.error.slice(0, 200));
-      ctx.onTodoSettled?.({
-        todoId: todo.id,
-        description: todo.description,
-        expectedFiles: todo.expectedFiles,
-        outcome: "failed",
-        detail: result.error,
-      });
+      ctx.onTodoSettled?.(settled);
     }
   }
 
@@ -534,6 +556,12 @@ async function tryWorkerPrompt(
   const workerProfile = effectiveToolProfileId("swarm-builder", state.cfg) as ToolProfileId;
   const workerToolTurnCap = resolveMaxToolTurnsForProfile(workerProfile);
 
+  // Planner anchors + headings pulled from free-text todo descriptions.
+  const descAnchors = extractAnchorsFromTodoDescription(todo.description);
+  const expectedAnchors = [
+    ...new Set([...(todo.expectedAnchors ?? []), ...descAnchors]),
+  ];
+
   const progressBlock = wrapProgressContextForPrompt(state.progressContext ?? "");
   const userBlock = opts.repairFrom
     ? buildWorkerRepairPrompt(opts.repairFrom.previousResponse, opts.repairFrom.parseError)
@@ -542,6 +570,7 @@ async function tryWorkerPrompt(
         description: adjustedDesc,
         expectedFiles,
         fileContents,
+        expectedAnchors,
         directive: state.cfg.userDirective,
         webToolsEnabled,
         researchNotes,
@@ -555,8 +584,15 @@ async function tryWorkerPrompt(
 
   try {
     const controller = new AbortController();
-    const onPromptAbort = () => controller.abort(new Error("user stop"));
+    const onPromptAbort = () => {
+      try {
+        controller.abort(ctx.promptSignal?.reason ?? new Error("user stop"));
+      } catch {
+        /* ignore */
+      }
+    };
     ctx.promptSignal?.addEventListener("abort", onPromptAbort, { once: true });
+    ctx.registerTodoAbort?.(agent.id, controller);
     try {
     const raw = await promptWithFailoverAuto(agent, basePrompt, {
       manager: state.manager as any,
@@ -666,10 +702,14 @@ async function tryWorkerPrompt(
     return { outcome: "retry", reason: "worker response could not be committed", lastResponse: res };
     } finally {
       ctx.promptSignal?.removeEventListener("abort", onPromptAbort);
+      ctx.unregisterTodoAbort?.(agent.id);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (ctx.stopping()) return { outcome: "skipped", reason: "run stopping" };
+    if (/reaper:/i.test(msg)) {
+      return { outcome: "failed", error: msg.slice(0, 200) };
+    }
     const reason = summarizeWorkerFailureReason(msg);
     ctx.appendSystem(`[execution] ${agent.id} error: ${reason}`);
     return { outcome: "retry", reason: msg };

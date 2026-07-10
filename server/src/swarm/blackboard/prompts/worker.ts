@@ -63,10 +63,32 @@ const AppendHunkSchema = z.object({
   content: z.string().min(1).max(CONTENT_MAX),
 });
 
+const WriteHunkSchema = z.object({
+  op: z.literal("write"),
+  file: FILE_FIELD,
+  content: z.string().max(CONTENT_MAX),
+});
+
+const ReplaceBetweenHunkSchema = z.object({
+  op: z.literal("replace_between"),
+  file: FILE_FIELD,
+  start: z.string().min(1).max(SEARCH_MAX),
+  endExclusive: z.string().min(1).max(SEARCH_MAX).optional(),
+  replace: z.string().max(CONTENT_MAX),
+});
+
+const DeleteHunkSchema = z.object({
+  op: z.literal("delete"),
+  file: FILE_FIELD,
+});
+
 const HunkSchema = z.discriminatedUnion("op", [
   ReplaceHunkSchema,
   CreateHunkSchema,
   AppendHunkSchema,
+  WriteHunkSchema,
+  ReplaceBetweenHunkSchema,
+  DeleteHunkSchema,
 ]);
 
 // Per-response hunk budget. 8 lets a worker make several focused edits to a
@@ -92,15 +114,16 @@ export function validateHunkPayload(hunks: readonly Hunk[]): WorkerParseResult {
         return {
           ok: false,
           reason:
-            `replace hunk on "${h.file}" is ${size} chars (soft max ${HUNK_REPLACE_SOFT_MAX}) — split into smaller section edits`,
+            `replace hunk on "${h.file}" is ${size} chars (soft max ${HUNK_REPLACE_SOFT_MAX}) — use op "replace_between" or "write", or split into smaller section edits`,
         };
       }
     }
+    // write / replace_between are the intentional bulk path — only hard schema max applies.
     if (h.op === "create" && h.content.length > HUNK_REPLACE_SOFT_MAX) {
       return {
         ok: false,
         reason:
-          `create hunk on "${h.file}" is ${h.content.length} chars (soft max ${HUNK_REPLACE_SOFT_MAX}) — split into multiple hunks`,
+          `create hunk on "${h.file}" is ${h.content.length} chars (soft max ${HUNK_REPLACE_SOFT_MAX}) — use op "write" for large new files or split`,
       };
     }
     if (h.op === "append" && h.content.length > HUNK_REPLACE_SOFT_MAX) {
@@ -191,23 +214,28 @@ export const WORKER_SYSTEM_PROMPT = [
   "1. Output ONLY a JSON object. No prose. No markdown fences. No commentary before or after.",
   "2. Shape: {\"hunks\": [ ...search/replace hunks ]}",
   "3. Each hunk has an `op` and a `file`. `file` MUST be one of the paths in the TODO's expectedFiles list — do not touch any other file.",
-  "4. Four ops, pick the right one for each change:",
+  "4. Ops — pick the right one for each change:",
   "   - {\"op\": \"replace\", \"file\": \"...\", \"search\": \"<EXACT text to find>\", \"replace\": \"<new text>\"}",
-  "     The `search` text must appear EXACTLY ONCE in the current file. Include enough surrounding context to be unique. If the same phrase appears twice, extend `search` until it's unique — otherwise the hunk is rejected.",
+  "     The `search` text must appear EXACTLY ONCE in the current file. Include enough surrounding context to be unique. Best for small, local edits.",
+  "   - {\"op\": \"replace_between\", \"file\": \"...\", \"start\": \"## Section\", \"endExclusive\": \"## Next\", \"replace\": \"<new section body including start heading if needed>\"}",
+  "     PREFERRED for large section rewrites / deletions. `start` must be unique; `endExclusive` is the first marker AFTER the section (not included in the deleted span). Omit `endExclusive` to replace from `start` through EOF.",
+  "   - {\"op\": \"write\", \"file\": \"...\", \"content\": \"<entire new file body>\"}",
+  "     Full-file rewrite or create. Use when most of the file should change or the TODO is an overhaul.",
   "   - {\"op\": \"create\", \"file\": \"...\", \"content\": \"<entire file contents>\"}",
-  "     Only valid when the file does not yet exist. Use this for scaffolding new files.",
+  "     Only valid when the file does not yet exist. Prefer \"write\" if unsure whether the file exists.",
   "   - {\"op\": \"append\", \"file\": \"...\", \"content\": \"<text to append at end of file>\"}",
   "     Use when you need to add at the very end and there's no stable anchor to replace (e.g. appending a new CHANGELOG entry).",
   "   - {\"op\": \"delete\", \"file\": \"...\"}",
-  "     Deletes the entire file. Only valid when the TODO explicitly requires removing a file (e.g. removing duplicates, cleaning up deprecated code).",
+  "     Deletes the entire file. Only valid when the TODO explicitly requires removing a file.",
   "5. Multiple hunks per file are allowed and applied in order — each hunk sees the output of the previous one.",
   "6. If the TODO is genuinely impossible or unsafe, respond with: {\"hunks\": [], \"skip\": \"brief reason\"}. Do NOT skip because expected files don't exist — that means you need to CREATE them. Do NOT skip because the work looks 'already done' — read the file contents and verify. If the file exists and its content already matches the TODO goal, then skip.",
   `7. Maximum ${MAX_HUNKS} hunks per response.`,
   "8. CRITICAL — USER DIRECTIVE: When a USER DIRECTIVE block is present below, it is AUTHORITATIVE. Your implementation MUST serve the directive's intent. Do NOT create mock/fake/placeholder data — the directive explicitly forbids it. Do NOT contradict or ignore the directive. Every file you create or modify must align with what the directive asks for.",
+  "9. You may call propose_hunks during the tool loop to dry-run or apply hunks and get feedback (ok / search not found + nearby file excerpt) BEFORE your final JSON response.",
   "",
   "You will be given the TODO description, the expected file paths, and the current contents of each file (or a note that it does not exist).",
   "",
-  "LARGE FILES: any file above 16000 chars is shown WINDOWED — you will see the first 6000 chars, a marker noting how many chars are omitted, then the last 6000 chars. To edit text in the omitted middle region, either use op \"append\" for end-of-file additions, or use op \"replace\" with a \"search\" anchor that is unique and visible in the shown head or tail. Do not try to reproduce the whole file back — use hunks.",
+  "LARGE FILES: any file above 16000 chars is shown WINDOWED — first 6000 chars, a gap marker, then last 6000 chars. Do NOT invent a giant exact `search` spanning the omitted middle. For middle/section work use op \"replace_between\" with headings visible in head/tail (or from grep/read tools), or op \"write\" for a full rewrite. Use propose_hunks to validate anchors mid-turn.",
   "",
   // 2026-05-02: few-shot examples. Open-weights models (glm-5.1,
   // gemma4) consistently produce hunks with non-unique `search`
@@ -280,22 +308,49 @@ export interface WorkerSeed {
   projectGraphSlice?: string;
 }
 
-/** Read-only repo tools available to hunk workers (swarm-read profile). */
+/** Repo tools available to hunk workers (builder profile). */
 export function buildWorkerToolsNote(): string {
   return [
-    "=== AVAILABLE TOOLS (read-only repo inspection) ===",
-    "You have read, grep, glob, and list tools scoped to the clone.",
-    "Use them BEFORE emitting hunks when:",
-    "  - expectedFiles are windowed and you need text from the omitted middle",
+    "=== AVAILABLE TOOLS ===",
+    "You have read, grep, glob, list, bash, and propose_hunks (plus web tools when enabled).",
+    "Use inspection tools when:",
+    "  - expectedFiles are windowed and you need headings/anchors from the omitted middle",
     "  - you must verify an anchor is unique or exists",
     "  - you need to check for duplicate routes/endpoints/API keys elsewhere in the repo",
-    "Do NOT use tools to write files — output hunks in JSON only.",
+    "Use propose_hunks to dry-run or apply {hunks:[...]} mid-turn and receive apply feedback",
+    "  (success preview, or failure with nearby file excerpt). Prefer replace_between/write for bulk edits.",
+    "Final delivery is still a JSON {\"hunks\":[...]} response (or skip) so the runner can commit.",
     "=== end TOOLS NOTE ===",
   ].join("\n");
 }
 
 export function isLiteratureTodo(description: string): boolean {
   return /literature|research|survey|review|paper|arxiv|citation|sources?|web search|findings/i.test(description);
+}
+
+/**
+ * Pull section/heading anchors from free-text todo descriptions so windowed
+ * files get middle excerpts without requiring the planner to fill expectedAnchors.
+ */
+export function extractAnchorsFromTodoDescription(description: string): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string) => {
+    const a = raw.trim();
+    if (a.length < 3 || a.length > 120) return;
+    if (seen.has(a)) return;
+    seen.add(a);
+    found.push(a);
+  };
+  // Markdown headings mentioned in the todo text
+  for (const m of description.matchAll(/#{1,6}\s+[^\n"'`]{2,100}/g)) {
+    push(m[0]);
+  }
+  // Quoted section titles often used in prose todos
+  for (const m of description.matchAll(/['"](#{1,6}\s+[^'"]{2,100}|[A-Z][^'"]{2,80})['"]/g)) {
+    push(m[1] ?? "");
+  }
+  return found.slice(0, 8);
 }
 
 export function buildWorkerUserPrompt(seed: WorkerSeed): string {

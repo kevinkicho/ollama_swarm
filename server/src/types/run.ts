@@ -76,6 +76,11 @@ export interface SwarmStatus {
   // by agentId; present only for agents whose stream hasn't yet hit
   // session.idle. Empty / absent when no stream is active.
   streaming?: Record<string, SwarmStatusStreamingEntry>;
+  /**
+   * Last agent_activity per agent — control-plane session phase/label for
+   * sidebar hydrate after refresh (not WS-only).
+   */
+  agentActivity?: Record<string, SwarmStatusAgentActivity>;
   // Phase 2a: stigmergy pheromone table keyed by file path. Only
   // populated for stigmergy runs; other presets omit it.
   pheromones?: Record<string, SwarmStatusPheromoneEntry>;
@@ -109,6 +114,18 @@ export interface SwarmStatus {
 export interface SwarmStatusStreamingEntry {
   text: string;
   updatedAt: number;
+}
+
+export interface SwarmStatusAgentActivity {
+  phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+  ts: number;
+  startedAt: number;
+  activityId?: string;
+  kind?: string;
+  label?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  reason?: string;
 }
 
 // Phase 2a (2026-04-24): stigmergy-only pheromone table. File path →

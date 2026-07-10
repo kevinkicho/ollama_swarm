@@ -86,6 +86,24 @@ import {
 } from "./councilProgress.js";
 import { runCouncilCycle } from "./councilRunCycle.js";
 
+/**
+ * Ambition tier cap for council (mirrors blackboard tierRunner.resolvedMaxTiers).
+ * rounds===0 / continuous → unbounded; ambitionTiers=0 disables ratchet;
+ * ambitionTiers>0 caps climb; otherwise keep open-ended (council default).
+ */
+export function resolveCouncilMaxTiers(cfg: Pick<RunConfig, "rounds" | "ambitionTiers">): number {
+  if (cfg.rounds === 0 || cfg.rounds >= 1_000_000) return Infinity;
+  const perRun = cfg.ambitionTiers;
+  if (perRun !== undefined) {
+    // 0 = explicitly disable further tiers (stay on tier 1 after settlement).
+    if (perRun <= 0) return 1;
+    return Math.max(1, perRun);
+  }
+  // Council historically ratchets without a cap when rounds is finite and
+  // ambitionTiers is unset — preserve that so multi-cycle ambition still works.
+  return Infinity;
+}
+
 export class CouncilRunner extends DiscussionRunnerBase {
   protected getPresetName(): string { return "Council"; }
 
@@ -101,7 +119,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private maxTiers = Infinity;
 
   private drainResolve: (() => void) | undefined;
-  private drainRequested = false;
+  // drainRequested: inherited protected from DiscussionRunnerBase
 
   /** True when the run is draining or hard-stopping — skip audit / new cycle work. */
   private closingRequested(): boolean {
@@ -109,7 +127,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
   }
   private stopAbortController: AbortController | undefined;
   private stopInFlight: Promise<void> | null = null;
-  private loopPromise: Promise<void> | null = null;
+  // loopPromise inherited from DiscussionRunnerBase (waitUntilSettled / drain)
   /** Set while drainTodos / runCouncilWorkers is in flight — stop waits for this. */
   private workerDrainPromise: Promise<void> | null = null;
   /** After close-out begins, drop straggler worker transcript lines. */
@@ -193,6 +211,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
       (e) => this.opts.emit(e as SwarmEvent),
       (entry) => this.opts.logDiag?.(entry as any),
       this.pendingToolTraceByAgent,
+      () => this.opts.getAmendments?.() ?? [],
     );
 
     // Gather project context
@@ -256,12 +275,15 @@ export class CouncilRunner extends DiscussionRunnerBase {
     this.stopAbortController = new AbortController();
     this.stopInFlight = null;
     this.drainRequested = false;
+    // Await the loop so start() settles when the council is truly done
+    // (pipeline / orchestrator natural-complete depend on this).
     this.loopPromise = this.loop(cfg)
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
         this.opts.emit({ type: "error", message: msg });
       })
       .finally(() => this.ensureTerminalCloseOut());
+    await this.loopPromise;
   }
 
   /** Idempotent backstop when loop exits without a summary (crash, throw, or race with stop). */
@@ -362,10 +384,23 @@ export class CouncilRunner extends DiscussionRunnerBase {
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
-    const isAutonomous = cfg.rounds === 0;
+    // rounds===0: open-ended ambition ratchet (user Stop / hard stop ends it).
+    // rounds>=1e6: continuous-mode rewrite of "unbounded" from startRoute.
+    const isAutonomous = cfg.rounds === 0 || cfg.rounds >= 1_000_000;
+    // Resolve ambition cap once per run (matches blackboard tierRunner).
+    this.maxTiers = resolveCouncilMaxTiers(cfg);
     let cycle = 0;
 
     await this.runDiscussionLoop(cfg, "Council", async (cfg) => {
+      if (isAutonomous) {
+        this.appendSystem(
+          `[council] Autonomous mode (rounds=${cfg.rounds === 0 ? 0 : "continuous"}) — ambition ratchet continues until Stop or a hard stop reason.`,
+        );
+      } else if (this.maxTiers > 1 && Number.isFinite(this.maxTiers)) {
+        this.appendSystem(
+          `[council] Ambition ratchet enabled (max ${this.maxTiers} tier(s)); cycle budget rounds=${cfg.rounds}.`,
+        );
+      }
       while (!this.closingRequested()) {
         cycle++;
         this.state.stopping = this.closingRequested();
@@ -373,16 +408,26 @@ export class CouncilRunner extends DiscussionRunnerBase {
 
         if (result === "stop") break;
         if (result === "retry") {
+          // Ambition tier-up, unmet criteria with new todos, stall backoff, etc.
           await new Promise((r) => setTimeout(r, 1000));
           continue;
         }
+        // result === "done"
         if (this.executionOnlyResume) {
           this.appendSystem("[resume] Execution-only resume complete — finishing run.");
           break;
         }
-        if (!isAutonomous || this.closingRequested()) break;
-        this.earlyStopDetail = undefined;
-        await new Promise((r) => setTimeout(r, 2000));
+        if (this.closingRequested()) break;
+        if (isAutonomous) {
+          // Open-ended: never treat a soft "done" as terminal — keep cycling
+          // so ambition / stretch work can keep progressing.
+          this.earlyStopDetail = undefined;
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        // Finite rounds: soft "done" ends the run. Tier promotion and unmet
+        // work return "retry" above, so this path is for true settlement.
+        break;
       }
       this.appendCouncilTerminalMessage();
     }, {
@@ -438,7 +483,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
     cycle: number,
     info: {
       description: string;
-      expectedFiles: readonly string[];
+      expectedFiles?: readonly string[] | null;
       outcome: "completed" | "skipped" | "failed";
       detail?: string;
     },
@@ -566,6 +611,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
       setEarlyStopDetail: (s) => {
         this.earlyStopDetail = s;
       },
+      logDiag: this.opts.logDiag
+        ? (entry) => this.opts.logDiag?.(entry as Record<string, unknown>)
+        : undefined,
     };
   }
 
@@ -624,6 +672,11 @@ export class CouncilRunner extends DiscussionRunnerBase {
       runnerName: "council",
       agentName: resolveCouncilToolProfile(this.active),
       stats: this.stats,
+      activity: {
+        kind: "discussion",
+        label: round === 1 ? `draft r${round}` : `reveal r${round}`,
+        mode: "explore",
+      },
       enrichSummary: {
         kind: "council_draft",
         round,

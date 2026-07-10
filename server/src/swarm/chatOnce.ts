@@ -11,7 +11,7 @@
 
 import type { Agent } from "../services/AgentManager.js";
 import { pickProvider } from "../providers/pickProvider.js";
-import { tokenTracker } from "../services/ollamaProxy.js";
+
 import { throwChatProviderError } from "./sdkError.js";
 import {
   isRetryableSdkError,
@@ -80,7 +80,9 @@ export interface ChatOnceOpts {
   promptWallClockMs?: number;
   /** When false (default), think guard uses hard tier only. */
   refereeOn?: boolean;
+  getRefereeOn?: () => boolean;
   minThinkCharsForReferee?: number;
+  getMinThinkCharsForReferee?: () => number | undefined;
 }
 
 // Mirrors what `agent.client.session.prompt` returns so callers don't
@@ -119,7 +121,9 @@ async function chatOnceOnce(
     const { signal, wrapOnChunk, cleanup: guardCleanup } = composePromptGuardSignals(baseSignal, {
       wallClockMs,
       refereeOn: opts.refereeOn === true,
+      getRefereeOn: opts.getRefereeOn,
       minThinkCharsForReferee: opts.minThinkCharsForReferee,
+      getMinThinkCharsForReferee: opts.getMinThinkCharsForReferee,
     });
     // Default clonePath to agent.cwd (set by AgentManager.spawnAgent /
     // spawnAgent) so callers don't have to plumb it through
@@ -165,16 +169,17 @@ async function chatOnceOnce(
     } finally {
       guardCleanup();
     }
-    if (result.usage) {
-      tokenTracker.add({
-        ts: Date.now(),
-        promptTokens: result.usage.promptTokens,
-        responseTokens: result.usage.responseTokens,
-        durationMs: Date.now() - t0,
-        model: agent.model,
-        path: `/sdk-direct (${provider.id})`,
-      });
-    }
+    const { recordChatUsage } = await import("../services/ollamaProxy.js");
+    recordChatUsage({
+      promptTokens: result.usage?.promptTokens,
+      responseTokens: result.usage?.responseTokens,
+      promptText: opts.promptText,
+      responseText: result.text,
+      durationMs: Date.now() - t0,
+      model: agent.model,
+      path: `/sdk-direct (${provider.id})`,
+      runId: opts.runId,
+    });
     if (result.finishReason === "error") {
       throwChatProviderError(
         result.errorMessage ?? "chatOnce: provider error",

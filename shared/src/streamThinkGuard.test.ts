@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  checkHard,
   checkThinkStream,
   createThinkGuardSession,
   createThinkStreamGuard,
@@ -73,5 +74,15 @@ describe("checkThinkStream", () => {
     assert.ok(trip);
     assert.equal(trip!.tier, 1);
     assert.match(trip!.reason, /mixed stream/i);
+  });
+
+  it("hard MS is idle-based: active streaming (fresh lastChunkAt) does not trip at 120s absolute", () => {
+    // Session started 3 minutes ago (would have tripped old absolute 120s rule).
+    const startedAt = Date.now() - 180_000;
+    const session = createThinkGuardSession(startedAt);
+    // Chunk just arrived — idle is ~0.
+    session.lastChunkAt = Date.now();
+    const raw = nonRepeatingThink(40_000);
+    assert.equal(checkHard(raw, session), null);
   });
 });

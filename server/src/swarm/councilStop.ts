@@ -69,9 +69,16 @@ export async function councilStop(host: CouncilStopHost): Promise<void> {
   return p;
 }
 
+/**
+ * Soft drain: mark draining and return promptly so HTTP /drain can release.
+ * Wait + close-out runs in the background. Hard stop() can still escalate
+ * immediately (enterImmediateShutdown unblocks waiters via drainResolve).
+ */
 export async function councilDrain(host: CouncilStopHost): Promise<void> {
   if (host.getStopInFlight()) return host.getStopInFlight()!;
   if (host.getPhase() === "stopped" || host.getPhase() === "completed") return;
+  // Already soft-draining — idempotent no-op (watcher/background continues).
+  if (host.getDrainRequested() || host.getPhase() === "draining") return;
 
   const q = host.getTodoCounts();
   const inFlight = (q?.inProgress ?? 0) + (q?.pending ?? 0);
@@ -84,15 +91,11 @@ export async function councilDrain(host: CouncilStopHost): Promise<void> {
       host.setDrainRequested(true);
       host.setPhase("draining");
       host.appendSystem(
-        "[drain] Finishing in-flight discussion turn(s), then stopping (no new claims).",
+        "[drain] Finishing in-flight discussion turn(s), then stopping (no new claims). " +
+          "Press Stop to escalate immediately.",
       );
-      const DRAIN_DISCUSSION_TIMEOUT = 180_000;
-      await waitForAgentsIdle(host, DRAIN_DISCUSSION_TIMEOUT);
-      host.setStopping(true);
-      if (host.hasState()) host.setStateStopping(true);
-      const p = awaitLoopThenCloseOut(host, { immediate: true });
-      host.setStopInFlight(p);
-      return p;
+      void finishCouncilDrainInBackground(host, { mode: "discussion" });
+      return;
     }
     host.appendSystem(
       "Drain not applicable (no in-flight execution todos — use Stop for immediate exit). Stopping immediately.",
@@ -102,24 +105,49 @@ export async function councilDrain(host: CouncilStopHost): Promise<void> {
 
   host.setDrainRequested(true);
   host.setPhase("draining");
+  host.appendSystem(
+    `[drain] Soft stop — finishing in-flight work (${inFlight} todo(s)), no new claims. ` +
+      "Press Stop to escalate immediately.",
+  );
+  void finishCouncilDrainInBackground(host, { mode: "execution" });
+}
 
+async function finishCouncilDrainInBackground(
+  host: CouncilStopHost,
+  opts: { mode: "discussion" | "execution" },
+): Promise<void> {
   const DRAIN_TIMEOUT = 180_000;
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      host.appendSystem("[drain] Timeout waiting for workers — forcing stop.");
-      resolve();
-    }, DRAIN_TIMEOUT);
-    const origResolve = host.getDrainResolve();
-    host.setDrainResolve(() => {
-      clearTimeout(timer);
-      resolve();
-      origResolve?.();
-    });
-  });
+  try {
+    if (opts.mode === "discussion") {
+      await waitForAgentsIdle(host, DRAIN_TIMEOUT);
+    } else {
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          host.appendSystem("[drain] Timeout waiting for workers — forcing stop.");
+          resolve();
+        }, DRAIN_TIMEOUT);
+        const origResolve = host.getDrainResolve();
+        host.setDrainResolve(() => {
+          clearTimeout(timer);
+          resolve();
+          origResolve?.();
+        });
+      });
+    }
+  } catch {
+    // best-effort — still close out below unless hard stop already finished
+  }
 
+  // Hard stop already took over.
+  if (host.getStopInFlight()) return;
+  if (host.getPhase() === "stopped" || host.getPhase() === "completed") return;
+  if (host.getStopping() && host.getPhase() === "stopping") return;
+
+  host.setStopping(true);
+  if (host.hasState()) host.setStateStopping(true);
   const p = awaitLoopThenCloseOut(host, { immediate: true });
   host.setStopInFlight(p);
-  return p;
+  await p.catch(() => {});
 }
 
 export async function awaitLoopThenCloseOut(

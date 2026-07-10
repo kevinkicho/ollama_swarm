@@ -1,6 +1,6 @@
 # Agent activity signaling (study notes)
 
-**Status:** Documented for future work — no implementation yet.  
+**Status:** Core control-plane fixes landed (2026-07) — single hub, prompt-owned lifecycle, activity in `/status`, sidebar demotion.  
 **Context:** Observed during run `d3a99661` — agent-1 streaming dock showed live work while sidebar stayed `ready` (green).
 
 ## Problem statement
@@ -68,15 +68,15 @@ Explore turns (contract/planner with tools) may leave DeepSeek `<function>…</f
 
 Agent-1 dock showed `done · 6,051 chars · 5s total` with JSON todo array (`description` + `expectedFiles`, max 6 items) — format from **standup synthesis**, not standup turn (`issue` / `file` / `severity`). Sidebar remained `ready` for the entire 5s generation.
 
-## Architectural direction (when ready)
+## Architectural direction (implemented 2026-07)
 
-Not per-callsite wrappers. Prefer **one emission point**:
+One emission plane per run:
 
-- Prompt layer (`promptWithRetry` / `AgentManager`) owns prompt-session lifecycle: `activity_start` → streaming → `activity_end`
-- Runners emit **domain** events only (transcript, todos, contract)
-- UI projections (sidebar, dock, transcript) derive from one activity projection
-
-Alternative names: control plane vs data plane, or media stream vs session state machine.
+- **Single `RunEventHub`** created via `createHub(runId)` with broadcast + eventLogger + debug sinks; `createManager(runId, hub)` + runner `wrappedEmit` share it (no double-broadcast).
+- **Prompt layer** (`promptWithRetry`) owns lifecycle when the caller has not already marked thinking: `markStatus(thinking)` → streaming activity → `markStatus(ready)` (or activity `done` when caller owns ready).
+- **`AgentManager.recordAgentState` merges** — partial runner emits cannot wipe `activityLabel` / `thinkingSince`.
+- **`agentActivity` in REST `/status`** + hydrate into the client store (not WS-only).
+- **UI single projection** (`viewAgentActivity`): demotes sticky thinking when activity is `done`; ignores stale activity when control is idle (dock-aligned); primary line = task · phase · elapsed.
 
 ## Related files
 

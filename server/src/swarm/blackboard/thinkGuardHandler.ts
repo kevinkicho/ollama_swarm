@@ -48,6 +48,11 @@ export function isPlannerRefereeKind(kind?: string): boolean {
   return kind === "contract" || kind === "planner-todos" || kind === "replan";
 }
 
+/** Council/discussion draft rounds — salvage partials without requiring referee budget. */
+export function isDiscussionDraftKind(kind?: string): boolean {
+  return kind === "discussion" || kind === "council-draft" || kind === "draft";
+}
+
 export function isThinkGuardRefereeEligible(activity?: PromptActivity): boolean {
   return activity?.mode === "explore" && isPlannerRefereeKind(activity.kind);
 }
@@ -321,10 +326,86 @@ export async function runRecoveryRefereeCheckpoint(
   };
 }
 
+/**
+ * Discussion/council draft salvage: prefer partial stream over silent fail.
+ * Does not consume referee budget. Hard pure-loop with no salvageable text rethrows.
+ */
+export function createDiscussionThinkGuardHandler(
+  deps: Pick<ThinkGuardHandlerDeps, "appendSystem" | "logDiag" | "runId" | "activity">,
+): ThinkGuardHandler {
+  let continuationUsed = false;
+  return {
+    async handleAbort(err: ThinkGuardAbortError): Promise<ThinkGuardHandlerResult> {
+      const partial = err.partialText?.trim() ?? "";
+      const hardLoop = !!(err.repetition && err.repetition.repeats >= 5 && err.tier === 2);
+
+      deps.logDiag?.({
+        type: "think_guard_discussion_salvage",
+        runId: deps.runId,
+        tier: err.tier,
+        thinkChars: err.thinkChars,
+        hardLoop,
+        partialLen: partial.length,
+        activityKind: deps.activity?.kind,
+        activityLabel: deps.activity?.label,
+      });
+
+      if (hardLoop && partial.length < 80) {
+        deps.appendSystem(
+          `[think-guard] discussion hard loop with no salvageable text — ${err.reason}`,
+        );
+        return { type: "rethrow" };
+      }
+
+      // Soft tier / mixed stream: one continuation, then force partial.
+      if (
+        err.tier === 1
+        && !continuationUsed
+        && partial.length > 0
+        && !(err.repetition && err.repetition.repeats >= 5)
+      ) {
+        continuationUsed = true;
+        const verdict = ruleBasedFallback(err);
+        deps.appendSystem(
+          `[think-guard] discussion soft abort — one emit continuation (${err.thinkChars.toLocaleString()} chars)`,
+        );
+        return {
+          type: "continuation_prompt",
+          prompt: buildContinuationPrompt(err, {
+            ...verdict,
+            suggestedAction: "nudge_emit",
+            rationale: "Discussion draft soft-cap — finish your draft JSON/findings now.",
+          }),
+          verdict: { ...verdict, suggestedAction: "nudge_emit" },
+        };
+      }
+
+      deps.appendSystem(
+        `[think-guard] discussion salvage — returning partial stream (${partial.length} chars; ${err.reason})`,
+      );
+      return {
+        type: "return_partial",
+        text: err.partialText || "",
+        verdict: {
+          verdict: "ready_to_emit",
+          confidence: "medium",
+          rationale: "Discussion draft: salvage partial rather than silent fail",
+          suggestedAction: "force_emit",
+        },
+      };
+    },
+  };
+}
+
 export function createThinkGuardHandler(
   deps: ThinkGuardHandlerDeps,
   state: ThinkGuardHandlerState = {},
 ): ThinkGuardHandler | undefined {
+  // Discussion drafts: always attach lightweight salvage (no referee gate).
+  if (isDiscussionDraftKind(deps.activity?.kind)) {
+    return createDiscussionThinkGuardHandler(deps);
+  }
+
   const cfg = deps.getActive();
   if (!resolveThinkGuardRefereeOn(deps.activity, cfg, {
     stopping: deps.isStopping(),

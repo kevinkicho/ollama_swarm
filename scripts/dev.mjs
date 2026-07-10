@@ -1,14 +1,15 @@
-import { spawn, spawnSync, execSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
-import { freePorts, isPortBindable } from "./lib/freePort.mjs";
+import { freePorts, freePortsSync, isPortBindable, killPidTree } from "./lib/freePort.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, "..");
 const portFile = path.join(root, ".server-port");
+const childPidFile = path.join(root, ".dev-child-pids");
 
 // Fixed ports — pinned so bookmarks, scripts, and the Network tab don't need
 // to chase a new port on every restart. Override with env vars if you need to.
@@ -20,22 +21,7 @@ const portFile = path.join(root, ".server-port");
 // `netsh int ipv4 show excludedportrange protocol=tcp` if EACCES recurs.
 const DEFAULT_SERVER_PORT = 8243;
 const DEFAULT_WEB_PORT = 8244;
-
-function pickFreePort() {
-  return new Promise((resolve, reject) => {
-    const srv = net.createServer();
-    srv.unref();
-    srv.on("error", reject);
-    srv.listen(0, "127.0.0.1", () => {
-      const addr = srv.address();
-      if (addr && typeof addr === "object") srv.close(() => resolve(addr.port));
-      else {
-        srv.close();
-        reject(new Error("failed to read ephemeral port"));
-      }
-    });
-  });
-}
+const DEFAULT_OLLAMA_PROXY_PORT = 11533;
 
 function parsePort(raw) {
   if (!raw) return null;
@@ -54,6 +40,7 @@ console.log(`[dev] backend :${port}  ·  web :${webPort}  (wrote .server-port)`)
 
 const tsxCli = path.join(root, "node_modules", "tsx", "dist", "cli.mjs");
 const viteCli = path.join(root, "node_modules", "vite", "bin", "vite.js");
+const watchdogScript = path.join(here, "dev-watchdog.mjs");
 
 for (const [label, p] of [["tsx", tsxCli], ["vite", viteCli]]) {
   if (!fs.existsSync(p)) {
@@ -69,11 +56,9 @@ for (const [label, p] of [["tsx", tsxCli], ["vite", viteCli]]) {
 // presets and local dev don't need git identity.
 (function checkGitIdentity() {
   try {
-    let name = "";
-    let email = "";
-    const execOpts = { encoding: "utf8", windowsHide: true, stdio: ["pipe", "pipe", "ignore"] };
-    try { name = execSync("git config user.name", execOpts).trim(); } catch {}
-    try { email = execSync("git config user.email", execOpts).trim(); } catch {}
+    const opts = { encoding: "utf8", windowsHide: true };
+    const name = (spawnSync("git", ["config", "user.name"], opts).stdout || "").trim();
+    const email = (spawnSync("git", ["config", "user.email"], opts).stdout || "").trim();
     if (!name || !email) {
       console.warn(
         `[dev] git identity not configured (user.name="${name || '<unset>'}" user.email="${email || '<unset>'}").\n` +
@@ -88,9 +73,9 @@ for (const [label, p] of [["tsx", tsxCli], ["vite", viteCli]]) {
 })();
 
 const children = [];
+/** @type {import("node:child_process").ChildProcess | null} */
+let watchdog = null;
 let shuttingDown = false;
-
-const DEFAULT_OLLAMA_PROXY_PORT = 11533;
 
 /** Ports this dev stack binds: backend, Vite, and in-process Ollama proxy. */
 function devPorts() {
@@ -100,18 +85,61 @@ function devPorts() {
   return ports;
 }
 
-function isPortListening(p, host = "127.0.0.1") {
-  return new Promise((resolve) => {
-    const socket = net.connect({ host, port: p, timeout: 600 }, () => {
-      socket.end();
-      resolve(true);
-    });
-    socket.on("error", () => resolve(false));
-    socket.on("timeout", () => {
-      socket.destroy();
-      resolve(false);
-    });
-  });
+function writeChildPidFile() {
+  const pids = children
+    .map((c) => c.child?.pid)
+    .filter((p) => Number.isInteger(p) && p > 0);
+  try {
+    fs.writeFileSync(childPidFile, JSON.stringify(pids), "utf8");
+  } catch {
+    /* ignore */
+  }
+}
+
+function removeChildPidFile() {
+  try {
+    if (fs.existsSync(childPidFile)) fs.unlinkSync(childPidFile);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Detached reaper: if this parent dies without running shutdown handlers
+ * (Windows npm/PowerShell TerminateProcess is the common case), free ports
+ * so the next `npm run dev` can bind without a manual kill-port bandaid.
+ */
+function startWatchdog() {
+  try {
+    writeChildPidFile();
+    watchdog = spawn(
+      process.execPath,
+      [watchdogScript, String(process.pid), devPorts().join(","), childPidFile],
+      {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+        cwd: root,
+      },
+    );
+    watchdog.unref();
+  } catch (err) {
+    console.warn(`[dev] watchdog not started: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+function stopWatchdog() {
+  if (!watchdog || watchdog.pid == null) return;
+  try {
+    killPidTree(watchdog.pid);
+  } catch {
+    try {
+      watchdog.kill("SIGTERM");
+    } catch {
+      /* ignore */
+    }
+  }
+  watchdog = null;
 }
 
 /** Free dev ports — LISTENING-only kill + bind verification (Windows-safe). */
@@ -128,7 +156,7 @@ async function freeDevPorts(ports = devPorts(), { log = true } = {}) {
   return results;
 }
 
-/** If a prior Ctrl+C left zombies, reclaim ports before spawning children. */
+/** If a prior session left zombies, reclaim ports before spawning children. */
 async function reclaimStaleDevPorts() {
   const ports = devPorts();
   const busy = [];
@@ -142,44 +170,56 @@ async function reclaimStaleDevPorts() {
   await freeDevPorts(busy);
 }
 
-// On Windows, `child.kill("SIGTERM")` only terminates the direct child —
-// our server process — while any tree keeps running and holding ports
-// (or in the cloud case, the single server node itself is the entire
-// runtime for autonomous runs). `taskkill /PID <pid> /T /F` walks the
-// process tree and force-kills. We also fall back to port-based kill.
-// The direct node processes for tsx/vite are the ones we must nuke so
-// that in-flight hybrid/blackboard runs (and their WS transcript streams)
-// actually stop.
-function treeKill(child, signal) {
-  if (!child || child.pid === undefined) return;
-  if (child.killed || child.exitCode !== null) return;
-  if (process.platform === "win32") {
-    try {
-      // Use sync in the critical shutdown path too (see force version below).
-      // Fire-and-forget here for the general case.
-      const k = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
-      k.on("error", () => {
-        try { child.kill(); } catch {}
-      });
-    } catch {
-      try { child.kill(); } catch {}
-    }
-    return;
-  }
-  try { child.kill(signal ?? "SIGTERM"); } catch {}
+/**
+ * On Windows, `child.kill("SIGTERM")` only terminates the direct child —
+ * tsx watch's grandchild (the real server) and any nested shells keep the
+ * ports. Always use synchronous taskkill /T /F so we wait for the tree to die
+ * before claiming the port is free.
+ */
+function forceKillPidTree(pid) {
+  if (!pid) return;
+  killPidTree(pid);
 }
 
-function forceKillWinPid(pid) {
-  if (!pid) return;
-  try {
-    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-  } catch {}
+function forceKillAllChildren() {
+  for (const { child } of children) {
+    if (child?.pid) forceKillPidTree(child.pid);
+  }
+}
+
+/** Soft signal first so the server can server.close() and release :8243 cleanly. */
+function softSignalChildren() {
+  for (const { child } of children) {
+    if (!child || child.exitCode !== null || child.killed) continue;
+    try {
+      if (process.platform === "win32") {
+        // Node maps this to TerminateProcess on some builds; still try —
+        // force path below is the reliable Windows cleanup.
+        child.kill();
+      } else {
+        child.kill("SIGTERM");
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+function waitForChildrenExit(timeoutMs) {
+  const start = Date.now();
+  return new Promise((resolve) => {
+    const tick = () => {
+      const alive = children.some(
+        (c) => c.child && c.child.exitCode === null && !c.child.killed,
+      );
+      if (!alive || Date.now() - start >= timeoutMs) {
+        resolve();
+        return;
+      }
+      setTimeout(tick, 80);
+    };
+    tick();
+  });
 }
 
 function prefix(tag, color) {
@@ -194,16 +234,22 @@ function prefix(tag, color) {
 }
 
 function launch(name, cwd, args, color) {
+  // Do NOT detach children — they must stay in our tree so taskkill /T and
+  // the parent-death watchdog can find them. stdin ignored so Ctrl+C is
+  // handled only by this supervisor (children would otherwise get a second
+  // SIGINT and race our ordered shutdown).
   const child = spawn(process.execPath, args, {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
     windowsHide: true,
+    detached: false,
   });
   const tagOut = prefix(name, color);
   child.stdout.on("data", (d) => process.stdout.write(tagOut(d)));
   child.stderr.on("data", (d) => process.stderr.write(tagOut(d)));
   child.on("exit", (code, signal) => {
+    writeChildPidFile();
     if (shuttingDown) return;
     // Task #44: don't cascade-shutdown the other child when one dies.
     // Previously, if the server (tsx watch) crashed, we killed vite
@@ -216,6 +262,7 @@ function launch(name, cwd, args, color) {
     );
   });
   children.push({ name, child });
+  writeChildPidFile();
   return child;
 }
 
@@ -241,58 +288,65 @@ async function waitForBackend(port, host = "127.0.0.1", timeoutMs = 25000) {
       console.log(`[dev] backend ready on :${port}`);
       return;
     } catch {
-      // brief backoff
       await new Promise((r) => setTimeout(r, 180));
     }
   }
-  console.warn(`[dev] backend :${port} not reachable after ~${Math.round(timeoutMs/1000)}s (last error: ${lastErr?.message ?? "unknown"}). Starting web anyway — initial proxy requests may fail until it finishes booting.`);
+  console.warn(`[dev] backend :${port} not reachable after ~${Math.round(timeoutMs / 1000)}s (last error: ${lastErr?.message ?? "unknown"}). Starting web anyway — initial proxy requests may fail until it finishes booting.`);
 }
 
-async function shutdown() {
+/**
+ * Ordered shutdown:
+ * 1. Soft-signal children (server can close HTTP listeners → free :8243)
+ * 2. Force-kill process trees (Windows: taskkill /T /F — covers tsx watch grandchildren)
+ * 3. Port-based reaper for anything still LISTENING
+ * 4. Stop parent-death watchdog
+ * 5. Exit only after ports are verified free (or retries exhausted)
+ *
+ * Root cause this addresses: previously we fire-and-forget async taskkill, then
+ * process.exit after 800ms while freeDevPorts was still racing. If the parent
+ * was TerminateProcess'd by npm/PowerShell, no handler ran at all → orphans.
+ */
+async function shutdown(reason = "signal") {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log("[dev] shutdown: stopping children and freeing ports");
+  console.log(`[dev] shutdown (${reason}): stopping children and freeing ports`);
 
-  const pids = children.map((c) => c.child?.pid).filter(Boolean);
+  softSignalChildren();
+  await waitForChildrenExit(process.platform === "win32" ? 1200 : 2000);
 
-  for (const { child } of children) {
-    treeKill(child, "SIGTERM");
-  }
-
-  if (process.platform === "win32") {
-    for (const pid of pids) forceKillWinPid(pid);
-  }
+  forceKillAllChildren();
+  // Brief OS settle after taskkill before bind probes.
+  await new Promise((r) => setTimeout(r, 200));
 
   try {
-    await freeDevPorts(devPorts(), { log: false });
+    await freeDevPorts(devPorts(), { log: true });
   } catch {
-    // best-effort
+    // Fall back to sync kill in exit path.
+    freePortsSync(devPorts());
   }
 
-  setTimeout(() => {
-    for (const { child } of children) {
-      if (process.platform === "win32" && child?.pid) forceKillWinPid(child.pid);
-      else treeKill(child, "SIGKILL");
-    }
-    process.exit(0);
-  }, 800).unref();
+  stopWatchdog();
+  removeChildPidFile();
+  process.exit(0);
 }
 
 function requestShutdown(signal) {
   console.log(`\n[dev] ${signal} — stopping children`);
-  void shutdown();
+  void shutdown(signal);
 }
 
 process.on("SIGINT", () => requestShutdown("SIGINT"));
 process.on("SIGTERM", () => requestShutdown("SIGTERM"));
 process.on("SIGBREAK", () => requestShutdown("SIGBREAK"));
 
-// Last-resort sync cleanup if the process exits without running async shutdown.
+// Last-resort SYNCHRONOUS cleanup — process.on("exit") cannot await.
+// Must still run when shuttingDown is true if children somehow survived
+// (previous bug: early-return when shuttingDown skipped force-kill).
 process.on("exit", () => {
-  if (shuttingDown) return;
-  for (const { child } of children) {
-    if (process.platform === "win32" && child?.pid) forceKillWinPid(child.pid);
-  }
+  forceKillAllChildren();
+  freePortsSync(devPorts());
+  stopWatchdog();
+  removeChildPidFile();
 });
 
 // Windows: npm/PowerShell often swallow process.on('SIGINT'). readline must be
@@ -316,7 +370,10 @@ const serverArgs = noWatch
   ? [tsxCli, "src/index.ts"]
   : [tsxCli, "watch", "src/index.ts"];
 if (noWatch) console.log("[dev] server running WITHOUT tsx watch (--no-watch). Code edits won't auto-restart.");
+
 await reclaimStaleDevPorts();
+startWatchdog();
 launch("server", path.join(root, "server"), serverArgs, "36");
 await waitForBackend(port);
 launch("web", path.join(root, "web"), [viteCli, "--port", String(webPort), "--strictPort", "--host"], "35");
+writeChildPidFile();

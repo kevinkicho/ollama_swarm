@@ -84,6 +84,7 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
   const { totalPromptTokens, totalResponseTokens } = computeRunTokenTotals(
     input.startedAt,
     input.endedAt,
+    input.config.runId,
   );
 
   return {
@@ -419,29 +420,66 @@ export function computeLatencyStats(samplesMs: readonly number[]): LatencyStats 
   };
 }
 
-// Task #163: scan tokenTracker.recent[] for records timestamped within
-// the run window (startedAt → endedAt + 5s grace for proxy-side capture
-// latency). Returns 0/0 when the proxy isn't running or no records
-// land in the window. Optional `tracker` arg for tests; defaults to
-// the module-level singleton.
+/**
+ * Run-scoped token totals from the usage ledger (tokenTracker).
+ *
+ * Prefer `runId` filter so concurrent runs never pollute each other.
+ * Time window is a secondary bound (startedAt → endedAt + grace).
+ * Optional `tracker` for tests.
+ */
 export function computeRunTokenTotals(
   startedAt: number,
   endedAt: number,
-  tracker?: { recent: (n: number) => ReadonlyArray<{ ts: number; promptTokens: number; responseTokens: number }> },
+  trackerOrRunId?:
+    | { recent: (n: number) => ReadonlyArray<{ ts: number; promptTokens: number; responseTokens: number; runId?: string }> }
+    | string,
+  maybeRunId?: string,
 ): { totalPromptTokens: number; totalResponseTokens: number } {
-  const t = tracker ?? tokenTrackerSingleton;
+  let tracker: {
+    recent: (n: number) => ReadonlyArray<{
+      ts: number;
+      promptTokens: number;
+      responseTokens: number;
+      runId?: string;
+    }>;
+  };
+  let runId: string | undefined;
+  if (typeof trackerOrRunId === "string") {
+    tracker = tokenTrackerSingleton;
+    runId = trackerOrRunId;
+  } else if (trackerOrRunId && typeof trackerOrRunId === "object" && "recent" in trackerOrRunId) {
+    tracker = trackerOrRunId;
+    runId = maybeRunId;
+  } else {
+    tracker = tokenTrackerSingleton;
+    runId = maybeRunId;
+  }
+
   const grace = 5_000;
   const lo = startedAt;
   const hi = endedAt + grace;
-  // Pull a generous slice — up to 10k records — and filter by window.
-  // The tracker caps at 100k; for any reasonable single-run duration
-  // this slice is plenty.
-  const recent = t.recent(10_000);
-  let p = 0, r = 0;
+  const recent = tracker.recent(10_000);
+  let p = 0;
+  let r = 0;
   for (const rec of recent) {
     if (rec.ts < lo || rec.ts > hi) continue;
+    if (runId && rec.runId && rec.runId !== runId) continue;
+    // When runId is requested but record has no runId (legacy/proxy),
+    // only count if we're not filtering strictly — prefer strict when
+    // any run-scoped records exist for this run.
+    if (runId && !rec.runId) continue;
     p += rec.promptTokens;
     r += rec.responseTokens;
+  }
+  // Fallback: if runId filter found nothing, use time window only
+  // (legacy records without runId attribution).
+  if (runId && p + r === 0) {
+    for (const rec of recent) {
+      if (rec.ts < lo || rec.ts > hi) continue;
+      if (rec.runId && rec.runId !== runId) continue;
+      p += rec.promptTokens;
+      r += rec.responseTokens;
+    }
   }
   return { totalPromptTokens: p, totalResponseTokens: r };
 }

@@ -117,6 +117,12 @@ export async function chatWithOllamaToolLoop(
     });
 
     cumulativeText = turnResult.text;
+    // Accumulate per-turn usage — previously left at 0 forever so tool-using
+    // Ollama/cloud paths always returned empty ChatResult.usage.
+    if (turnResult.usage) {
+      cumulativePrompt += turnResult.usage.promptTokens ?? 0;
+      cumulativeResponse += turnResult.usage.responseTokens ?? 0;
+    }
     if (turnResult.toolCalls && turnResult.toolCalls.length > 0) {
       messages.push({
         role: "assistant",
@@ -140,6 +146,9 @@ export async function chatWithOllamaToolLoop(
             elapsedMs: Date.now() - t0,
             finishReason: "error",
             errorMessage: stuckReason,
+            ...(cumulativePrompt + cumulativeResponse > 0
+              ? { usage: { promptTokens: cumulativePrompt, responseTokens: cumulativeResponse } }
+              : {}),
           };
         }
         const preview = formatToolInvokePreview(tc.name, tc.arguments, dispatchResult);
@@ -168,6 +177,9 @@ export async function chatWithOllamaToolLoop(
     elapsedMs: Date.now() - t0,
     finishReason: "error",
     errorMessage: `Ollama tool loop exceeded ${maxTurns} turns`,
+    ...(cumulativePrompt + cumulativeResponse > 0
+      ? { usage: { promptTokens: cumulativePrompt, responseTokens: cumulativeResponse } }
+      : {}),
   };
 }
 

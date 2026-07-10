@@ -75,9 +75,18 @@ export function statusForRun(host: StatusForRunHost, runId: string): SwarmStatus
       status.agents as import("./runSummaryDiscovery.js").AgentStateShape[],
       roster,
     ) as SwarmStatus["agents"];
+    // Control-plane activity is owned by AgentManager — stitch into every
+    // live status so sidebar hydrate is not WS-only.
+    const agentActivity =
+      typeof run.manager.getActivitySnapshot === "function"
+        ? run.manager.getActivitySnapshot()
+        : status.agentActivity;
     return {
       ...status,
       agents,
+      ...(agentActivity && Object.keys(agentActivity).length > 0
+        ? { agentActivity }
+        : {}),
       runId: run.runId,
       runConfig: host.mergeRunConfig(run.runConfig, status.runConfig),
       runStartedAt: status.runStartedAt ?? run.startedAt,

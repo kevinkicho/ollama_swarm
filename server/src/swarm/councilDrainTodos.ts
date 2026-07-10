@@ -1,6 +1,7 @@
 /**
  * Council execution drain: run workers on pending todos with reaper.
- * Extracted from CouncilRunner.drainTodos.
+ * Does not return until the cycle's todos are settled (completed, permanent
+ * skip, or exhausted fail/soft-skip after all agents have tried).
  */
 
 import type { Agent, AgentManager } from "../services/AgentManager.js";
@@ -9,6 +10,14 @@ import type { SwarmEvent } from "../types.js";
 import type { CouncilAdapterState } from "./councilAdapter.js";
 import { runCouncilWorkers } from "./councilWorkerRunner.js";
 import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
+import {
+  createSettlementBook,
+  cycleExecutionSettled,
+  maxAttemptsForCycle,
+  recordSettlementAttempt,
+  requeueUnresolvedCouncilTodos,
+  summarizeUnresolved,
+} from "./councilCycleSettlement.js";
 
 export interface CouncilDrainHost {
   state: CouncilAdapterState;
@@ -18,7 +27,12 @@ export interface CouncilDrainHost {
   executionFailures: string[];
   recordTodoSettled: (
     cycle: number,
-    info: { todoId: string; description: string; status: string; error?: string },
+    info: {
+      description: string;
+      expectedFiles?: readonly string[] | null;
+      outcome: "completed" | "skipped" | "failed";
+      detail?: string;
+    },
   ) => void;
   isStopping: () => boolean;
   isDraining: () => boolean;
@@ -51,43 +65,134 @@ export async function drainCouncilTodos(
 
   host.setPhase("executing");
 
+  /** Per-worker abort so reaper can kill the stuck prompt, not only the queue entry. */
+  const todoAborts = new Map<string, AbortController>();
+  const settlementBook = createSettlementBook();
+  const executionAgentIds = executionAgents.map((a) => a.id);
+  const maxAttempts = maxAttemptsForCycle(executionAgents.length);
+
   const REAPER_INTERVAL = 30_000;
   const IN_PROGRESS_TTL = 15 * 60_000;
   const reaper = setInterval(() => {
     const reaped = host.state.todoQueue.reapStaleInProgress(Date.now(), IN_PROGRESS_TTL);
     for (const id of reaped) {
-      host.appendSystem(`[reaper] Timed out todo ${id} — was in-progress for >10min.`);
+      const todo = host.state.todoQueue.get(id);
+      const workerId = todo?.workerId;
+      if (workerId) {
+        recordSettlementAttempt(settlementBook, id, workerId);
+        const ctrl = todoAborts.get(workerId);
+        if (ctrl && !ctrl.signal.aborted) {
+          try {
+            ctrl.abort(new Error(`reaper: todo ${id} exceeded ${IN_PROGRESS_TTL / 60_000}min`));
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      host.appendSystem(
+        `[reaper] Timed out todo ${id} — was in-progress for >${Math.round(IN_PROGRESS_TTL / 60_000)}min` +
+          (workerId ? ` (aborted ${workerId})` : "") +
+          ".",
+      );
     }
   }, REAPER_INTERVAL);
   reaper.unref();
 
   const drainWork = (async () => {
     const coachAgent = host.manager.list().find((a) => a.index === 1);
-    const { completed, failed, skipped } = await runCouncilWorkers(
-      host.state,
-      executionAgents,
-      {
-        appendSystem: (msg) => host.appendSystem(msg),
-        recordFailure: (_todoId, description, error) => {
-          host.executionFailures.push(`${description}: ${error.slice(0, 200)}`);
+    let totalCompleted = 0;
+    let totalFailed = 0;
+    let totalSkipped = 0;
+    let pass = 0;
+    const MAX_SETTLEMENT_PASSES = Math.max(4, maxAttempts + 2);
+
+    while (!host.isStopping() && !host.isDraining()) {
+      pass++;
+      if (pass > MAX_SETTLEMENT_PASSES) {
+        host.appendSystem(
+          `[execution] Settlement pass limit (${MAX_SETTLEMENT_PASSES}) — leaving remaining unresolved: ${summarizeUnresolved(host.state.todoQueue)}.`,
+        );
+        break;
+      }
+
+      if (host.state.todoQueue.counts().pending === 0 && host.state.todoQueue.counts().inProgress === 0) {
+        break;
+      }
+
+      const { completed, failed, skipped } = await runCouncilWorkers(
+        host.state,
+        executionAgents,
+        {
+          appendSystem: (msg) => host.appendSystem(msg),
+          recordFailure: (_todoId, description, error) => {
+            host.executionFailures.push(`${description}: ${error.slice(0, 200)}`);
+          },
+          onTodoSettledByAgent: (agentId, info) => {
+            if (info.outcome === "failed" || info.outcome === "skipped") {
+              recordSettlementAttempt(settlementBook, info.todoId, agentId);
+            }
+            host.recordTodoSettled(cycle, {
+              description: info.description,
+              expectedFiles: info.expectedFiles ?? [],
+              outcome: info.outcome,
+              detail: info.detail,
+            });
+          },
+          stopping: () => host.isStopping(),
+          draining: () => host.isDraining(),
+          promptSignal: host.promptSignal(),
+          registerTodoAbort: (workerId, ctrl) => {
+            todoAborts.set(workerId, ctrl);
+          },
+          unregisterTodoAbort: (workerId) => {
+            todoAborts.delete(workerId);
+          },
+          getSwarmControl: () => host.swarmControl,
+          getCoachAgent: () => coachAgent,
+          emit: (e) => host.emit(e as SwarmEvent),
         },
-        onTodoSettled: (info) => host.recordTodoSettled(cycle, info as any),
-        stopping: () => host.isStopping(),
-        draining: () => host.isDraining(),
-        promptSignal: host.promptSignal(),
-        getSwarmControl: () => host.swarmControl,
-        getCoachAgent: () => coachAgent,
-        emit: (e) => host.emit(e as SwarmEvent),
-      },
-    );
+      );
+
+      totalCompleted += completed;
+      totalFailed += failed;
+      totalSkipped += skipped;
+
+      // Fallback: if worker didn't report agent id, attribute fail/skip by last workerId on todo before clear — already recorded via onTodoSettledByAgent when wired.
+
+      const { requeued, exhausted } = requeueUnresolvedCouncilTodos(
+        host.state.todoQueue,
+        executionAgentIds,
+        settlementBook,
+        { maxAttempts },
+      );
+
+      if (requeued > 0) {
+        host.appendSystem(
+          `[execution] Re-queued ${requeued} unresolved todo(s) for another agent attempt ` +
+            `(max ${maxAttempts} attempts/todo; pass ${pass}).`,
+        );
+        continue;
+      }
+
+      if (exhausted.length > 0) {
+        host.appendSystem(
+          `[execution] Exhausted retries on ${exhausted.length} todo(s) after all agents tried ` +
+            `(or max attempts): ${exhausted.join(", ")}.`,
+        );
+      }
+      break;
+    }
 
     host.appendSystem(
-      `[execution] Complete: ${completed} done, ${failed} failed, ${skipped} skipped.`,
+      `[execution] Complete: ${totalCompleted} done, ${totalFailed} failed, ${totalSkipped} skipped` +
+        (cycleExecutionSettled(host.state.todoQueue)
+          ? " — cycle queue settled."
+          : ` — residual: ${summarizeUnresolved(host.state.todoQueue)}.`),
       {
         kind: "council_stage",
         cycle,
         stage: "execution",
-        detail: `${completed} done, ${failed} failed, ${skipped} skipped`,
+        detail: `${totalCompleted} done, ${totalFailed} failed, ${totalSkipped} skipped`,
       },
     );
     host.resolveDrain?.();
@@ -100,8 +205,6 @@ export async function drainCouncilTodos(
   );
 
   try {
-    const p = host as CouncilDrainHost & { workerDrainPromise?: Promise<void> | null };
-    // Wait via the setter's stored promise — host must expose wait method.
     await drainWork;
   } finally {
     clearInterval(reaper);

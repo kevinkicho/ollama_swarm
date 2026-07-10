@@ -152,7 +152,7 @@ export class DebateJudgeRunner extends DiscussionRunnerBase {
 
     this.setPhase("discussing");
     this.startedAt = Date.now();
-    void this.loop(cfg);
+    await this.runTrackedLoop(() => this.loop(cfg));
   }
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {

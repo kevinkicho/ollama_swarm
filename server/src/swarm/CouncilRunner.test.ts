@@ -336,3 +336,45 @@ test("CouncilRunner — audit stuck sets earlyStopDetail and terminal message be
   assert.match(ALL_COUNCIL_SRC, /buildUnmetFailSignature/, "stuck detector must use ledger fail signature");
   assert.doesNotMatch(ALL_COUNCIL_SRC, /tryBrainFallback/i, "council run recovery must not use in-run brain");
 });
+
+test("CouncilRunner — ambition tier-up returns retry so multi-cycle / autonomous runs continue", () => {
+  // Regression: run 0f28f5e8 ended after "Tier 2 installed — continuing…" because
+  // promotion returned "done" and the outer loop breaks on "done" when rounds>0.
+  const promoteBlock = AUDIT_CYCLE_SRC.match(
+    /if \(promoted\) \{[\s\S]*?return "(?:retry|done|stop)";/,
+  )?.[0] ?? "";
+  assert.match(
+    promoteBlock,
+    /return "retry"/,
+    "successful tier promotion must return retry (not done) so the next cycle runs",
+  );
+  assert.doesNotMatch(
+    promoteBlock,
+    /return "done"/,
+    "tier promotion must not return done (that ends finite-round council runs)",
+  );
+  assert.match(
+    promoteBlock,
+    /ambition-tier-up-ok/,
+    "promote success path must log ambition-tier-up-ok",
+  );
+  assert.match(
+    COUNCIL_SRC,
+    /const isAutonomous = cfg\.rounds === 0 \|\| cfg\.rounds >= 1_000_000/,
+    "autonomous mode must treat rounds=0 and continuous (1e6) as open-ended",
+  );
+  assert.match(
+    COUNCIL_SRC,
+    /resolveCouncilMaxTiers/,
+    "must resolve ambition max tiers from run config",
+  );
+});
+
+test("resolveCouncilMaxTiers — rounds=0 unbounded; ambitionTiers=0 disables", async () => {
+  const { resolveCouncilMaxTiers } = await import("./CouncilRunner.js");
+  assert.equal(resolveCouncilMaxTiers({ rounds: 0 }), Infinity);
+  assert.equal(resolveCouncilMaxTiers({ rounds: 1_000_000 }), Infinity);
+  assert.equal(resolveCouncilMaxTiers({ rounds: 5, ambitionTiers: 0 }), 1);
+  assert.equal(resolveCouncilMaxTiers({ rounds: 5, ambitionTiers: 3 }), 3);
+  assert.equal(resolveCouncilMaxTiers({ rounds: 5 }), Infinity);
+});

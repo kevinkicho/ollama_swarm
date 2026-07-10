@@ -43,7 +43,14 @@ import {
   type DiscussionLoopCloseOutHooks,
 } from "./discussionLoop.js";
 import { startDiscussionWallClockWatchdog } from "./discussionWallClock.js";
-import { drainIneligibleReason } from "@ollama-swarm/shared/drainEligibility.js";
+import {
+  drainIneligibleReason,
+  isDrainEligible,
+} from "@ollama-swarm/shared/drainEligibility.js";
+import {
+  prependAmendmentsToPrompt,
+  readDirectiveWithAmendments,
+} from "./directivePromptHelpers.js";
 
 export type { CloneSpawnOpts, CloneSpawnResult } from "./discussionInitClone.js";
 export { type RunAgentOpts } from "./postRoundCritiqueTypes.js";
@@ -53,6 +60,8 @@ export abstract class DiscussionRunnerBase {
   protected phase: SwarmPhase = "idle";
   protected round = 0;
   protected stopping = false;
+  /** Soft-drain: finish current round, then refuse further rounds. */
+  protected drainRequested = false;
   protected active?: RunConfig;
   protected summaryWritten = false;
   protected earlyStopDetail?: string;
@@ -64,6 +73,8 @@ export abstract class DiscussionRunnerBase {
   private wallClockWatchdogStop?: () => void;
   /** Token baseline for status remaining-budget display. */
   protected tokenBaselineForStatus?: number;
+  /** In-flight main loop (for waitUntilSettled / soft drain join). */
+  protected loopPromise: Promise<void> | null = null;
 
   constructor(protected readonly opts: RunnerOpts) {}
 
@@ -101,11 +112,15 @@ export abstract class DiscussionRunnerBase {
   // --- Shared methods (identical across all 8 discussion runners) ---
 
   status(): SwarmStatus {
-    // Discussion presets are never soft-drain eligible (no worker claims).
+    // Soft-drain is available past boot (finish current discussion turn, then exit).
+    const workerThinking = this.opts.manager
+      .toStates()
+      .some((a) => a.status === "thinking" || a.status === "retrying");
     const drainInput = {
       phase: this.phase,
       claimed: 0,
       pendingCommit: 0,
+      workerThinking,
     };
     const wallCap = this.active?.wallClockCapMs;
     let wallClockMsRemaining: number | undefined;
@@ -117,6 +132,7 @@ export abstract class DiscussionRunnerBase {
       const spent = Math.max(0, snapshotLifetimeTokens() - this.tokenBaselineForStatus);
       tokenBudgetRemaining = Math.max(0, this.active.tokenBudget - spent);
     }
+    const drainEligible = isDrainEligible(drainInput);
     return {
       phase: this.phase,
       round: this.round,
@@ -126,8 +142,8 @@ export abstract class DiscussionRunnerBase {
       agents: this.opts.manager.toStates(),
       transcript: [...this.transcript],
       streaming: this.opts.manager.getPartialStreams(),
-      drainEligible: false,
-      drainIneligibleReason: drainIneligibleReason(drainInput),
+      drainEligible,
+      ...(drainEligible ? {} : { drainIneligibleReason: drainIneligibleReason(drainInput) }),
       earlyStopDetail: this.earlyStopDetail,
       runStartedAt: this.startedAt,
       runConfig: this.active
@@ -294,11 +310,45 @@ export abstract class DiscussionRunnerBase {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    this.drainRequested = false;
     this.stopDiscussionWallClock();
     this.setPhase("stopping");
     const killResult = await this.opts.manager.killAll();
     this.appendSystem(formatPortReleaseLine(killResult));
     this.setPhase("stopped");
+  }
+
+  /**
+   * Soft-stop: finish the current discussion round, then exit cleanly.
+   * Does not kill agents mid-turn. Escalates to hard stop after 3 min.
+   */
+  async drain(): Promise<void> {
+    if (!this.isRunning()) return;
+    if (this.drainRequested || this.stopping) return;
+    this.drainRequested = true;
+    this.appendSystem(
+      "[drain] Soft stop requested — finishing the current round, then closing out (hard stop after 3 min if needed).",
+    );
+    const join = this.loopPromise ?? Promise.resolve();
+    const timed = new Promise<void>((resolve) => {
+      setTimeout(resolve, 3 * 60_000);
+    });
+    await Promise.race([join, timed]);
+    if (this.isRunning()) {
+      this.appendSystem("[drain] Soft-stop deadline exceeded — escalating to hard stop.");
+      await this.stop();
+    }
+  }
+
+  /** Resolve when the main loop has finished (or immediately if none). */
+  async waitUntilSettled(): Promise<void> {
+    if (this.loopPromise) {
+      try {
+        await this.loopPromise;
+      } catch {
+        /* close-out handles crash */
+      }
+    }
   }
 
   /**
@@ -312,6 +362,8 @@ export abstract class DiscussionRunnerBase {
     this.stopDiscussionWallClock();
     this.transcript = [];
     this.stopping = false;
+    this.drainRequested = false;
+    this.loopPromise = null;
     this.round = 0;
     this.active = cfg;
     this.startedAt = undefined;
@@ -321,6 +373,13 @@ export abstract class DiscussionRunnerBase {
     this.tokenBaselineForStatus = snapshotLifetimeTokens();
     this.stats.reset();
     this.pendingToolTraceByAgent.clear();
+  }
+
+  /** Live directive including mid-run amendments (HITL). */
+  protected effectiveDirective(cfg?: RunConfig): string {
+    const c = cfg ?? this.active;
+    if (!c) return "";
+    return readDirectiveWithAmendments(c, this.opts.getAmendments?.()).directive;
   }
 
   /** Write the run summary to disk. Guards against double-write.
@@ -392,6 +451,10 @@ export abstract class DiscussionRunnerBase {
     prompt: string,
     opts: RunAgentOpts,
   ): Promise<string> {
+    const withAmendments = prependAmendmentsToPrompt(
+      prompt,
+      this.opts.getAmendments?.(),
+    );
     return runDiscussionAgentCore(
       {
         manager: this.opts.manager,
@@ -408,7 +471,7 @@ export abstract class DiscussionRunnerBase {
         buildDiscussionToolCoachHook: (a) => this.buildDiscussionToolCoachHook(a),
       },
       agent,
-      prompt,
+      withAmendments,
       opts,
     );
   }
@@ -421,6 +484,7 @@ export abstract class DiscussionRunnerBase {
       manager: this.opts.manager,
       emit: (e: import("../types.js").SwarmEvent) => this.opts.emit(e),
       getStopping: () => this.stopping,
+      getDrainRequested: () => this.drainRequested,
       getEarlyStopDetail: () => this.earlyStopDetail,
       setEarlyStopDetail: (d: string | undefined) => { this.earlyStopDetail = d; },
       getRound: () => this.round,
@@ -433,6 +497,21 @@ export abstract class DiscussionRunnerBase {
       getRunId: () => this.active?.runId,
       getBrainService: () => this.opts.getBrainService?.() ?? null,
     };
+  }
+
+  /**
+   * Track + await a main loop so start() blocks until the run settles.
+   * HTTP still returns immediately because Orchestrator fire-and-forgets start().
+   */
+  protected async runTrackedLoop(run: () => Promise<void>): Promise<void> {
+    this.loopPromise = (async () => {
+      try {
+        await run();
+      } finally {
+        /* subclass close-out may set terminal phase */
+      }
+    })();
+    await this.loopPromise;
   }
 
   /** Shared discussion loop skeleton — extracted to discussionLoop.ts. */

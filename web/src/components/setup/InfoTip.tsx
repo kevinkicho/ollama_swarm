@@ -1,12 +1,4 @@
-import {
-  cloneElement,
-  isValidElement,
-  useRef,
-  useState,
-  type ReactElement,
-  type ReactNode,
-  type Ref,
-} from "react";
+import { useRef, useState, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 import { FormattedTipContent } from "./FormattedTipContent";
 
@@ -46,25 +38,6 @@ function positionAtCursor(
   top = Math.max(pad, Math.min(top, vh - pad - 48));
 
   return { top, left, maxW };
-}
-
-function mergeRefs<T>(...refs: Array<Ref<T> | undefined>): Ref<T> {
-  return (value: T) => {
-    for (const ref of refs) {
-      if (!ref) continue;
-      if (typeof ref === "function") ref(value);
-      else (ref as React.MutableRefObject<T | null>).current = value;
-    }
-  };
-}
-
-type MouseHandler = (e: React.MouseEvent) => void;
-
-function chainHandlers(ours: MouseHandler, theirs?: MouseHandler): MouseHandler {
-  return (e) => {
-    ours(e);
-    theirs?.(e);
-  };
 }
 
 export function InfoTip({
@@ -130,13 +103,6 @@ export function InfoTip({
     }
   };
 
-  const keepVisible = () => {
-    if (hideTimer.current) {
-      clearTimeout(hideTimer.current);
-      hideTimer.current = null;
-    }
-  };
-
   const scheduleShow = (e: React.MouseEvent) => {
     trackCursor(e);
     clearShowTimer();
@@ -164,45 +130,27 @@ export function InfoTip({
     onMouseLeave: scheduleHide,
   };
 
-  let triggerNode: ReactNode;
-  if (trigger && isValidElement(trigger)) {
-    const el = trigger as ReactElement<{
-      onMouseEnter?: MouseHandler;
-      onMouseMove?: MouseHandler;
-      onMouseLeave?: MouseHandler;
-      className?: string;
-      ref?: Ref<HTMLElement>;
-    }>;
-    triggerNode = cloneElement(el, {
-      ...hoverProps,
-      onMouseEnter: chainHandlers(scheduleShow, el.props.onMouseEnter),
-      onMouseMove: chainHandlers(trackCursor, el.props.onMouseMove),
-      onMouseLeave: chainHandlers(scheduleHide, el.props.onMouseLeave),
-      ref: mergeRefs(triggerRef, el.props.ref),
-      className: [el.props.className, wrapperClassName, "cursor-help"].filter(Boolean).join(" "),
-    });
-  } else if (trigger) {
-    triggerNode = (
-      <span
-        ref={triggerRef as Ref<HTMLSpanElement>}
-        {...hoverProps}
-        className={wrapperClassName ?? "inline cursor-help"}
-      >
-        {trigger}
-      </span>
-    );
-  } else {
-    triggerNode = (
-      <span
-        ref={triggerRef as Ref<HTMLSpanElement>}
-        {...hoverProps}
-        className={wrapperClassName ?? defaultTriggerClass}
-        aria-label="More info"
-      >
-        ⓘ
-      </span>
-    );
-  }
+  // Always own the hover shell ourselves. Avoid cloneElement + props.ref —
+  // React treats `ref` as special; reading/passing it as a normal prop warns
+  // (and breaks child refs like chatScrollRef on the Brain chat pane).
+  const triggerNode: ReactNode = trigger ? (
+    <span
+      ref={triggerRef as Ref<HTMLSpanElement>}
+      {...hoverProps}
+      className={[wrapperClassName, "cursor-help"].filter(Boolean).join(" ") || "inline cursor-help"}
+    >
+      {trigger}
+    </span>
+  ) : (
+    <span
+      ref={triggerRef as Ref<HTMLSpanElement>}
+      {...hoverProps}
+      className={wrapperClassName ?? defaultTriggerClass}
+      aria-label="More info"
+    >
+      ⓘ
+    </span>
+  );
 
   return (
     <>

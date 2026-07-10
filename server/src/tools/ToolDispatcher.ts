@@ -22,6 +22,7 @@ import path from "node:path";
 import { spawn, ChildProcess } from "node:child_process";
 import { resolveSafe } from "../swarm/blackboard/resolveSafe.js";
 import { checkBuildCommand } from "../swarm/blackboard/buildCommandAllowlist.js";
+import { applyHunks, type Hunk } from "../swarm/blackboard/applyHunks.js";
 import {
   BASH_ERROR_BACKOFF_THRESHOLD,
   getAgentBashErrors,
@@ -93,9 +94,9 @@ export function defaultToolsForProfile(
     case "swarm-planner":
       return ["read", "grep", "glob", "list", "bash", "web_fetch", "web_search"];
     case "swarm-builder":
-      return ["read", "grep", "glob", "list", "bash"];
+      return ["read", "grep", "glob", "list", "bash", "propose_hunks"];
     case "swarm-builder-research":
-      return ["read", "grep", "glob", "list", "bash", "web_fetch", "web_search"];
+      return ["read", "grep", "glob", "list", "bash", "web_fetch", "web_search", "propose_hunks"];
     case "swarm-write":
       return ["read", "grep", "glob", "list", "propose_hunks"];
     case "swarm-research":
@@ -151,7 +152,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     bash: "allow",
     write: "deny",
     edit: "deny",
-    propose_hunks: "deny",
+    propose_hunks: "allow",
     web_fetch: "deny",
     web_search: "deny",
   },
@@ -163,7 +164,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     bash: "allow",
     write: "deny",
     edit: "deny",
-    propose_hunks: "deny",
+    propose_hunks: "allow",
     web_fetch: "allow",
     web_search: "allow",
   },
@@ -209,6 +210,166 @@ export type ToolResultHook = (info: {
   error?: string;
   preview: string;
 }) => void;
+
+const HUNK_OPS = new Set([
+  "replace",
+  "create",
+  "append",
+  "delete",
+  "write",
+  "replace_between",
+]);
+
+function coerceHunksFromArgs(args: Record<string, unknown>): Hunk[] | { error: string } {
+  let raw: unknown = args.hunks;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      return { error: "propose_hunks: `hunks` must be a JSON array (or JSON string of an array)" };
+    }
+  }
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return {
+      error:
+        'propose_hunks: pass hunks:[{op,file,...}] — e.g. replace_between/write/replace. Dry-run by default; set apply:true to write files.',
+    };
+  }
+  const out: Hunk[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const h = raw[i];
+    if (!h || typeof h !== "object" || Array.isArray(h)) {
+      return { error: `propose_hunks: hunks[${i}] must be an object` };
+    }
+    const o = h as Record<string, unknown>;
+    const op = String(o.op ?? "");
+    const file = String(o.file ?? "").trim();
+    if (!HUNK_OPS.has(op) || !file) {
+      return { error: `propose_hunks: hunks[${i}] needs op (${[...HUNK_OPS].join("|")}) and file` };
+    }
+    out.push(o as unknown as Hunk);
+  }
+  return out;
+}
+
+function excerptAround(text: string, needle: string, radius = 180): string {
+  const idx = text.indexOf(needle);
+  if (idx < 0) {
+    return text.slice(0, Math.min(text.length, radius * 2));
+  }
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(text.length, idx + needle.length + radius);
+  return (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
+}
+
+/**
+ * Dry-run (default) or apply (apply:true) hunks against the live clone.
+ * Returns structured feedback so workers can fix anchors mid-turn without
+ * guessing a giant exact search string for windowed files.
+ */
+async function proposeHunksTool(
+  clonePath: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const coerced = coerceHunksFromArgs(args);
+  if ("error" in coerced) return { ok: false, error: coerced.error };
+  const hunks = coerced;
+  const apply = args.apply === true || args.apply === "true";
+
+  const byFile = new Map<string, Hunk[]>();
+  for (const h of hunks) {
+    if (!byFile.has(h.file)) byFile.set(h.file, []);
+    byFile.get(h.file)!.push(h);
+  }
+
+  const currentTexts: Record<string, string | null> = {};
+  for (const file of byFile.keys()) {
+    try {
+      const abs = await resolveSafe(clonePath, file);
+      currentTexts[file] = await fs.readFile(abs, "utf8");
+    } catch {
+      currentTexts[file] = null;
+    }
+  }
+
+  const applied = applyHunks(currentTexts, hunks);
+  if (!applied.ok) {
+    // Attach nearby content for the first file that might help re-anchor.
+    const feedback: Record<string, string> = {};
+    for (const [file, text] of Object.entries(currentTexts)) {
+      if (text == null) continue;
+      const fileHunks = byFile.get(file) ?? [];
+      for (const h of fileHunks) {
+        if (h.op === "replace" && "search" in h) {
+          feedback[file] = excerptAround(text, h.search.slice(0, 40));
+          break;
+        }
+        if (h.op === "replace_between" && "start" in h) {
+          feedback[file] = excerptAround(text, h.start.slice(0, 80));
+          break;
+        }
+      }
+      if (!feedback[file] && text.length > 0) {
+        feedback[file] = text.slice(0, 400) + (text.length > 400 ? "…" : "");
+      }
+    }
+    return {
+      ok: false,
+      error: JSON.stringify({
+        ok: false,
+        reason: applied.error,
+        apply,
+        nearby: feedback,
+        tip:
+          "Use replace_between with unique start/endExclusive headings, or write for full-file rewrite. Grep for the exact heading first.",
+      }),
+    };
+  }
+
+  const previews: Record<string, { beforeLen: number; afterLen: number; head: string }> = {};
+  for (const [file, newText] of Object.entries(applied.newTextsByFile)) {
+    const before = currentTexts[file];
+    previews[file] = {
+      beforeLen: before?.length ?? 0,
+      afterLen: newText.length,
+      head: newText.slice(0, 240) + (newText.length > 240 ? "…" : ""),
+    };
+  }
+
+  if (apply) {
+    for (const [file, newText] of Object.entries(applied.newTextsByFile)) {
+      try {
+        const abs = await resolveSafe(clonePath, file);
+        if (newText === "") {
+          await fs.unlink(abs).catch(async () => {
+            /* missing is fine for delete */
+          });
+        } else {
+          await fs.mkdir(path.dirname(abs), { recursive: true });
+          await fs.writeFile(abs, newText, "utf8");
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          error: `propose_hunks apply write failed for ${file}: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    output: JSON.stringify({
+      ok: true,
+      applied: apply,
+      files: Object.keys(applied.newTextsByFile),
+      previews,
+      note: apply
+        ? "Files written to the working tree. Still emit final JSON {\"hunks\":[...]} (or confirm with matching hunks / skip if done) so the runner commits."
+        : "Dry-run only (set apply:true to write). Hunks would apply successfully — include them in your final JSON response to commit.",
+    }),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Per-tool handlers.
@@ -362,33 +523,165 @@ async function grepTool(clone: string, args: Record<string, unknown>, unrestrict
   }
 }
 
+/**
+ * Unix CLI tools agents often type into bash. On Windows they print
+ * "'grep' is not recognized…" on the host shell. Prefer swarm tools.
+ */
+const UNIX_SHELL_BINARIES = new Set([
+  "grep",
+  "rg",
+  "egrep",
+  "fgrep",
+  "find",
+  "cat",
+  "head",
+  "tail",
+  "sed",
+  "awk",
+  "ls",
+  "which",
+  "xargs",
+  "wc",
+  "sort",
+  "uniq",
+  "tr",
+  "cut",
+  "tee",
+  "less",
+  "more",
+]);
+
+/** First shell token (skip env VAR=val prefixes). */
+function firstShellBinary(command: string): string {
+  const cleaned = command.trim().replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, "");
+  const token = cleaned.split(/[\s|;&]+/)[0] ?? "";
+  // strip path: /usr/bin/grep → grep
+  return token.replace(/^.*[/\\]/, "").toLowerCase();
+}
+
+/**
+ * Map simple Unix one-liners onto in-process tools so Windows agents don't
+ * shell out to missing binaries. Returns null when the command should run as-is.
+ */
+async function tryFulfillUnixBashViaTools(
+  clone: string,
+  command: string,
+): Promise<ToolResult | null> {
+  const trimmed = command.trim();
+  // Only rewrite simple single-stage commands (no pipes / && / ;).
+  if (/[|;&]/.test(trimmed) || /\n/.test(trimmed)) return null;
+
+  // grep / rg / egrep [-nri] PATTERN [PATH]
+  const grepM =
+    /^(?:grep|egrep|fgrep|rg)(?:\s+-[nriE]+)*\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(\S.*)?$/i.exec(
+      trimmed,
+    );
+  if (grepM) {
+    const pattern = grepM[1] ?? grepM[2] ?? grepM[3] ?? "";
+    let pathArg = (grepM[4] ?? ".").trim();
+    if (!pathArg || pathArg === "--" || pathArg.startsWith("-")) pathArg = ".";
+    return grepTool(clone, { pattern, path: pathArg });
+  }
+
+  // cat / type FILE  → read
+  const catM = /^(?:cat|type)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
+  if (catM) {
+    const p = catM[1] ?? catM[2] ?? catM[3] ?? "";
+    if (p) return readTool(clone, { path: p });
+  }
+
+  // ls / dir [PATH] → list
+  const lsM = /^(?:ls|dir)(?:\s+(?:"([^"]+)"|'([^']+)'|(\S+)))?\s*$/i.exec(trimmed);
+  if (lsM) {
+    const p = lsM[1] ?? lsM[2] ?? lsM[3] ?? ".";
+    return listTool(clone, { path: p });
+  }
+
+  // head [-n N] FILE → read (caller sees full file; good enough for agents)
+  const headM =
+    /^head(?:\s+-n\s+(\d+))?\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
+  if (headM) {
+    const p = headM[2] ?? headM[3] ?? headM[4] ?? "";
+    if (p) {
+      const r = await readTool(clone, { path: p });
+      if (!r.ok) return r;
+      const n = headM[1] ? Number(headM[1]) : 20;
+      const lines = r.output.split("\n").slice(0, Math.max(1, n));
+      return { ok: true, output: lines.join("\n") };
+    }
+  }
+
+  // find . -name '*.ts' / find PATH -name PATTERN → glob
+  const findM =
+    /^find\s+(\S+)\s+-name\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
+  if (findM) {
+    const base = findM[1] === "." ? "" : findM[1].replace(/^\.\//, "");
+    const name = findM[2] ?? findM[3] ?? findM[4] ?? "*";
+    const pattern = base ? `${base.replace(/\\/g, "/")}/${name}` : `**/${name}`;
+    return globTool(clone, { pattern });
+  }
+
+  return null;
+}
+
+function windowsUnixBashHint(binary: string): string {
+  const map: Record<string, string> = {
+    grep: 'use the swarm **grep** tool: {tool:"grep", args:{pattern:"…", path:"."}}',
+    egrep: 'use the swarm **grep** tool',
+    fgrep: 'use the swarm **grep** tool',
+    rg: 'use the swarm **grep** tool',
+    find: 'use the swarm **glob** tool: {tool:"glob", args:{pattern:"**/*.ts"}}',
+    cat: 'use the swarm **read** tool: {tool:"read", args:{path:"file"}}',
+    head: 'use the swarm **read** tool',
+    tail: 'use the swarm **read** tool',
+    ls: 'use the swarm **list** tool: {tool:"list", args:{path:"."}}',
+    which: "use where.exe on Windows, or prefer swarm tools",
+  };
+  const tip = map[binary] ?? "prefer swarm read/grep/glob/list tools";
+  return (
+    `bash: \`${binary}\` is not available as a Windows shell command. ${tip}. ` +
+    `Do not shell out to Unix utilities on this host.`
+  );
+}
+
 async function bashTool(clone: string, args: Record<string, unknown>): Promise<ToolResult> {
   const command = String(args.command ?? "");
   if (!command) return { ok: false, error: "bash: missing `command` arg" };
-  // Layer 1 (defense in depth): the existing buildCommandAllowlist.
-  // Rejects empty cmds, shell metacharacters (;, &&, ||, |, >, <, $, `),
-  // and binaries not in the curated set (npm/npx/yarn/pnpm/bun/tsc/
-  // tsx/deno/eslint/prettier/biome/jest/vitest/mocha/make/task/just/
-  // typedoc/jsdoc/docusaurus). Same rules opencode's swarm-builder uses.
+  // Policy: any non-empty shell command is allowed (including &&, pipes, cd).
+  // Still bound to clone cwd + wall-clock timeout (ToolDispatcher sandbox).
   const allow = checkBuildCommand(command);
   if (!allow.ok) {
     return { ok: false, error: `bash refused: ${allow.reason ?? "(no reason)"}` };
   }
-  // Layer 2: cwd-bound spawn with shell:false + wall-clock timeout.
-  // Metachar block + argv split prevents shell injection; cwd is the clone.
-  const argv = tokenizeAllowlistedCommand(command);
-  if (argv.length === 0) {
-    return { ok: false, error: "bash refused: empty command after tokenize" };
+
+  // Prefer in-process tools for simple Unix CLIs (especially Windows).
+  const rewritten = await tryFulfillUnixBashViaTools(clone, command);
+  if (rewritten) return rewritten;
+
+  const binary = firstShellBinary(command);
+  if (process.platform === "win32" && UNIX_SHELL_BINARIES.has(binary)) {
+    // Complex pipeline (grep | …) or flags we didn't rewrite — fail closed
+    // with guidance instead of spamming cmd.exe "'grep' is not recognized".
+    return { ok: false, error: windowsUnixBashHint(binary) };
   }
-  const bin = argv[0]!;
-  const binArgs = argv.slice(1);
+
   try {
+    // Validate cwd so we don't get opaque "The system cannot find the path specified."
+    try {
+      await fs.access(clone);
+    } catch {
+      return { ok: false, error: `bash: clone cwd not found: ${clone}` };
+    }
+
     const out = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-      const child = spawn(bin, binArgs, {
+      // shell:true so agents can use `cd … && …`, pipes, etc.
+      // Explicit stdio pipes — never inherit (avoids cmd.exe noise on the server console).
+      const child = spawn(command, [], {
         cwd: clone,
-        shell: false,
+        shell: true,
         windowsHide: true,
         env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
       });
       let stdout = "";
       let stderr = "";
@@ -443,7 +736,22 @@ async function bashTool(clone: string, args: Record<string, unknown>): Promise<T
     const e = err as { stdout?: string; stderr?: string; killed?: boolean; message?: string };
     const stdout = (e.stdout ?? "").toString();
     const stderr = (e.stderr ?? "").toString();
-    const detail = stderr.trim() || stdout.trim() || (e.message ?? "exec failed");
+    let detail = stderr.trim() || stdout.trim() || (e.message ?? "exec failed");
+    // Windows cmd noise → clearer agent-facing message
+    if (/not recognized as an internal or external command/i.test(detail)) {
+      const bin = firstShellBinary(command);
+      if (UNIX_SHELL_BINARIES.has(bin)) {
+        detail = windowsUnixBashHint(bin);
+      } else {
+        detail =
+          `Command not found on this Windows host (${bin || "unknown"}). ` +
+          `Prefer swarm tools (read/grep/glob/list) or a Windows-available binary. Original: ${detail.slice(0, 200)}`;
+      }
+    } else if (/The system cannot find the path specified/i.test(detail)) {
+      detail =
+        `Path not found (Windows). Use repo-relative paths under the clone; avoid Unix-only paths. ` +
+        `cwd=${clone}. Detail: ${detail.slice(0, 200)}`;
+    }
     if (e.killed) {
       return {
         ok: false,
@@ -613,13 +921,7 @@ export class ToolDispatcher {
         break;
       }
       case "propose_hunks":
-        result = {
-          ok: true,
-          output: JSON.stringify({
-            note: "propose_hunks tool called — return hunks in your response",
-            format: { hunks: "Hunk[]", skip: "string (optional)" },
-          }),
-        };
+        result = await proposeHunksTool(this.clonePath, call.args);
         break;
       case "write":
       case "edit":

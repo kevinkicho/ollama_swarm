@@ -139,51 +139,33 @@ export const AgentPanel = memo(function AgentPanel({
   const activity = useSwarm((s) => s.agentActivity[agent.id]);
   const streamingMeta = useSwarm((s) => s.streamingMeta[agent.id]);
   const streamingText = useSwarm((s) => s.streaming[agent.id] ?? "");
-  const actView = viewAgentActivity(agent, activity, { streamingMeta, streamingText });
-  const elapsed = useElapsedTicker(
-    actView.busySince ?? agent.thinkingSince,
-    actView.isBusy,
-  );
-  const samples = useSwarm((s) => s.latency[agent.id] ?? EMPTY_SAMPLES);
   const phase = useSwarm((s) => s.phase);
+  // Task #40: when the run ended cleanly, rename the terminal state
+  // to "done" so users can tell it apart from a crash / user-stop.
+  const runCompletedCleanly = phase === "completed";
+  const actBase = viewAgentActivity(agent, activity, {
+    streamingMeta,
+    streamingText,
+    runCompletedCleanly,
+  });
+  const elapsed = useElapsedTicker(actBase.busySince, actBase.isBusy);
+  const actView = elapsed
+    ? viewAgentActivity(agent, activity, {
+        streamingMeta,
+        streamingText,
+        runCompletedCleanly,
+        elapsed,
+      })
+    : actBase;
+  const samples = useSwarm((s) => s.latency[agent.id] ?? EMPTY_SAMPLES);
   // #291: portal-based tooltip. Sidebar is `<aside overflow-y-auto>`,
   // so the prior `absolute bottom-full left-0` popover got clipped by
   // the sidebar boundary on top-of-list agents AND overlapped the
   // card's own header line. Portal + fixed positioning escapes both.
   const triggerRef = useRef<HTMLDivElement>(null);
   const [hoverPos, setHoverPos] = useState<{ top: number; left: number; placeBelow: boolean } | null>(null);
-  const retryLabel =
-    agent.status === "retrying" && agent.retryAttempt && agent.retryMax
-      ? `retrying ${agent.retryAttempt}/${agent.retryMax}${agent.retryReason ? ` · ${agent.retryReason}` : ""}`
-      : null;
-  // Unit 39: while "thinking" and we have a timestamp, show the ticker;
-  // otherwise fall back to status / retry label as before.
-  const waitingLabel =
-    actView.isBusy && elapsed && actView.isWaiting
-      ? `waiting ${elapsed}`
-      : null;
-  const streamingLabel =
-    actView.isBusy && elapsed && actView.phase === "streaming"
-      ? `streaming ${elapsed}`
-      : null;
-  // Task #40: when the run ended cleanly, rename the terminal state
-  // to "done" so users can tell it apart from a crash / user-stop.
-  const runCompletedCleanly = phase === "completed";
-  const statusLabel =
-    agent.status === "stopped" && runCompletedCleanly ? "done" : agent.status;
-  const activityLine =
-    actView.label && actView.isBusy && actView.phase !== "streaming" && !actView.isWaiting
-      ? [
-          actView.label,
-          agent.activityAttempt && agent.activityMaxAttempts
-            ? `(${agent.activityAttempt}/${agent.activityMaxAttempts})`
-            : null,
-          elapsed ?? null,
-        ]
-          .filter(Boolean)
-          .join(" · ")
-      : null;
-  const primaryLine = retryLabel ?? activityLine ?? streamingLabel ?? waitingLabel ?? statusLabel;
+  // Single projection owns primary line (task · phase · elapsed).
+  const primaryLine = actView.primaryLine;
   // Override the status dot color for the done case too.
   const dotColor =
     agent.status === "stopped" && runCompletedCleanly

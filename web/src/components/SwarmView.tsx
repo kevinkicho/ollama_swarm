@@ -29,7 +29,11 @@ import { buildResumeStartPayload } from "../lib/resumeRun";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
 import { resolveBrainAgentId } from "@ollama-swarm/shared/brainAlias";
 import { applyStatusSnapshotToStore } from "../state/swarmStoreHydrate";
-import { stopControlsDisabled } from "../lib/stopControls";
+import {
+  hardStopDisabled,
+  drainControlsDisabled,
+  type PendingStopAction,
+} from "../lib/stopControls";
 import { drainIneligibleReason, isDrainEligible } from "@ollama-swarm/shared/drainEligibility";
 import { planningSubphaseLabel } from "@ollama-swarm/shared/planningSubphase";
 import { apiFetch } from "../lib/apiFetch";
@@ -61,8 +65,9 @@ export const SwarmView = memo(function SwarmView() {
   // low-pressure consideration; "ask" = inline answer + no direction
   // change. The server's /api/swarm/say schema validates these.
   const [sayIntent, setSayIntent] = useState<"suggest" | "steer" | "ask">("steer");
-  /** Run id for an in-flight stop/drain/resume — scoped so concurrent runs stay controllable. */
-  const [actionRunId, setActionRunId] = useState<string | null>(null);
+  /** In-flight stop/drain/resume — scoped so concurrent runs stay controllable.
+   *  Drain leaves hard Stop enabled so the user can escalate mid-drain. */
+  const [pendingAction, setPendingAction] = useState<PendingStopAction | null>(null);
   const [tab, setTab] = useState<Tab>("transcript");
   const { runId: routeRunId } = useParams<{ runId?: string }>();
 
@@ -96,11 +101,14 @@ export const SwarmView = memo(function SwarmView() {
   // /api/swarm/start returning and the first run_started event landing.
   const activeRunId = useSwarm((s) => s.runId);
   const viewRunId = activeRunId ?? routeRunId;
-  const stopBusy = actionRunId != null && actionRunId === viewRunId;
+  const stopBusy =
+    pendingAction != null &&
+    pendingAction.runId === viewRunId &&
+    pendingAction.kind === "resume";
   const navigate = useNavigate();
 
   useEffect(() => {
-    setActionRunId(null);
+    setPendingAction(null);
   }, [viewRunId]);
   const stopUrl = activeRunId
     ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/stop`
@@ -215,7 +223,7 @@ export const SwarmView = memo(function SwarmView() {
     if (!confirm("Stop the swarm IMMEDIATELY? All spawned opencode processes will be terminated and any worker mid-commit will lose its work.")) return;
     const targetRunId = viewRunId;
     if (!targetRunId) return;
-    setActionRunId(targetRunId);
+    setPendingAction({ runId: targetRunId, kind: "stop" });
     try {
       const res = await apiFetch(stopUrl, { method: "POST" });
       // Show closing phase immediately; rehydrate will sync summary + terminal state.
@@ -227,7 +235,7 @@ export const SwarmView = memo(function SwarmView() {
       setError(err instanceof Error ? err.message : String(err));
       setPhaseScoped("stopped", (useSwarm.getState().round || 0) as any);
     } finally {
-      setActionRunId((cur) => (cur === targetRunId ? null : cur));
+      setPendingAction((cur) => (cur?.runId === targetRunId && cur.kind === "stop" ? null : cur));
       // re-hydrate status so UI reflects backend (especially useful for
       // review/per-run views where phase might be stale)
       apiFetch(statusUrl).then(r => r.ok ? r.json() : null).then(applyStatusSnapshot).catch(() => {});
@@ -237,12 +245,13 @@ export const SwarmView = memo(function SwarmView() {
   // Task #167: soft-stop. Workers finish their current claim (so
   // no in-flight commits get lost), no new claims, then escalates
   // to hard stop. Backstopped at 3 min on the server side.
+  // Hard Stop stays enabled during drain so the user can escalate.
   const onDrain = async () => {
-    if (!confirm("Drain & Stop: workers finish their current claim (no new claims), then the swarm exits. Hung prompts abort after ~90s; full backstop 3 min. OK to proceed?")) return;
+    if (!confirm("Drain & Stop: workers finish their current claim (no new claims), then the swarm exits. Hung prompts abort after ~90s; full backstop 3 min. OK to proceed? (Stop remains available to kill immediately.)")) return;
     const targetRunId = viewRunId;
     if (!targetRunId) return;
     setPhaseScoped("draining", (useSwarm.getState().round || 0) as any);
-    setActionRunId(targetRunId);
+    setPendingAction({ runId: targetRunId, kind: "drain" });
     try {
       const drainUrl = viewRunId ? `/api/swarm/drain` : "/api/swarm/drain";
       const body = viewRunId ? JSON.stringify({ runId: viewRunId }) : undefined;
@@ -259,7 +268,7 @@ export const SwarmView = memo(function SwarmView() {
       setError(err instanceof Error ? err.message : String(err));
       setPhaseScoped("stopped", (useSwarm.getState().round || 0) as any);
     } finally {
-      setActionRunId((cur) => (cur === targetRunId ? null : cur));
+      setPendingAction((cur) => (cur?.runId === targetRunId && cur.kind === "drain" ? null : cur));
       // re-hydrate status so UI reflects backend (especially useful for
       // review/per-run views where phase might be stale)
       apiFetch(statusUrl).then(r => r.ok ? r.json() : null).then(applyStatusSnapshot).catch(() => {});
@@ -280,7 +289,7 @@ export const SwarmView = memo(function SwarmView() {
       if (!proceed) return;
     }
     const targetRunId = viewRunId ?? "resume";
-    setActionRunId(targetRunId);
+    setPendingAction({ runId: targetRunId, kind: "resume" });
     try {
       const res = await apiFetch("/api/swarm/start", {
         method: "POST",
@@ -300,7 +309,7 @@ export const SwarmView = memo(function SwarmView() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setActionRunId((cur) => (cur === targetRunId ? null : cur));
+      setPendingAction((cur) => (cur?.runId === targetRunId && cur.kind === "resume" ? null : cur));
     }
   };
 
@@ -337,8 +346,9 @@ export const SwarmView = memo(function SwarmView() {
 
   // Show stop/drain controls for any run that has not yet reached a terminal phase.
   // isTerminal logic accounts for composite runs with sub phases.
+  // phase "draining" keeps hard Stop enabled (canStop true) so the user can escalate.
   const canStop = !isTerminal && phase !== "stopping";
-  const stopDisabled = stopControlsDisabled(actionRunId, viewRunId, canStop);
+  const stopDisabled = hardStopDisabled(pendingAction, viewRunId, canStop);
   const todos = useSwarm((s) => s.todos);
   const claimedCount = useMemo(
     () => Object.values(todos).filter((t) => t.status === "claimed").length,
@@ -362,10 +372,18 @@ export const SwarmView = memo(function SwarmView() {
     workerThinking,
   });
   // Prefer server status when present (includes replan state); fall back to local board counts.
+  // Soft-stop is available for active phases (including discussing) — only boot phases disable it.
   const drainEligible = statusDrainEligible ?? localDrainEligible;
-  const drainDisabled = stopDisabled || !drainEligible;
+  // Drain disables itself while pending/draining; hard Stop stays available.
+  const drainDisabled = drainControlsDisabled(
+    pendingAction,
+    viewRunId,
+    canStop,
+    drainEligible,
+    phase,
+  );
   const drainIneligibleTitle = drainEligible
-    ? "Soft stop: workers finish their current claim, then swarm exits. Up to 3 min. Preserves in-flight commits."
+    ? "Soft stop: finish in-flight turn/claims, then exit (no new claims). Up to 3 min. Stop stays available to escalate immediately."
     : (statusDrainReason ??
       drainIneligibleReason({
         phase,
@@ -479,7 +497,7 @@ export const SwarmView = memo(function SwarmView() {
       ) : null}
       {(phase === "planning" || phase === "seeding") && planningSubphase ? (
         <div className="shrink-0 px-3 py-1.5 bg-sky-950/40 border-b border-sky-700/30 text-xs text-sky-200">
-          Planning — {planningSubphaseLabel(planningSubphase)}. Use Stop to exit immediately (Drain enables once workers are executing or agents are streaming).
+          Planning — {planningSubphaseLabel(planningSubphase)}. Drain & Stop soft-exits after the current turn; Stop kills immediately.
         </div>
       ) : null}
       <IdentityStrip />
@@ -517,9 +535,13 @@ export const SwarmView = memo(function SwarmView() {
                 onClick={onStop}
                 disabled={stopDisabled}
                 className="text-xs px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-red-100 font-medium transition-colors disabled:bg-ink-600 disabled:text-ink-300 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-ink-800"
-                title="Hard stop: aborts every in-flight prompt immediately and kills all opencode processes. Worker mid-commit loses its work. Use to escalate during a stuck Drain."
+                title={
+                  phase === "draining"
+                    ? "Escalate drain: abort every in-flight prompt now and kill all opencode processes."
+                    : "Hard stop: aborts every in-flight prompt immediately and kills all opencode processes. Worker mid-commit loses its work. Stays available during Drain to escalate."
+                }
               >
-                Stop
+                {phase === "draining" ? "Stop now" : "Stop"}
               </button>
             </div>
           )}

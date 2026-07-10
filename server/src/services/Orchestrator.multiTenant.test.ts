@@ -29,6 +29,18 @@ test("Orchestrator: ActiveRun class declared with required fields", () => {
   assert.match(ACTIVE_RUN_SRC, /persister: RunStatePersister/);
 });
 
+test("ActiveRun: unified teardown closes amendments + lock; dispose never re-stops runner", () => {
+  assert.match(ACTIVE_RUN_SRC, /async teardown\(opts: ActiveRunTeardownOpts/);
+  assert.match(ACTIVE_RUN_SRC, /releaseResources\(\)/);
+  // dispose must close amendments (was a leak before).
+  assert.match(
+    ACTIVE_RUN_SRC,
+    /dispose\(\): void \{[\s\S]*?amendments\.close/,
+  );
+  // stopRunner:false path must exist for natural completion.
+  assert.match(ACTIVE_RUN_SRC, /stopRunner !== false/);
+});
+
 test("Orchestrator: runs map replaces the singleton runner field", () => {
   // The old `private runner: SwarmRunner | null = null;` line should
   // be gone — replaced by the runs map. The compat getter still
@@ -45,18 +57,58 @@ test("Orchestrator: cap check uses opts.maxConcurrentRuns with default 4", () =>
     SRC,
     /const cap = this\.opts\.maxConcurrentRuns \?\? 4/,
   );
+  // Cap must count live runners, not terminal ghosts still in the map.
   assert.match(
     SRC,
-    /if \(this\.runs\.size >= cap\)/,
+    /const live = this\.countLiveRuns\(\);\s*if \(live >= cap\)/,
   );
 });
 
 test("Orchestrator: terminal-phase runs are reaped before cap check", () => {
   // Without the reap, terminal runs would pin the cap forever (a
   // user who runs 4 then never explicitly stops would be stuck).
+  // Reap uses teardown(stopRunner:false) so completed summaries stay intact.
   assert.match(
     SRC,
-    /cleanupStaleRuns[\s\S]*?phase === "stopped"[\s\S]*?run\.dispose\(\)/,
+    /cleanupStaleRuns[\s\S]*?phase === "stopped"[\s\S]*?teardown\(\{\s*stopRunner:\s*false/,
+  );
+});
+
+test("Orchestrator: stopRun/drainRun use exact runId only (no prefix match)", () => {
+  assert.doesNotMatch(
+    SRC,
+    /k\.startsWith\(runId\) \|\| runId\.startsWith\(k\)/,
+    "prefix match is unsafe under multi-tenant concurrency",
+  );
+  assert.match(SRC, /getRunExact\(runId\)/);
+});
+
+test("Orchestrator: natural completion reaps run without re-stop", () => {
+  // start() awaits the full loop; waitUntilSettled + isRunning are backstops.
+  assert.match(
+    SRC,
+    /waitUntilSettled/,
+    "must join runner settle before natural-complete reap",
+  );
+  assert.match(
+    SRC,
+    /while \(this\.runs\.has\(runId!\) && activeRun\.isRunning\(\)\)/,
+    "poll isRunning as backstop before reap",
+  );
+  assert.match(
+    SRC,
+    /!activeRun\.isTornDown\(\) && !activeRun\.isRunning\(\)/,
+    "only reap when runner is truly terminal",
+  );
+  assert.match(
+    SRC,
+    /removeRun\(activeRun, \{\s*stopRunner:\s*false\s*\}\)/,
+    "free map+lock without runner.stop on natural complete",
+  );
+  assert.match(
+    SRC,
+    /orphanCloneLock/,
+    "must track clone lock until ActiveRun owns it",
   );
 });
 
@@ -83,9 +135,11 @@ test("Orchestrator: injectUserForRun + stopRun both 404 (return false) on unknow
   );
 });
 
-test("Orchestrator: per-run AgentManager via createManager factory", () => {
-  assert.match(SRC, /createManager: \(runId: string\) => AgentManager/);
-  assert.match(SRC, /const manager = this\.opts\.createManager\(runId\)/);
+test("Orchestrator: per-run hub + AgentManager share one RunEventHub", () => {
+  assert.match(SRC, /createHub: \(runId: string\) => RunEventHub/);
+  assert.match(SRC, /createManager: \(runId: string, hub: RunEventHub\) => AgentManager/);
+  assert.match(SRC, /const runHub = this\.opts\.createHub\(runId\)/);
+  assert.match(SRC, /const manager = this\.opts\.createManager\(runId, runHub\)/);
 });
 
 test("Orchestrator: wrappedEmit binds runId + persister at build time", () => {
@@ -103,17 +157,18 @@ test("Orchestrator: wrappedEmit binds runId + persister at build time", () => {
 });
 
 test("Orchestrator: amendments close on stopRun; start finally only clears gate", () => {
-  // Amendments close is now inside ActiveRun.stop() called by stopRun.
-  assert.match(SRC, /async stopRun\([\s\S]*?await run\.stop\(\)/);
-  assert.match(SRC, /return runId;\s*\} finally \{\s*this\.startInProgress = false;/);
+  // Amendments close lives in ActiveRun.releaseResources via removeRun → teardown.
+  assert.match(SRC, /async stopRun\([\s\S]*?await this\.removeRun\(/);
+  assert.match(ACTIVE_RUN_SRC, /amendments\.close\(this\.runId\)/);
+  assert.match(SRC, /return runId;\s*\} catch[\s\S]*?finally \{\s*this\.startInProgress = false;/);
 });
 
-test("Orchestrator: stopRun cleans up via ActiveRun + deletes from map", () => {
-  // Cleanup is now delegated to ActiveRun.stop() (which stops monitors + persister).
-  // This keeps per-run isolation without leaks.
+test("Orchestrator: stopRun cleans up via removeRun + deletes from map", () => {
+  // Unified path: stopRun → removeRun → teardown + runs.delete.
+  assert.match(SRC, /async stopRun\([\s\S]*?await this\.removeRun\(/);
   assert.match(
     SRC,
-    /async stopRun\([\s\S]*?await run\.stop\(\)[\s\S]*?this\.runs\.delete\(run\.runId\)/,
+    /private async removeRun\([\s\S]*?await run\.teardown\([\s\S]*?this\.runs\.delete\(run\.runId\)/,
   );
 });
 

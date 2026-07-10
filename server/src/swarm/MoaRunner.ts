@@ -70,10 +70,15 @@ export class MoaRunner extends DiscussionRunnerBase {
     this.resetState(cfg);
     this.actualRoundsCompleted = 0;
 
-    void this.loop(cfg).catch((err) => {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`MoA crashed: ${msg}`);
-      this.setPhase("failed");
+    await this.runTrackedLoop(async () => {
+      try {
+        await this.loop(cfg);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`MoA crashed: ${msg}`);
+        this.setPhase("failed");
+        throw err;
+      }
     });
   }
 
@@ -133,6 +138,7 @@ export class MoaRunner extends DiscussionRunnerBase {
         ollamaBaseUrl: this.opts.ollamaBaseUrl,
         transcript: this.transcript,
         getStopping: () => this.stopping,
+        getDrainRequested: () => this.drainRequested,
         getDerivedRubric: () => this.derivedRubric,
         setDerivedRubric: (r) => { this.derivedRubric = r; },
         setStartedAt: (ts) => {

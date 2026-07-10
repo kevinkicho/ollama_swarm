@@ -70,3 +70,7 @@ test("councilWorkerRunner — file-scoped dequeue defers overlapping writers", (
   assert.match(SRC, /scoreCouncilTodoForDequeue/, "must score todos for overlap and build-last");
   assert.match(SRC, /WORKER_DEFER_POLL_MS/, "must poll when todos are deferred but still pending");
 });
+
+test("councilWorkerRunner — reports settle agent id for cycle settlement", () => {
+  assert.match(SRC, /onTodoSettledByAgent/, "must notify settlement with agent id");
+});

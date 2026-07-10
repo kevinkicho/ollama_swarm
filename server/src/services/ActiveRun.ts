@@ -13,9 +13,23 @@ import { loadRunSummaryForRunId } from "./runSummaryDiscovery.js";
 import { recoverCrashSummaryFromSnapshot } from "./crashSummaryRecovery.js";
 import type { RepoService } from "./RepoService.js";
 
+export type ActiveRunTeardownOpts = {
+  /**
+   * Call runner.stop(). Default true for user/hard stop.
+   * Use false when the runner already finished naturally — re-stop would
+   * kill agents again and rewrite phase as "stopped".
+   */
+  stopRunner?: boolean;
+  /** Optional forced terminal snapshot (user-stop backstop). */
+  terminalPhase?: SwarmPhase;
+  terminalReason?: string;
+  /** Backfill summary.json when missing. Default true. */
+  ensureSummary?: boolean;
+};
+
 /**
  * ActiveRun encapsulates the full lifecycle of a single run.
- * Provides RAII-style cleanup via stop().
+ * Provides RAII-style cleanup via teardown() / stop() / dispose().
  * This centralizes resource management that was previously scattered
  * in Orchestrator.start / stopRun / cleanupStaleRuns.
  */
@@ -66,59 +80,120 @@ export class ActiveRun {
     }
   }
 
+  /** True after teardown/stop/dispose has run (idempotent gate). */
+  isTornDown(): boolean {
+    return this.stopped;
+  }
+
   /**
-   * Clean stop + resource release. Idempotent.
+   * Unified cleanup for all terminal paths (user stop, natural complete,
+   * start failure, stale reap). Idempotent.
    */
-  async stop(): Promise<void> {
+  async teardown(opts: ActiveRunTeardownOpts = {}): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
 
-    try {
-      await this.runner.stop();
-    } catch (err) {
-      this.log.warn('ActiveRun runner stop failed', { error: err instanceof Error ? err.message : err });
-    }
-
-    await this.ensureSummaryOnDisk();
-
-    try { this.conformanceMonitor?.stop(); } catch {}
-    try { this.embeddingDriftMonitor?.stop(); } catch {}
-    try { this.persister.stop(); } catch {}
-
-    if (this.holdsCloneLock && this.cfg.localPath) {
+    const stopRunner = opts.stopRunner !== false;
+    if (stopRunner) {
       try {
-        releaseLock({ clonePath: this.cfg.localPath, runId: this.runId });
+        await this.runner.stop();
       } catch (err) {
-        this.log.warn('ActiveRun release-lock failed', { error: err instanceof Error ? err.message : err });
+        this.log.warn("ActiveRun runner stop failed", {
+          error: err instanceof Error ? err.message : err,
+        });
       }
     }
 
-    if (this.amendments && this.runId) {
-      try { this.amendments.close(this.runId); } catch {}
+    if (opts.terminalPhase) {
+      try {
+        this.forceTerminalSnapshot(
+          opts.terminalPhase,
+          opts.terminalReason ?? opts.terminalPhase,
+        );
+      } catch (err) {
+        this.log.warn("ActiveRun forceTerminalSnapshot failed", {
+          error: err instanceof Error ? err.message : err,
+        });
+      }
     }
 
-    this.log.info('ActiveRun stopped and cleaned up');
+    if (opts.ensureSummary !== false) {
+      await this.ensureSummaryOnDisk();
+    }
+
+    this.releaseResources();
+    this.log.info("ActiveRun torn down", {
+      stopRunner,
+      terminalPhase: opts.terminalPhase,
+    });
   }
 
-  dispose() {
-    // Sync version for cases where async not needed
+  /**
+   * User/hard stop: stop the runner + release resources.
+   * Prefer Orchestrator.removeRun → teardown for map bookkeeping.
+   */
+  async stop(): Promise<void> {
+    await this.teardown({
+      stopRunner: true,
+      terminalPhase: "stopped",
+      terminalReason: "user-stop",
+    });
+  }
+
+  /**
+   * Sync resource release when the runner is already terminal (or never
+   * started). Does not call runner.stop() — avoids rewriting "completed"
+   * as "stopped". Always closes amendments + clone lock.
+   */
+  dispose(): void {
     if (this.stopped) return;
     this.stopped = true;
-    try { this.conformanceMonitor?.stop(); } catch {}
-    try { this.embeddingDriftMonitor?.stop(); } catch {}
-    try { this.persister.stop(); } catch {}
-    if (this.holdsCloneLock && this.cfg.localPath) {
-      try { releaseLock({ clonePath: this.cfg.localPath, runId: this.runId }); } catch {}
-    }
+    this.releaseResources();
   }
 
   isRunning(): boolean {
     return this.runner.isRunning?.() ?? true;
   }
 
-  /** Force a terminal snapshot write with the given phase and stopReason.
-   *  Used to guarantee terminal state even if last event was intermediate phase.
-   */
+  /** Release monitors, persister, clone lock, amendments. Safe to call once. */
+  private releaseResources(): void {
+    try {
+      this.conformanceMonitor?.stop();
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.embeddingDriftMonitor?.stop();
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.persister.stop();
+    } catch {
+      /* ignore */
+    }
+
+    if (this.holdsCloneLock && this.cfg.localPath) {
+      try {
+        releaseLock({ clonePath: this.cfg.localPath, runId: this.runId });
+      } catch (err) {
+        this.log.warn("ActiveRun release-lock failed", {
+          error: err instanceof Error ? err.message : err,
+        });
+      }
+      this.holdsCloneLock = false;
+    }
+
+    if (this.amendments && this.runId) {
+      try {
+        this.amendments.close(this.runId);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  /** Force a terminal snapshot write with the given phase and stopReason. */
   private async ensureSummaryOnDisk(): Promise<void> {
     if (!this.cfg.localPath) return;
     const existing = loadRunSummaryForRunId(this.cfg.localPath, this.runId);
@@ -140,7 +215,7 @@ export class ActiveRun {
         this.repos,
       );
     } catch (err) {
-      this.log.warn('ActiveRun crash summary backfill failed', {
+      this.log.warn("ActiveRun crash summary backfill failed", {
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -148,7 +223,11 @@ export class ActiveRun {
 
   forceTerminalSnapshot(phase: SwarmPhase, stopReason: string) {
     // The persister expects schedule with current runner status, but we override phase
-    const status = (this.runner.status ? this.runner.status() : { phase, transcript: [], agents: [] }) as any;
+    const status = (
+      this.runner.status
+        ? this.runner.status()
+        : { phase, transcript: [], agents: [] }
+    ) as any;
     status.phase = phase;
     this.persister.schedule({
       runId: this.runId,
@@ -160,6 +239,8 @@ export class ActiveRun {
       amendments: [],
       runConfig: this.runConfig,
       contract: status.contract,
+      // stopReason is consumed by recovery tooling when present
+      stopReason,
     } as any);
     this.persister.stop(); // flush immediately
   }

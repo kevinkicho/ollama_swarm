@@ -40,8 +40,13 @@ export function createWrappedEmit(params: CreateWrappedEmitParams): (e: SwarmEve
     const stamped: SwarmEvent =
       e.runId === undefined ? { ...e, runId } : e;
 
-    if (hub) hub.emit(stamped as any, "lifecycle");
-    baseEmit(stamped);
+    // Single fan-out: hub already has broadcaster + eventLogger + debug sinks.
+    // Do NOT also baseEmit when hub is present — that double-broadcasts to WS.
+    if (hub) {
+      hub.emit(stamped as any);
+    } else {
+      baseEmit(stamped);
+    }
     brain.trackRunHealth(stamped);
     const runner = getRunner();
     if (!runner) return;

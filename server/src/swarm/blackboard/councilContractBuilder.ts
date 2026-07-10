@@ -275,7 +275,7 @@ export async function tryCouncilContract(
 
   const useSharedExplore =
     allAgents.length > 1
-    && (ctx.getActive()?.councilSharedExplore ?? true);
+    && ctx.getActive()?.councilSharedExplore === true;
 
   const seedDirectEmit = isSeedSufficientForDirectEmit(seed, ctx.getActive());
   let sharedBrief: string | null = null;

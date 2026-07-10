@@ -105,11 +105,27 @@ export const WORKER_JSON_NUDGE_TURN = 15;
 export const WORKER_JSON_NUDGE_MESSAGE =
   "Stop exploring. Emit your JSON hunk array now (or {\"skip\":true} if out of scope). No more tool calls.";
 
+/**
+ * Council / discussion draft rounds: emit-biased tool budget.
+ * Full planner profile (20) was too open-ended — agents grepped until
+ * "Ollama tool loop exceeded 20 turns" and posted no draft.
+ */
+export const EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS = 10;
+
+/** Nudge discussion drafters to stop exploring and write the draft. */
+export const DISCUSSION_DRAFT_JSON_NUDGE_TURN = 6;
+
+export const DISCUSSION_DRAFT_JSON_NUDGE_MESSAGE =
+  "Stop exploring the repo. Emit your council draft NOW as clear findings "
+  + "(JSON array of issues/actions or structured prose). No more tool calls.";
+
 /** Hard wall-clock caps for provider prompts (ms). */
 export const DEFAULT_WORKER_PROMPT_WALL_CLOCK_MS = 120_000;
 /** Create-scaffold worker turns (emit-only + exemplar) — longer for JSON hunks. */
 export const DEFAULT_WORKER_CREATE_SCAFFOLD_WALL_CLOCK_MS = 240_000;
 export const DEFAULT_PLANNER_PROMPT_WALL_CLOCK_MS = 180_000;
+/** Discussion draft / reveal rounds — slightly longer for mixed tool+think. */
+export const DEFAULT_DISCUSSION_DRAFT_PROMPT_WALL_CLOCK_MS = 150_000;
 
 export function defaultPromptWallClockMs(profile: string | null | undefined): number | undefined {
   if (!profile) return DEFAULT_WORKER_PROMPT_WALL_CLOCK_MS;
@@ -133,6 +149,14 @@ export function workerJsonNudgeForProfile(
     return { atTurn: WORKER_JSON_NUDGE_TURN, message: WORKER_JSON_NUDGE_MESSAGE };
   }
   return undefined;
+}
+
+/** Discussion-draft emit nudge (independent of worker profile). */
+export function discussionDraftJsonNudge(): { atTurn: number; message: string } {
+  return {
+    atTurn: DISCUSSION_DRAFT_JSON_NUDGE_TURN,
+    message: DISCUSSION_DRAFT_JSON_NUDGE_MESSAGE,
+  };
 }
 
 /** Tighter cap for blackboard planning explore turns (contract / todos / research). */
@@ -192,8 +216,17 @@ export const PROFILE_TOOLS: Record<ToolProfileId, readonly string[]> = {
   swarm: [],
   "swarm-read": ["read", "grep", "glob", "list"],
   "swarm-planner": ["read", "grep", "glob", "list", "bash", "web_search", "web_fetch"],
-  "swarm-builder": ["read", "grep", "glob", "list", "bash"],
-  "swarm-builder-research": ["read", "grep", "glob", "list", "bash", "web_search", "web_fetch"],
+  "swarm-builder": ["read", "grep", "glob", "list", "bash", "propose_hunks"],
+  "swarm-builder-research": [
+    "read",
+    "grep",
+    "glob",
+    "list",
+    "bash",
+    "web_search",
+    "web_fetch",
+    "propose_hunks",
+  ],
   "swarm-research": ["read", "grep", "glob", "list", "web_search", "web_fetch"],
 };
 

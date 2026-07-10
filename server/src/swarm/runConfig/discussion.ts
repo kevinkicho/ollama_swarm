@@ -209,6 +209,12 @@ export interface RunConfigDiscussion {
    *  (`debateStreams.runJudgeTurn`). Other runners can adopt via
    *  `selfCritique.ts` helpers. */
   selfCritique?: boolean;
+  /**
+   * Council: shared research standup each cycle (all agents web-scan, notes
+   * merged into progressContext). Default **false** — independent per-worker
+   * literature research only. Opt in when you want a collective scan.
+   */
+  councilSharedResearch?: boolean;
   /** T-Item-CouncilRec (2026-05-04): council reconcile policy.
    *  Picks how the council settles on a final answer:
    *  - "revise" (default): existing behavior — agents see peer drafts
