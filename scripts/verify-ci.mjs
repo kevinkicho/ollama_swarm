@@ -45,6 +45,18 @@ const steps = [
     args: ['run', 'build'],
     env: {},
   },
+  {
+    name: 'Electron stub test',
+    cmd: 'node',
+    args: ['electron/test-stub.cjs'],
+    env: {},
+  },
+  {
+    name: 'Eval score + preset coverage gates',
+    cmd: 'node',
+    args: ['--test', 'eval/score-run.test.mjs', 'eval/preset-coverage.test.mjs'],
+    env: {},
+  },
 ];
 
 function run(step) {
