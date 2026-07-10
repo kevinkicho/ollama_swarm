@@ -179,7 +179,7 @@ export async function runMoaLoopBody(
   // with the other 8 runners. Pre-fix MoA was the only preset that
   // could blow past cfg.tokenBudget without halting (audit Pattern 2a).
   const tokenBaseline = snapshotLifetimeTokens();
-  // Empty/junk proposals only — not Jaccard (similar proposer drafts are expected).
+  // Empty/junk proposals only (similar proposer drafts are expected).
   const deadLoopGuard = new OutputEmptyDeadLoopGuard({
     roleLabel: "proposers",
     unit: "round",
@@ -262,7 +262,7 @@ export async function runMoaLoopBody(
       return;
     }
 
-    // Empty/junk transcript turns only (not Jaccard on similar proposal text).
+    // Empty/junk transcript turns only (similar proposal text is expected).
     const newEntries = host.transcript
       .slice(transcriptLenBefore)
       .filter((e) => e.role === "agent");

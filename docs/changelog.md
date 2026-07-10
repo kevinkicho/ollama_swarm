@@ -5,7 +5,7 @@ The git log is the authoritative record; this summarizes user-facing changes.
 
 ## 2026-07-10 — Guards without Jaccard, Brain reconfig, quality levers, dead-code prune
 
-**Loop policy (docs + code).** Affirm: do **not** re-enable turn-level Jaccard as a primary halt (log re-reads looked like loops). Primary automated stops remain empty/junk output, plan-empty, wall-clock/token/quota caps, and board/ledger stuck. See `docs/decisions.md` (2026-07-10) and `docs/postmortems/stream-guards-removed.md`.
+**Loop policy (docs + code).** Primary automated stops **are** empty/junk output, plan-empty, wall-clock/token/quota caps, and board/ledger stuck. Optional Jaccard/embedding remains a secondary “discussion settled” signal only (log re-reads share vocabulary while work continues). See `docs/decisions.md` (2026-07-10) and `docs/postmortems/stream-guards-removed.md`.
 
 **Guard → Brain → UI.** Shared `guardNotify.ts` injects Brain suggestions (or transcript fallback) with optional `RECONFIG` JSON. Sleep-safe discussion wall-clock watchdog. Status fields: `drainEligible`, `drainIneligibleReason`, `capsRemaining`, `earlyStopDetail`. UI: `RunHealthChip`, drain tooltip/caps hint, `BrainSuggestionBubble` one-click reconfig apply.
 

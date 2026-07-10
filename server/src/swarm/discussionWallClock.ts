@@ -1,7 +1,6 @@
 // Sleep-safe wall-clock watchdog for discussion presets.
-// Reuses blackboard tick-accumulator so laptop sleep does not burn the cap.
-//
-// NOT related to Jaccard / stream similarity — pure resource gate.
+// Reuses blackboard tick-accumulator so laptop sleep leaves the cap intact.
+// Pure resource gate (active elapsed wall-clock).
 
 import {
   createTickAccumulator,

@@ -1,8 +1,8 @@
 // Shared guard-trip notifications: system line + optional Brain suggestion
 // with a one-click RECONFIG payload for the UI.
 //
-// Not Jaccard: only called for empty-output, plan-empty, resource caps,
-// audit/tier stuck — never "similar text" alone.
+// Called for empty-output, plan-empty, resource caps, and audit/tier stuck.
+// These are the primary whole-run gates (see docs/decisions.md 2026-07-10).
 
 import type { TranscriptEntrySummary } from "../types.js";
 
@@ -87,8 +87,8 @@ function bodyFor(kind: GuardTripKind, detail: string, reconfig: GuardReconfigHin
     `Guard: ${kind}`,
     `Detail: ${detail}`,
     "",
-    "This is a resource or empty-output stop — not a text-similarity (Jaccard) loop.",
-    "If agents were only re-reading similar prior logs, that is usually OK; empty/junk turns or caps are different.",
+    "This stop is a resource cap or empty/junk-output gate (primary loop policy).",
+    "Agents re-reading prior logs with shared vocabulary is normal productive work; empty/junk turns or caps are the signal here.",
   ];
   if (reconfig && Object.keys(reconfig).length > 0) {
     lines.push("", `RECONFIG: ${JSON.stringify(reconfig)}`);

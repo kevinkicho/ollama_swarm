@@ -21,7 +21,7 @@ See **`docs/RELEASE-1.0-PLAN.md`** and **`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`*
 
 ## 2026-07-10 — Guards, quality levers, hygiene ✅ DONE
 
-- [x] Empty-output / plan-empty / wall-clock / budget guards (no Jaccard primary halt)
+- [x] Empty-output / plan-empty / wall-clock / budget guards as primary loop gates
 - [x] `guardNotify` → Brain inject + RECONFIG; `RunHealthChip` + `BrainSuggestionBubble`
 - [x] Quality levers wired: failurePatternSeed, preserveDissent, selfCritique, swapSidesBiasCheck, pheromoneDecay, midCycleBroadcast
 - [x] `spawnAgent` single API (drop `spawnAgentNoOpencode`)

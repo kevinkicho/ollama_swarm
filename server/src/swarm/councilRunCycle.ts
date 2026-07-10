@@ -161,7 +161,7 @@ async function runCycle1Discussion(
     detail: "3 rounds",
   });
 
-  // Empty/junk discussion turns only — not Jaccard (revisers often restate peers).
+  // Empty/junk discussion turns only (revisers often restate peers with shared vocabulary).
   const deadLoopGuard = new OutputEmptyDeadLoopGuard({
     roleLabel: "drafters",
     unit: "round",

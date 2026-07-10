@@ -176,7 +176,7 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
     await this.runDiscussionLoop(cfg, "Round-robin", async (cfg) => {
       const earlyCheckRound = this.roles && cfg.rounds >= 4 ? Math.ceil(cfg.rounds / 2) : 0;
       const tokenBaseline = snapshotLifetimeTokens();
-      // Empty/junk turns only — not Jaccard similarity (log re-reads can look similar).
+      // Empty/junk turns only (log re-reads with shared vocabulary are expected).
       const deadLoopGuard = new OutputEmptyDeadLoopGuard({
         roleLabel: "peers",
         unit: "round",

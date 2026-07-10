@@ -44,12 +44,14 @@ This is the structured index of all relevant, tracked documentation for the olla
 ## Operational & Historical
 
 - **docs/decisions.md**  
-  Key architectural and product decisions. Includes **2026-07-08: no `:cloud`
-  admission throttling**, **2026-07-09: no stream-guard aborts**, and
-  **2026-07-10: no Jaccard primary loop gate**.
+  Key architectural and product decisions. Includes **2026-07-08: open parallel
+  `:cloud` prompts**, **2026-07-09: transport retries + think-stream caps on
+  live paths**, and **2026-07-10: primary loop gates = empty-output / caps /
+  board progress**.
 
 - **docs/postmortems/stream-guards-removed.md**  
-  Why stream/Jaccard guards were removed; what remains valid (empty-output, caps).
+  Why the old stream/Jaccard primary stack was removed; current primary gates
+  (empty-output, caps, board progress).
 
 - **docs/changelog.md**  
   Historical change log.

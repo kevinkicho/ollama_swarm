@@ -13,9 +13,9 @@
 // vs plan structure), so this module exposes TWO classes. The shared
 // part is the consecutive-counter + threshold + format-string template.
 //
-// IMPORTANT: This is NOT turn-level Jaccard / stream similarity. Empty
-// or looksLikeJunk only — legitimate similar prose (e.g. reading prior
-// logs) does NOT trip this guard. See docs/decisions.md 2026-07-10.
+// IMPORTANT: Trips only when new turns are empty or looksLikeJunk.
+// Shared vocabulary / log re-reads leave this guard idle. Primary
+// empty-output gate; see docs/decisions.md 2026-07-10.
 
 import { looksLikeJunk } from "./extractText.js";
 import type { TranscriptEntry } from "../types.js";

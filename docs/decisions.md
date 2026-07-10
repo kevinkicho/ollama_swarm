@@ -2,117 +2,118 @@
 
 This document records major architectural and product decisions with their rationale and status.
 
-## 2026-07-09: No stream guards or loop-detection aborts on agent prompts
+## 2026-07-09: Live prompt paths use transport retries and think-stream caps only
 
-**Decision:** Do **not** use the **old** stream guard stack (100K pre-tool caps,
-intra-stream loop modules, stream-abort retry addenda, transport retry on guard abort).
+**Decision:** Agent prompt paths use **transport retries** (network/timeouts) and the
+narrow **think-stream** hard caps in `shared/src/streamThinkGuard.ts`. The older
+stack (pre-tool character caps, intra-stream loop modules, stream-abort retry
+addenda, transport retry on guard abort, turn-level `SWARM_LOOP_DETECTION`) is
+**removed** from live paths.
 
-**What we removed (do not bring back without explicit reversal):**
+**Removed modules / behaviors (historical):**
 - `STREAM_GUARD_*` **pre-tool** character caps and `intraStreamLoop` modules
 - `streamAbortRetry` addenda prepended on guard abort
 - Retryability of `intra-stream loop` / `runaway stream` errors in `retry.ts`
 - Turn-level `SWARM_LOOP_DETECTION` / `maybeEmitLoopWarning`
 - `semanticLoopDetector.ts` and `intraStreamLoopDetector.ts` modules
 
-**Narrow exception retained:** `shared/src/streamThinkGuard.ts` — think-**only**
-hard caps (160k chars / 120s / repetitive tail) via `composePromptGuardSignals`.
-Transport retry on guard abort is **blocked** (`isPromptGuardAbort`). No full
-explore prompt replay.
+**Retained think-stream path:** `streamThinkGuard` — think-**only** hard caps
+(160k chars / 120s / repetitive tail) via `composePromptGuardSignals`.
+`isPromptGuardAbort` keeps those aborts out of transport-retry replay (emit-only
+salvage; full explore prompt replay is out of scope).
 
 **Extension in progress:** Think-stream **referee checkpoint** (soft tier + agent
 triage). Design: `docs/design/think-guard-referee-checkpoint.md`. Flag
-`THINK_GUARD_REFEREE_ENABLED` default **off**; user/Brain can tune budgets mid-run.
+`THINK_GUARD_REFEREE_ENABLED` defaults **off**; user/Brain can tune budgets mid-run.
 
 **Rationale:** Old guards aborted after large spend then restarted the full explore
-prompt — 2×–4× billed work. Referee extension preserves anti-retry + emit-only salvage.
+prompt — 2×–4× billed work. Referee extension keeps anti-retry + emit-only salvage.
 
 **Detail:** `docs/postmortems/stream-guards-removed.md`
 
 **Status:** Old stack removed. Narrow `streamThinkGuard` retained. Referee extension
-landed incrementally (PR 0–1 + budget UI); not default-on.
+landed incrementally (PR 0–1 + budget UI); defaults off.
 
 ---
 
-## 2026-07-10: Do not re-enable turn-level Jaccard as primary loop gate
+## 2026-07-10: Primary loop gates are empty-output, plan-empty, caps, and board progress
 
 **Context:** Around 2026-07-07/08, long agent outputs that *looked* like
-repetition were diagnosed as dead loops. A later observation: many of those
+repetition were diagnosed as dead loops. Later observation: many of those
 runs were agents **reading large prior-run logs / stockpiled worker output**
-that legitimately said similar things while building on previous work — not
-byte-identical self-loops. That weakens the case for “similarity ⇒ stuck.”
+that legitimately shared vocabulary while building on previous work —
+productive work with overlapping prose, rather than byte-identical self-loops.
 
-**Decision:** Keep **not** re-enabling **turn-level Jaccard / SWARM_LOOP_DETECTION**
-as a primary whole-run halt. Jaccard (and embedding similarity used as a
-*stop-early* signal in MoA/RR convergence) can still be valid **optional**
-signals when the product intent is “discussion settled, save rounds.” They
-are **invalid as the sole proof of wasteful loops** when transcripts or
-workspace logs contain natural repetition.
+**Decision:** **Primary whole-run automated stops** are:
+- **OutputEmpty dead-loop** — new agent turns are empty / `looksLikeJunk` only
+  (safe when agents re-read log stockpiles with similar prose)
+- **PlanEmpty dead-loop** — zero parseable assignments (OW family)
+- **Token budget / wall-clock / quota** — resource caps
+- **Blackboard tier stuck / council audit stuck** — board/ledger progress
+- **Transport retries** — network failures
 
-**What remains valid (and is not Jaccard):**
-- **OutputEmpty dead-loop** — only when new agent turns are empty/`looksLikeJunk`
-  (not “similar prose”). Safe against log-stockpile false positives.
-- **PlanEmpty dead-loop** — zero parseable assignments (OW family).
-- **Token budget / wall-clock / quota** — resource caps, not text similarity.
-- **Blackboard tier stuck / council audit stuck** — board/ledger progress, not Jaccard.
-- **Transport retries only** — network failures, not stream content.
+**Optional similarity signals:** Jaccard / embedding similarity remain valid as
+**optional stop-early / “discussion settled”** helpers (e.g. MoA/RR convergence)
+when the product intent is saving rounds after agreement. They are **secondary**
+to the primary gates above; log re-reads and multi-round refinement produce high
+overlap without meaning the run is stuck.
 
-**False-positive class for Jaccard specifically:**
+**Situations that produce high text overlap while work continues:**
 - Re-reading prior workers’ logs with shared vocabulary
 - Legitimate multi-round refinement with overlapping claims
 - Large shared context (seed + transcript) dominating token sets
 
-**Status:** Affirms 2026-07-09 removal of turn-level Jaccard halt. Prefer
-empty-output + caps + progress signatures if loops reappear.
+**Status:** Aligns with 2026-07-09 stream-guard removal. Primary gates =
+empty-output + caps + progress signatures.
 
 ---
 
-## 2026-07-08: No client-side `:cloud` admission / concurrency throttling
+## 2026-07-08: Parallel `:cloud` fan-out is open (no in-app admission queue)
 
-**Decision:** Do **not** implement local “cloud admission”, slot queues, or artificial
-limits on how many agents may call `:cloud` models in parallel. All agents in a
-fan-out (council contract draft, blackboard workers, etc.) may open provider
-streams concurrently without waiting on an in-app semaphore.
+**Decision:** All agents in a fan-out (council contract draft, blackboard workers,
+etc.) **may open provider streams concurrently**. Live paths use open parallel
+`:cloud` prompts — no local admission semaphore, slot queue, or artificial cap
+on concurrent `:cloud` callers.
 
-**What we removed (do not bring back):**
+**Historical removal (shipped):**
 - `cloudAdmission.ts` — `acquireCloudSlot` / `releaseCloudSlot` (max 2 concurrent)
 - `burstSpacingForModels` widening to 3s per agent for `:cloud` bursts
-- UI copy that implied “cloud slot”, “throttled, not sent yet”, or “request sent
-  but no bytes” when the app itself was blocking the prompt
+- UI copy that implied “cloud slot”, “throttled, waiting to send”, or “request sent
+  but no bytes” while the app itself held the prompt
 
 **Rationale:**
-- The stack already supports multiple concurrent streams to the AI provider; the
-  admission layer added misleading dock/sidebar states and made the product feel
-  broken when agents were healthy but locally queued.
-- Council and similar presets are designed for parallel independent drafts; throttling
-  one agent while showing “waiting for model” on others was worse UX than provider-side
+- The stack supports multiple concurrent streams to the AI provider; the admission
+  layer added misleading dock/sidebar states when agents were healthy but locally queued.
+- Council and similar presets are designed for parallel independent drafts; serializing
+  one agent while others showed “waiting for model” was worse UX than provider-side
   queue latency.
-- Cold-start and provider queue behavior are real; they should be surfaced honestly
-  (elapsed time, streaming when bytes arrive), not simulated with fake pipeline stages.
+- Cold-start and provider queue behavior are real; surface them honestly (elapsed time,
+  streaming when bytes arrive) rather than simulating pipeline stages.
 
-**If provider overload becomes a problem:** fix at the provider/gateway layer
-(retries, backoff, failover chain in `providerFailover`) or reduce `agentCount` /
-preset parallelism — **not** a hidden in-process pipe that blocks `promptWithRetry`.
+**When provider overload is real:** fix at the provider/gateway layer (retries, backoff,
+failover chain in `providerFailover`) or reduce `agentCount` / preset parallelism.
+Keep `promptWithRetry` unblocked by an in-process admission pipe.
 
-**Status:** Shipped (removed). **Agents and contributors: treat reintroducing cloud
-admission as a regression unless the product owner explicitly reverses this decision
-in this file.**
+**Status:** Shipped. Reintroducing in-app cloud admission is a product regression
+unless this decision is explicitly reversed here.
 
 ---
 
-## 2026-07-08: Council stop must wait for execution workers before close-out
+## 2026-07-08: Council stop waits for execution workers before close-out
 
-**Decision:** Hard `stop()` must not write the run summary or call `killAll()` while
-`runCouncilWorkers` is still in flight. Close-out waits on `workerDrainPromise` (with
-a bounded timeout), aborts all in-flight provider HTTP via `Session.abortController`,
-and freezes the transcript after `writeSummary()` so stragglers cannot append.
+**Decision:** Hard `stop()` **writes the run summary and calls `killAll()` only after**
+`runCouncilWorkers` has settled (or the bounded wait expires). Close-out waits on
+`workerDrainPromise` (bounded timeout), aborts in-flight provider HTTP via
+`Session.abortController`, and freezes the transcript after `writeSummary()` so
+stragglers leave the log alone.
 
 **Ideal behavior (full sequence):** See `docs/run-stop-drain-lifecycle.md`.
 
-**What we fixed (do not regress):**
-- `awaitLoopThenCloseOut` racing the main loop on a **15s timeout** without waiting for
-  execution workers — caused “ports released” while literature/worker/hunk lines still
-  landed (run `43e79fa7`).
-- Hard `stop()` setting `drainRequested = true` (soft-drain flag only belongs on `drain()`).
+**Fixes that are load-bearing:**
+- `awaitLoopThenCloseOut` raced the main loop on a **15s timeout** while execution
+  workers were still running — “ports released” while literature/worker/hunk lines
+  still landed (run `43e79fa7`).
+- Hard `stop()` setting `drainRequested = true` (`drainRequested` belongs on soft `drain()`).
 - Literature pre-pass calling `chatOnce` without an abort signal.
 - `killAll()` not aborting stored `Session.abortController` instances (E3 cloud path has
   no local subprocess to kill; HTTP must be cancelled explicitly).

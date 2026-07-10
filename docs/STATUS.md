@@ -5,7 +5,7 @@
 
 > **Release track:** See [`docs/RELEASE-1.0-PLAN.md`](RELEASE-1.0-PLAN.md). Setup **Simple** = core+supported (default blackboard). Brain agents: `GET /api/swarm/brain/control-surface` + [`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`](BRAIN-OS-FOR-EXTERNAL-AGENTS.md).
 
-> **2026-07-10 — Loop / guard policy.** Do **not** use turn-level Jaccard similarity as a primary whole-run halt (false positives when agents re-read prior-run logs). Prefer empty/junk output dead-loop, plan-empty, wall-clock/token/quota caps, and board/ledger progress stuck. Guard trips notify Brain (`guardNotify`) with optional RECONFIG; UI shows `RunHealthChip` + `BrainSuggestionBubble`. Details: `docs/decisions.md`, `docs/postmortems/stream-guards-removed.md`.
+> **2026-07-10 — Loop / guard policy.** Primary whole-run stops **are** empty/junk output, plan-empty, wall-clock/token/quota caps, and board/ledger progress stuck. Optional Jaccard/embedding is secondary (convergence / save rounds); shared vocabulary from re-reading prior-run logs is treated as normal work. Guard trips notify Brain (`guardNotify`) with optional RECONFIG; UI shows `RunHealthChip` + `BrainSuggestionBubble`. Details: `docs/decisions.md`, `docs/postmortems/stream-guards-removed.md`.
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
 > now goes through a direct `SessionProvider` (Ollama / Anthropic / OpenAI)

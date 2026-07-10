@@ -1,5 +1,6 @@
 // Lightweight progress signatures for stuck detection.
-// Prefer board/ledger signals over text Jaccard (see docs/decisions.md 2026-07-10).
+// Board/ledger signals (unmet criteria, open/stale/committed) — primary
+// stuck path; see docs/decisions.md 2026-07-10.
 
 /**
  * Stable signature of "what progress looks like" for consecutive-cycle stuck checks.

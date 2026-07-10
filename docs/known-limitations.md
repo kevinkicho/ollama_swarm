@@ -18,18 +18,19 @@ an unattended run launcher.
 
 ---
 
-## Turn-level Jaccard is not a primary loop halt (2026-07-10)
+## Primary loop gates are empty-output, plan-empty, caps, and board progress (2026-07-10)
 
-**Choice:** Whole-run “agents repeating themselves” detection via text Jaccard
-(or similar) is **not** used as a primary stop. Empty/junk turns, plan-empty,
-resource caps, and board/ledger stuck remain the automated gates.
+**Choice:** Whole-run automated stops **are** empty/junk turns, plan-empty,
+resource caps, and board/ledger stuck. Turn-level text Jaccard (or similar) is
+an **optional secondary** signal for “discussion settled / save rounds,” not the
+main proof a run is stuck.
 
-**Why:** Agents re-reading prior-run logs or refining shared claims often look
-“repetitive” while still making progress — Jaccard false-positives halt useful
+**Why:** Agents re-reading prior-run logs or refining shared claims often share
+vocabulary while still making progress — similarity-as-primary would halt useful
 work. See `docs/decisions.md` and `docs/postmortems/stream-guards-removed.md`.
 
-**When to revisit:** Optional *convergence* “discussion settled, save rounds”
-signals (MoA/RR) are separate from wasteful-loop halts.
+**When to revisit:** Expanding optional *convergence* helpers (MoA/RR) as product
+features remains fine; keep them secondary to the primary gates above.
 
 ---
 
@@ -49,27 +50,25 @@ require token by default when host is non-loopback.
 
 ---
 
-## Parallel `:cloud` prompts are not throttled in-app (2026-07-08)
+## Parallel `:cloud` prompts fan out openly (2026-07-08)
 
 **Choice:** When N agents use `:cloud` models in the same phase, all N may call
-`promptWithRetry` → provider concurrently. There is **no** local admission
-controller, slot queue, or “max 2 concurrent cloud” gate.
+`promptWithRetry` → provider concurrently. Live paths use open parallel fan-out
+(no local admission controller, slot queue, or “max 2 concurrent cloud” gate).
 
 **Why:** A short-lived `cloudAdmission` layer caused false “waiting for model /
-cloud slot” UI, delayed prompts that were never sent, and fought the preset
+cloud slot” UI, delayed prompts that stayed unsent, and fought the preset
 design (e.g. four independent council contract drafts). Production use showed
-four parallel provider streams work; the throttle made the system feel worse,
-not more reliable.
+four parallel provider streams work; the throttle made the system feel less
+reliable.
 
-**Do not reintroduce without updating `docs/decisions.md`:** See decision
-*“No client-side `:cloud` admission / concurrency throttling”* (2026-07-08).
-Contributors and coding agents should not add admission pipes, semaphores on
-`:cloud`, or widened stagger solely to “protect” the provider from parallel
-fan-out.
+**Policy:** See decision *“Parallel `:cloud` fan-out is open”* (2026-07-08) in
+`docs/decisions.md`. Keep admission pipes / `:cloud` semaphores / widened stagger
+out of the hot path unless that decision is reversed there.
 
 **When overload is real:** Use `providerFailover`, retry/backoff in
-`promptWithRetry`, lower `agentCount`, or provider-side limits — not hidden
-in-process queuing that mislabels agent state.
+`promptWithRetry`, lower `agentCount`, or provider-side limits. Keep agent
+state labels honest (avoid in-process queues that mislabel “thinking”).
 
 ---
 

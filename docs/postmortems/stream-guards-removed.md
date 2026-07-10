@@ -6,8 +6,8 @@ Stream character caps, intra-stream loop detection, stream-abort retry prompts, 
 default turn-level loop halting were **removed from all live prompt paths**. They
 increased wall-clock time and token spend more than they prevented runaway output.
 
-**Do not re-enable** without explicit product-owner approval and a new design that
-does not multiply work on abort. See `docs/decisions.md` (2026-07-09 entry).
+**Reintroduction** requires explicit product-owner approval and a design that
+avoids multiplying work on abort. See `docs/decisions.md` (2026-07-09 entry).
 
 ## Symptoms users saw
 
@@ -44,14 +44,14 @@ does not multiply work on abort. See `docs/decisions.md` (2026-07-09 entry).
 Guards converted **one unbounded waste** into **several bounded wastes** — still
 unacceptable for cost and latency.
 
-## What we do instead
+## What live paths use instead
 
-- **No stream caps or intra-stream aborts** in `promptWithRetry`, `chatOnceWithStreaming`,
-  or council/blackboard adapters.
-- **Transport retries only** for network/timeouts (unchanged `RETRY_MAX_ATTEMPTS=3`).
+- **Transport retries** for network/timeouts in `promptWithRetry` /
+  `chatOnceWithStreaming` / adapters (`RETRY_MAX_ATTEMPTS=3`). Stream char caps and
+  intra-stream aborts are off those paths.
 - **User stop / drain** — manual escape hatch for true runaway (unchanged).
 - **Prompt design** — prefer “emit after N tool calls” in explore prompts if models
-  ramble (future, not guards).
+  ramble (product direction; separate from stream guards).
 - **`semanticLoopDetector.ts`** and **`intraStreamLoopDetector.ts`** — deleted.
 
 ## Cost impact (illustrative)
@@ -79,14 +79,15 @@ guarantee of a better outcome.
 
 User observation after the fact: agents that appeared to “repeat themselves”
 were often **reading massive prior-run / stockpile logs** with similar wording
-while continuing real work — not stuck in generative loops. That means:
+while continuing real work — productive exploration with shared vocabulary.
 
-1. **Similarity-based halt (Jaccard / turn-level loop detection)** would have
-   been a **false positive** on those runs (halted useful work).
-2. Removing Jaccard as a **primary** gate remains correct.
-3. **Empty/junk consecutive turns** and **resource caps** remain the right
-   primary automated stops — they do not fire on long, non-empty, informative
-   (even if similar) log consumption.
+1. A **similarity-based primary halt** (Jaccard / turn-level loop detection)
+   would have **false-positive**’d those runs and stopped useful work.
+2. **Primary gates stay** empty/junk consecutive turns, plan-empty, resource caps,
+   and board/ledger progress — these trip on silence/junk/caps/stuck board state
+   and leave long, informative, similar-but-progressing turns alone.
+3. Optional Jaccard/embedding **convergence** signals remain valid for
+   “discussion settled, save rounds” product intent.
 
-See also `docs/decisions.md` entry **2026-07-10: Do not re-enable turn-level
-Jaccard as primary loop gate**.
+See also `docs/decisions.md` entry
+**2026-07-10: Primary loop gates are empty-output, plan-empty, caps, and board progress**.
