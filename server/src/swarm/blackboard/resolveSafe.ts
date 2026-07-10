@@ -40,12 +40,16 @@ export async function resolveSafe(clone: string, relPath: string): Promise<strin
     if (relFromClone.startsWith("..") || path.isAbsolute(relFromClone)) {
       throw new Error(`absolute path not allowed: ${relPath}`);
     }
-    relPath = relFromClone || ".";
+    // Rewrite to clone-relative so the lexical check below does not
+    // path.resolve(clone, <absolute>) — on Windows that can yield a path
+    // whose path.relative(clone, …) is absolute when clone ≠ realpath(clone).
+    relPath = (relFromClone || ".").replace(/\\/g, "/");
   }
 
   // Lexical check first — cheap, and catches the obvious `../` cases without
-  // touching the filesystem.
-  const abs = path.resolve(clone, normalizedRel);
+  // touching the filesystem. Always use the (possibly rewritten) relative path.
+  const relForLex = looksAbsolute ? relPath : normalizedRel;
+  const abs = path.resolve(clone, relForLex);
   const lexRel = path.relative(clone, abs);
   if (lexRel.startsWith("..") || path.isAbsolute(lexRel)) {
     throw new Error(`path escapes clone: ${relPath}`);
