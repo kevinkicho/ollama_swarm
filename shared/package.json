@@ -37,7 +37,7 @@
     "./workerHunks": "./src/workerHunks.ts"
   },
   "scripts": {
-    "test": "node --import tsx --test src/**/*.test.ts",
+    "test": "node scripts/run-tests.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
