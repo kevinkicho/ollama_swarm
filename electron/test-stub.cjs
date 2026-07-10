@@ -10,16 +10,23 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-// Load prior run data (from previous context: blackboard, 5 agents, 0 rounds)
-let priorRaw = fs.readFileSync(path.join(__dirname, '../run-summary-embedded.json'), 'utf8');
-priorRaw = priorRaw.replace(/^\uFEFF/, ''); // strip BOM if present
-const priorData = JSON.parse(priorRaw);
+// Optional fixture (removed from repo — use defaults when absent).
+const fixturePath = path.join(__dirname, '../run-summary-embedded.json');
+let priorData = {};
+if (fs.existsSync(fixturePath)) {
+  let priorRaw = fs.readFileSync(fixturePath, 'utf8').replace(/^\uFEFF/, '');
+  try {
+    priorData = JSON.parse(priorRaw);
+  } catch {
+    priorData = {};
+  }
+}
 const priorParams = {
   preset: priorData.preset || 'blackboard',
   agentCount: priorData.agentCount || 5,
-  rounds: priorData.rounds || 0,
+  rounds: priorData.rounds ?? 0,
   model: priorData.model || 'deepseek-v4-flash:cloud',
-  userDirective: (priorData.userDirective || '').slice(0, 100) + '...',
+  userDirective: ((priorData.userDirective || 'stub-directive').slice(0, 100)) + '...',
   runId: priorData.runId || 'unknown',
   wallClockMs: priorData.wallClockMs || 0,
   totalPromptTokens: priorData.totalPromptTokens || 0

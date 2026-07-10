@@ -165,7 +165,7 @@ describe("todoQueueWrappers — completeTodoQ", () => {
     assert.equal(rec.terminals[0].remaining, 1);
   });
 
-  it("throws if todo isn't in-progress (lost-race after reap)", () => {
+  it("accepts late complete after reaper fail (no crash on race)", () => {
     const { wrappers, todoQueue } = setup();
     const id = wrappers.postTodoQ({
       description: "x",
@@ -174,9 +174,10 @@ describe("todoQueueWrappers — completeTodoQ", () => {
       createdAt: 1,
     });
     wrappers.dequeueTodoQ("w");
-    // Reaper transitions to failed.
+    // Reaper transitions to failed; worker may still complete shortly after.
     todoQueue.fail(id, "reaped");
-    assert.throws(() => wrappers.completeTodoQ(id), /Cannot complete todo/);
+    wrappers.completeTodoQ(id);
+    assert.equal(todoQueue.get(id)?.status, "completed");
   });
 });
 
