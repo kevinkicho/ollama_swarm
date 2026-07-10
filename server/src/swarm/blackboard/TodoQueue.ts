@@ -300,6 +300,32 @@ export class TodoQueue {
     return reaped;
   }
 
+  /**
+   * Reap auditor-stalled pending-commit todos (worker finished hunks, auditor
+   * never approved). Releases claim back to pending so another worker can retry.
+   * Uses startedAt as the age clock (set when proposeCommit moves to pending-commit).
+   */
+  reapStalePendingCommit(now: number, maxAgeMs: number): string[] {
+    const reaped: string[] = [];
+    for (const t of this.todos) {
+      if (
+        t.status === "pending-commit" &&
+        t.startedAt !== undefined &&
+        now - t.startedAt > maxAgeMs
+      ) {
+        t.status = "pending";
+        t.workerId = undefined;
+        t.startedAt = undefined;
+        t.proposedHunks = undefined;
+        t.proposedFiles = undefined;
+        t.reason = `auditor timeout (>${Math.round(maxAgeMs / 60_000)}min pending-commit)`;
+        t.retries += 1;
+        reaped.push(t.id);
+      }
+    }
+    return reaped;
+  }
+
   /** Mark a claimed todo as completed.
    *
    *  Race-safe (2026-07-09 release hardening):

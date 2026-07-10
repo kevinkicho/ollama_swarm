@@ -37,26 +37,37 @@ function printHelp() {
 ollama-swarm — control ollama_swarm from terminal or Brain-OS agents
 
 Commands (full control loop for agents):
-  start        Start a swarm (flags or --config from Brain)
-  status       Show status (global or --run-id)
-  amend        Send amendment to a running swarm (--run-id + --text)
-  reconfig     Extend run limits (--run-id + extend flags)
-  stop         Stop a run (--run-id)
-  recommend    Get Brain-style preset recommendation for a directive
+  start             Start a swarm (flags or --config from Brain)
+  status            Show status (global or --run-id)
+  list              List active runs
+  amend             Mid-run directive addendum (--run-id + --text)
+  reconfig          Extend rounds / wall-clock / token budget
+  say               Inject steer/suggest/ask into transcript
+  drain             Soft-stop (finish current claims)
+  stop              Hard stop (--run-id)
+  summary           Fetch run summary (--run-id + --clone-path)
+  recommend         Preset recommendation for a directive
+  control-surface   Machine-readable API map for Brain agents
 
 Examples for Brain-OS agents:
+  ollama-swarm control-surface --json
   ollama-swarm recommend --directive "scan papers and synthesize common properties"
   ollama-swarm start --directive "..." --preset council --web-tools
   ollama-swarm status --run-id abc123
   ollama-swarm amend --run-id abc123 --text "focus on the board todos for X"
+  ollama-swarm say --run-id abc123 --text "prioritize tests" --intent steer
+  ollama-swarm reconfig --run-id abc123 --extend-wall-clock-min 15
+  ollama-swarm drain --run-id abc123
   ollama-swarm stop --run-id abc123
+  ollama-swarm summary --run-id abc123 --clone-path "C:\\\\path\\\\to\\\\clone"
 
 Common options:
   --config <file>          JSON config (from Brain chat)
   --directive, -d <text>
   --preset <name>
   --agent-count <n>  --rounds <n>  --model <str>
-  --parent-path, --repo-url, --server, --clone-path, --run-id, --text, --dry-run, --help
+  --parent-path, --repo-url, --server, --clone-path, --run-id, --text
+  --intent suggest|steer|ask  --dry-run  --json  --help
 `);
 }
 
@@ -170,6 +181,69 @@ async function cmdStop(values, serverUrl) {
   console.log(`✅ Stop requested for ${runId}`);
 }
 
+async function cmdDrain(values, serverUrl) {
+  const runId = values['run-id'] || values.runId;
+  if (!runId) {
+    console.error('drain requires --run-id');
+    process.exit(1);
+  }
+  const url = `${serverUrl.replace(/\/$/, '')}/api/swarm/drain`;
+  await fetchJson(url, { method: 'POST', body: JSON.stringify({ runId }) });
+  console.log(`✅ Drain requested for ${runId}`);
+}
+
+async function cmdSay(values, serverUrl) {
+  const runId = values['run-id'] || values.runId;
+  const text = values.text || values.directive;
+  if (!runId || !text) {
+    console.error('say requires --run-id and --text');
+    process.exit(1);
+  }
+  const intent = values.intent || 'steer';
+  const url = `${serverUrl.replace(/\/$/, '')}/api/swarm/say`;
+  const body = { runId, text, intent };
+  if (values['target-agent']) body.targetAgent = values['target-agent'];
+  const res = await fetchJson(url, { method: 'POST', body: JSON.stringify(body) });
+  console.log('✅ Say injected:', res);
+}
+
+async function cmdList(values, serverUrl) {
+  const url = `${serverUrl.replace(/\/$/, '')}/api/swarm/active-runs`;
+  const data = await fetchJson(url);
+  if (values.json) {
+    console.log(JSON.stringify(data));
+  } else {
+    console.log(JSON.stringify(data, null, 2));
+  }
+}
+
+async function cmdSummary(values, serverUrl) {
+  const runId = values['run-id'] || values.runId;
+  const clonePath = values['clone-path'];
+  if (!runId || !clonePath) {
+    console.error('summary requires --run-id and --clone-path');
+    process.exit(1);
+  }
+  const q = new URLSearchParams({ runId, clonePath });
+  const url = `${serverUrl.replace(/\/$/, '')}/api/swarm/run-summary?${q}`;
+  const data = await fetchJson(url);
+  if (values.json) {
+    console.log(JSON.stringify(data));
+  } else {
+    console.log(JSON.stringify(data, null, 2));
+  }
+}
+
+async function cmdControlSurface(values, serverUrl) {
+  const url = `${serverUrl.replace(/\/$/, '')}/api/swarm/brain/control-surface`;
+  const data = await fetchJson(url);
+  if (values.json) {
+    console.log(JSON.stringify(data));
+  } else {
+    console.log(JSON.stringify(data, null, 2));
+  }
+}
+
 async function cmdRecommend(values, serverUrl) {
   const directive = values.directive || values.d;
   if (!directive) {
@@ -254,6 +328,8 @@ async function main() {
       'wall-clock-min': { type: 'string' },
       'token-budget': { type: 'string' },
       text: { type: 'string' },
+      intent: { type: 'string' },
+      'target-agent': { type: 'string' },
       'dry-run': { type: 'boolean' },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
@@ -277,17 +353,33 @@ async function main() {
       case 'status':
         await cmdStatus(values, serverUrl);
         break;
+      case 'list':
+        await cmdList(values, serverUrl);
+        break;
       case 'amend':
         await cmdAmend(values, serverUrl);
         break;
       case 'reconfig':
         await cmdReconfig(values, serverUrl);
         break;
+      case 'say':
+        await cmdSay(values, serverUrl);
+        break;
+      case 'drain':
+        await cmdDrain(values, serverUrl);
+        break;
       case 'stop':
         await cmdStop(values, serverUrl);
         break;
+      case 'summary':
+        await cmdSummary(values, serverUrl);
+        break;
       case 'recommend':
         await cmdRecommend(values, serverUrl);
+        break;
+      case 'control-surface':
+      case 'control_surface':
+        await cmdControlSurface(values, serverUrl);
         break;
       default:
         console.error(`Unknown command: ${cmd}`);

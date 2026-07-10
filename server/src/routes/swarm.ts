@@ -52,6 +52,8 @@ import { normalizeWslPath } from "../services/pathNormalize.js";
 import { preflightDiskCheck } from "../swarm/preflightDiskCheck.js";
 import { projectRunCost, exceedsBudget } from "../swarm/preflightCostProjector.js";
 import { decideStopAction } from "../swarm/drainStopPolicy.js";
+import { PerRunStopDebounce } from "../swarm/control/perRunStopDebounce.js";
+import { BRAIN_CONTROL_SURFACE } from "../swarm/brainControlSurface.js";
 import { SwarmRoleSchema, StartBody, SayBody, OpenBody, ReconfigBody } from "./schemas.js";
 import { buildPresetGuideString, buildOptionsTable } from "../swarm/presetGuide.js";
 import { extractJsonFromText, extractLabeledJson } from "../../../shared/src/extractJson.js";
@@ -92,8 +94,7 @@ export function swarmRouter(orch: Orchestrator): Router {
   // fine and avoids threading orch.opts.repos through.
   const repos = new RepoService();
   // R6 + multi-run fix: per-runId last stop click for double-click-within-5s.
-  // Process-global was wrong when concurrent runs both used SWARM_DRAIN_ON_STOP.
-  const lastStopClickAtByRun = new Map<string, number>();
+  const lastStopClickAtByRun = new PerRunStopDebounce();
 
   r.get("/status", validate(StatusQuery, "query"), (req: Request, res: Response) => {
     const { runId } = req.query as unknown as z.infer<typeof StatusQuery>;
@@ -778,9 +779,9 @@ export function swarmRouter(orch: Orchestrator): Router {
       if (config.SWARM_DRAIN_ON_STOP) {
         const decision = decideStopAction({
           now: Date.now(),
-          lastStopAt: lastStopClickAtByRun.get(resolved.runId) ?? null,
+          lastStopAt: lastStopClickAtByRun.get(resolved.runId),
         });
-        lastStopClickAtByRun.set(resolved.runId, Date.now());
+        lastStopClickAtByRun.touch(resolved.runId);
         if (decision.action === "drain") {
           const ok = await orch.drainRun(resolved.runId);
           if (!ok) {
@@ -1493,6 +1494,11 @@ export function swarmRouter(orch: Orchestrator): Router {
 
 function registerBrainRoutes(r: Router, orch: Orchestrator) {
   // P7: Brain health endpoint
+  // Machine-readable API map for Brain-OS agents (start / during / after).
+  r.get("/brain/control-surface", (_req: Request, res: Response) => {
+    res.json(BRAIN_CONTROL_SURFACE);
+  });
+
   r.get("/brain/health", async (_req: Request, res: Response) => {
     await orch.whenBrainReady();
     const brainService = orch.getBrainService();

@@ -1,42 +1,26 @@
-// Q12 (2026-05-04): best-preset auto-pick router.
+// Q12 (2026-05-04): best-preset auto-pick router + unified runner factory.
 //
-// Given a user directive, infer which preset is most likely to
-// succeed:
-//   - "refactor X" / "fix bug Y" / "add feature Z" → blackboard
-//     (write-capable; small atomic todos)
-//   - "debate whether to migrate" / "is X safe?" → debate-judge
-//   - "design how should we X" / "decide between A and B" → council
-//   - "audit X" / "find every Y" / "map out Z" → map-reduce
-//   - "explore the repo" / "what does this do" → stigmergy
-//   - "answer this question" / "draft a doc" / discussion → moa or
-//     round-robin (default to moa for breadth)
-//
-// Two-tier router:
-//   1. Heuristic keyword matcher (cheap; deterministic; explainable)
-//   2. LLM router (called ONLY when the heuristic is ambiguous; the
-//      runner threads the call through promptWithRetry)
-//
-// This module ships the heuristic + the prompt builder for the LLM
-// fallback. The LLM call itself is the runner's responsibility (it
-// owns the model + provider).
-//
-// Tradeoffs:
-//   - Wrong picks erode trust. The heuristic is conservative (defaults
-//     to "blackboard" only when CONFIDENTLY a code-modify directive).
-//   - When the LLM router fires, +1 prompt before the run starts (cost
-//     proportional to how often the heuristic is ambiguous).
+// Factory maps preset → runner constructor; Orchestrator.start() calls
+// createRunner() (with optional pipeline/role hooks) instead of a split switch.
 
-import type { PresetId, RunConfig, RunnerOpts } from "./SwarmRunner.js";
+import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "./SwarmRunner.js";
+import type { SwarmRole } from "./roles.js";
 
-// ── Runner factory (UML-G, 2026-05-09) ──
-// Lazy imports avoid circular dependencies with Orchestrator.
-// The factory maps preset → runner constructor; Orchestrator.start()
-// calls createRunner() instead of importing all 9 runners directly.
+export type CreateRunnerHooks = {
+  /** role-diff: pre-resolved role catalog */
+  rolesForRoleDiff?: readonly SwarmRole[];
+  /** baselineAttempts > 1 → harness */
+  baselineMultiAttempt?: boolean;
+  /** pipeline: build nested runners by preset id under same opts/cfg */
+  pipelineFactory?: (preset: PresetId) => Promise<SwarmRunner>;
+};
 
+/** Unified factory — returns a typed SwarmRunner for every PresetId. */
 export async function createRunner(
   cfg: RunConfig,
   opts: RunnerOpts,
-): Promise<any> {
+  hooks: CreateRunnerHooks = {},
+): Promise<SwarmRunner> {
   switch (cfg.preset) {
     case "blackboard": {
       const { BlackboardRunner } = await import("./blackboard/BlackboardRunner.js");
@@ -45,6 +29,12 @@ export async function createRunner(
     case "round-robin": {
       const { RoundRobinRunner } = await import("./RoundRobinRunner.js");
       return new RoundRobinRunner(opts);
+    }
+    case "role-diff": {
+      const { RoundRobinRunner } = await import("./RoundRobinRunner.js");
+      return new RoundRobinRunner(opts, {
+        roles: hooks.rolesForRoleDiff ? [...hooks.rolesForRoleDiff] : undefined,
+      });
     }
     case "council": {
       const { CouncilRunner } = await import("./CouncilRunner.js");
@@ -75,11 +65,24 @@ export async function createRunner(
       return new MoaRunner(opts);
     }
     case "baseline": {
+      if (hooks.baselineMultiAttempt) {
+        const { BaselineSwarmHarness } = await import("./BaselineSwarmHarness.js");
+        return new BaselineSwarmHarness(opts);
+      }
       const { BaselineRunner } = await import("./BaselineRunner.js");
       return new BaselineRunner(opts);
     }
-    default:
-      throw new Error(`Unknown preset: ${cfg.preset}`);
+    case "pipeline": {
+      if (!hooks.pipelineFactory) {
+        throw new Error("pipeline preset requires pipelineFactory hook");
+      }
+      const { PipelineRunner } = await import("./PipelineRunner.js");
+      return new PipelineRunner(opts, hooks.pipelineFactory);
+    }
+    default: {
+      const _exhaustive: never = cfg.preset;
+      throw new Error(`Unknown preset: ${_exhaustive}`);
+    }
   }
 }
 
@@ -106,8 +109,6 @@ export function heuristicPickPreset(
 ): PresetRouterDecision | null {
   const lower = directive.trim().toLowerCase();
   if (lower.length === 0) return null;
-  // Debate / decision category (highest priority — "should we" is a
-  // strong intent marker even when followed by a code-modify verb)
   const debateMarkers = ["debate", "should we", "is it safe", "is it worth", "vs.", " vs ", "argue"];
   for (const m of debateMarkers) {
     if (lower.includes(m)) {
@@ -118,7 +119,6 @@ export function heuristicPickPreset(
       };
     }
   }
-  // Design / decision-by-discussion category
   const councilMarkers = ["design ", "decide", "consider", "evaluate", "choose between"];
   for (const m of councilMarkers) {
     if (lower.includes(m)) {
@@ -129,7 +129,6 @@ export function heuristicPickPreset(
       };
     }
   }
-  // Survey / audit category
   const auditMarkers = ["audit", "find every", "find all", "map out", "survey", "inventory", "catalog"];
   for (const m of auditMarkers) {
     if (lower.includes(m)) {
@@ -140,7 +139,6 @@ export function heuristicPickPreset(
       };
     }
   }
-  // Exploration category
   const exploreMarkers = ["explore", "what does", "understand", "learn"];
   for (const m of exploreMarkers) {
     if (lower.includes(m)) {
@@ -151,14 +149,12 @@ export function heuristicPickPreset(
       };
     }
   }
-  // Code-modify category (last layer — only fires when no intent marker matched)
   const writeVerbs = [
     "fix", "add", "remove", "delete", "rename", "refactor", "extract",
     "migrate", "implement", "wire", "port", "update", "patch", "resolve",
     "address", "convert", "replace", "reorganize", "rewrite",
   ];
   for (const v of writeVerbs) {
-    // Word-boundary match to avoid "addiction" matching "add"
     const re = new RegExp(`\\b${v}\\b`, "i");
     if (re.test(lower)) {
       return {
@@ -171,12 +167,8 @@ export function heuristicPickPreset(
   return null;
 }
 
-/** Build the LLM-router prompt for cases the heuristic couldn't
- *  decide. The router emits a JSON envelope with picked preset +
- *  rationale. Pure. */
 export function buildPresetRouterPrompt(args: {
   directive: string;
-  /** Available presets (the user's config may exclude some). */
   available: readonly PresetId[];
 }): string {
   const presetDescriptions: Record<PresetId, string> = {
@@ -207,7 +199,6 @@ export function buildPresetRouterPrompt(args: {
   ].join("\n");
 }
 
-/** Lenient parser. Returns null on parse failure or invalid id. Pure. */
 export function parsePresetRouterDecision(
   raw: string,
   available: readonly PresetId[],

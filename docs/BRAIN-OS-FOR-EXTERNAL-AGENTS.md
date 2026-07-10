@@ -1,41 +1,91 @@
 # Brain-OS for External Agents
 
-This guide helps external LLM agents, scripts, or tools use **Brain-as-OS** to get intelligent assistance for swarm configuration, preset selection, run steering, and analysis.
+This guide helps external LLM agents, scripts, or tools use **Brain-as-OS** to configure, start, steer, and analyze swarm runs end-to-end.
 
-Brain acts as a librarian / master-admin: it understands use-cases from the tables in [`docs/swarm-patterns.md`](swarm-patterns.md) and [`docs/STATUS.md`](STATUS.md), uses historical outcome data, and helps you pick the right preset with explanations.
+Brain acts as a librarian / master-admin: use-case tables in [`docs/swarm-patterns.md`](swarm-patterns.md) and [`docs/STATUS.md`](STATUS.md), historical outcomes, and mid-run control APIs.
 
-## Key Communication Channels
+> **Machine-readable map:** `GET /api/swarm/brain/control-surface`  
+> **CLI mirror:** `ollama-swarm control-surface --json`
 
-- **Conversational help**: `POST /api/swarm/brain/chat`
-  - Send natural language goals.
-  - Pass `runContext` for live runs (recent transcript summaries, board state, phase).
-  - Use `structured: true` (body or `?structured=true`) to get parseable `recommendation` + `config`.
-  - Example for "explain options": include "explain all options for my goal" in the message, or use `?explain=options`.
+---
 
-- **Proactive suggestions**: `POST /api/swarm/brain/suggest`
-- **History**: `POST /api/swarm/brain/chat-history` (persists per-run)
-- **Preset recommendation with data**: `GET /api/swarm/outcome/recommend?directive=...`
-  - Returns best preset + rationale + real stats (median/avg scores from past runs).
-- **Control**: `/api/swarm/start`, `/api/swarm/amend`, `/api/swarm/reconfig` (extend rounds/cap/budget mid-run), per-run `/status`, `/stop`, etc.
-- **Observation**: `/api/swarm/run-summary`, `/memory`, event logs, `/brain/activity`, `/brain/proposals`.
+## Lifecycle control (start → during → after)
 
-## Use-Case Tables (source of truth for Brain)
+### Start (before run)
 
-See the webTools guidance in README ("Using for Scientific Research & Internet Work") and the full preset matrix in `STATUS.md`. Brain's prompt is built from the shared `server/src/swarm/presetGuide.ts` (no duplication).
+| Action | API | CLI |
+|--------|-----|-----|
+| Recommend preset | `GET /api/swarm/outcome/recommend?directive=` | `ollama-swarm recommend --directive "..."` |
+| Conversational config | `POST /api/swarm/brain/chat` (`structured: true`) | — |
+| Preflight disk/clone | `GET /api/swarm/preflight?parentPath=&repoUrl=` | — |
+| Start run | `POST /api/swarm/start` | `ollama-swarm start --directive ... --preset ...` |
+| Approve follow-up run | `POST /api/swarm/brain/provision` (`approved: true`) | — |
 
-Examples:
-- Research + write artifacts → council (or pipeline preset) + blackboard + `webTools: true`
-- Broad literature scan → `map-reduce`
-- Debate / "should we" → `debate-judge` or `council`
-- Exploration → `stigmergy`
+**Start body (high-signal fields):** `parentPath`, `repoUrl`, `userDirective`, `preset`, `agentCount`, `rounds` / `continuous`, `model` / `plannerModel` / `workerModel`, `webTools`, `plannerTools`, `topology`, `wallClockCapMs`, `tokenBudget`, `writeMode`, `ambitionTiers`, `verifyCommand`.
 
-## How to Talk to Brain Effectively
+Returns `{ runId, navigateTo: "/runs/<runId>" }` — always use the runId for subsequent calls.
 
-1. Be explicit about the goal and constraints (time, cost, write vs read-only).
-2. Mention preferred preset family if you have one.
-3. For live runs, pass recent context so Brain can suggest mid-run amendments.
-4. Use `structured: true` when you need machine-readable output (config JSON).
+### During (live run)
 
-Brain will reference real historical data when available and fall back to the pattern catalog.
+| Action | API | CLI |
+|--------|-----|-----|
+| Status / phase / board | `GET /api/swarm/runs/:runId/status` | `ollama-swarm status --run-id` |
+| List active runs | `GET /api/swarm/active-runs` | `ollama-swarm list` |
+| Directive addendum | `POST /api/swarm/amend` | `ollama-swarm amend --run-id --text` |
+| Extend limits | `POST /api/swarm/reconfig` | `ollama-swarm reconfig --run-id --extend-wall-clock-min 15` |
+| Inject message | `POST /api/swarm/say` | `ollama-swarm say --run-id --text --intent steer` |
+| Brain suggestion bubble | `POST /api/swarm/brain/suggest` | — |
+| Soft stop | `POST /api/swarm/drain` | `ollama-swarm drain --run-id` |
+| Hard stop | `POST /api/swarm/stop` or `.../runs/:id/stop` | `ollama-swarm stop --run-id` |
+| Tokens / quota | `GET /api/usage?runId=` | — |
+| Live Brain chat | `POST /api/swarm/brain/chat` + `runContext` | — |
 
-See also `docs/STATUS.md` (Brain-as-OS section) and the example loops in `examples/brain-agent-loop.mjs`.
+**Reconfig (extend-only):** `extendRounds`, `extendWallClockCapMin`, `extendTokenBudget`, absolute `rounds` / `wallClockCapMin` / `tokenBudget` (must not shrink), think-guard referee knobs.
+
+### After (close-out / analysis)
+
+| Action | API | CLI |
+|--------|-----|-----|
+| Run summary | `GET /api/swarm/run-summary?runId=&clonePath=` | `ollama-swarm summary --run-id --clone-path` |
+| Event log | `GET /api/v2/event-log/runs/:runId` | — |
+| Brain proposals | `GET /api/swarm/brain/proposals` | — |
+| Brain activity | `GET /api/swarm/brain/activity` | — |
+| Memory / project graph | `/api/swarm/memory`, `/api/swarm/project-graph` | — |
+| Dismiss proposal | `POST /api/swarm/brain/reject` | — |
+
+UI: **Brain follow-ups** sidebar → **Approve & start** (same as provision API).
+
+---
+
+## Recommended agent loop
+
+```text
+1. control-surface → discover endpoints
+2. recommend | brain/chat structured → pick preset + models
+3. start → capture runId
+4. loop: status every N s
+   - if quota / no-progress detail contains provider-quota → reconfig extend wall-clock or stop
+   - if stuck on wrong files → amend text
+   - if need focus → say intent=steer
+5. drain or stop
+6. summary + event-log → learn; optional provision next follow-up
+```
+
+Example script: `examples/brain-agent-loop.mjs`.
+
+---
+
+## Use-case tables
+
+See README (“Using for Scientific Research & Internet Work”) and the preset matrix in `STATUS.md`. Prefer **Simple** presets (core + supported) unless Advanced is required.
+
+---
+
+## How to talk to Brain effectively
+
+1. Explicit goal + constraints (time, write vs read-only, agentCount).
+2. Prefer `structured: true` for machine-readable `config`.
+3. Pass `runContext` (phase, board, recent transcript) for mid-run advice.
+4. Use amend/reconfig/say rather than restarting when possible.
+
+See also `docs/STATUS.md` and `docs/RELEASE-1.0-PLAN.md`.

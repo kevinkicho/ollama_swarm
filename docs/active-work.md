@@ -5,19 +5,17 @@
 
 ---
 
-## Release 1.0 (Tier A) — Phases 0–7 foundation landed 2026-07-09
+## Release 1.0 (Tier A) — foundation + product/Brain expansion
 
-See **`docs/RELEASE-1.0-PLAN.md`**.
+See **`docs/RELEASE-1.0-PLAN.md`** and **`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`**.
 
-- [x] **Phase 0** — Product freeze + maturity badges
-- [x] **Phase 1** — Host security (bind, token, MCP, roots, SSRF, bash)
-- [x] **Phase 2** — Crash/race hardening
-- [x] **Phase 3** — Council quota ≠ audit-stuck
-- [x] **Phase 4** — Partial V2 phase SoT on status
-- [x] **Phase 5** — CI matrix ubuntu + windows
-- [x] **Phase 6** — Eval score honesty
-- [x] **Phase 7** — Brain approve-to-provision default
-- [ ] Polish: full V2 cutover mid-flight; live Core eval table; apiFetch all routes
+- [x] Phases 0–7 foundation (security optional for single-user WIP)
+- [x] Product: Simple vs Advanced presets; default blackboard; always `/runs/:id`
+- [x] Reliability: pending-commit reaper; per-run stop debounce tests; outcome banner
+- [x] Architecture: typed unified `createRunner`; V2 mid-flight phase prefer
+- [x] Eval: preset-coverage gate across all modes; analysis tasks require rubric
+- [x] Brain: control-surface API + CLI (say/drain/list/summary/control-surface)
+- [ ] Optional: live Core scoreboard regen; split routes/swarm.ts further
 
 ---
 

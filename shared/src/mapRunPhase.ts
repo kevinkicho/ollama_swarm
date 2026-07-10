@@ -41,8 +41,10 @@ export function mapV2PhaseToUi(phase: RunPhase): SwarmUiPhase {
 }
 
 /**
- * Prefer V2 for terminal + pause when V1 lag would mis-report.
- * Mid-flight phases still trust V1 until full cutover (Phase 4 full).
+ * Prefer V2 for terminal + pause, and for mid-flight core phases when V2
+ * is already past spawning (reduces V1 flag lag on blackboard).
+ * Legacy UI-only phases (cloning/seeding/discussing/stopping) stay on V1
+ * when V2 has not entered a mapped phase yet.
  */
 export function resolveDisplayPhase(
   v1Phase: string,
@@ -54,6 +56,14 @@ export function resolveDisplayPhase(
   const terminal: RunPhase[] = ["completed", "stopped", "failed", "draining"];
   if (terminal.includes(v2.phase)) {
     return mapV2PhaseToUi(v2.phase);
+  }
+  const midFlight: RunPhase[] = ["spawning", "planning", "executing", "auditing", "tier-up"];
+  if (midFlight.includes(v2.phase)) {
+    // Prefer V2 mid-flight over lagging V1 "planning" while V2 is already "executing", etc.
+    const v1IsLegacyOnly = ["cloning", "seeding", "discussing", "stopping"].includes(v1Phase);
+    if (!v1IsLegacyOnly || v2.phase !== "spawning") {
+      return mapV2PhaseToUi(v2.phase);
+    }
   }
   return (v1Phase as SwarmUiPhase) || "idle";
 }

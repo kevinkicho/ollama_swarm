@@ -65,5 +65,5 @@ jobs:
       - name: Electron stub test (prior data + flags)
         run: node electron/test-stub.cjs
 
-      - name: Eval score unit tests
-        run: node --test eval/score-run.test.mjs
+      - name: Eval score + preset coverage gates
+        run: node --test eval/score-run.test.mjs eval/preset-coverage.test.mjs

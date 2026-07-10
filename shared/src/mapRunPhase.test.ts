@@ -27,7 +27,14 @@ describe("mapRunPhase", () => {
     );
   });
 
-  it("keeps V1 mid-flight when V2 is mid-flight", () => {
+  it("prefers V2 mid-flight when phases diverge", () => {
+    assert.equal(
+      resolveDisplayPhase("planning", { phase: "executing", pausedReason: undefined }),
+      "executing",
+    );
+  });
+
+  it("keeps V1 when both mid-flight agree", () => {
     assert.equal(
       resolveDisplayPhase("planning", { phase: "planning", pausedReason: undefined }),
       "planning",

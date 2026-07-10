@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PreflightPreview } from "./PreflightPreview";
 import { BrainStartChat, type BrainConfigPatch } from "./BrainStartChat";
 import { useSetupForm } from "../hooks/useSetupForm";
 import { PRESETS } from "./setup/presets";
+import type { PresetMaturity } from "./setup/PresetExtras";
 import { TopologyGrid } from "./setup/TopologyGrid";
 import { BlackboardWallClockCap, BlackboardAmbitionTiers } from "./setup/BlackboardSettings";
 import { Field } from "./setup/SharedFields";
@@ -14,6 +15,8 @@ import { useSwarm } from "../state/store";
 import { recentRunChipLabel } from "./setup/RecentRuns";
 import { RecentRunTipContent } from "./setup/RecentRunTipContent";
 import { PresetTipContent } from "./setup/PresetTooltip";
+
+const SIMPLE_MATURITY: ReadonlySet<PresetMaturity> = new Set(["core", "supported"]);
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -33,6 +36,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 export function SetupForm() {
   const navigate = useNavigate();
   const form = useSetupForm(navigate);
+  /** Simple = core+supported presets only; Advanced shows experimental/research. */
+  const [showAdvancedPresets, setShowAdvancedPresets] = useState(false);
 
   // Use global store for filters so Brain chat chips can control it live
   const useCaseFilters = useSwarm((s) => s.useCaseFilters);
@@ -49,12 +54,21 @@ export function SetupForm() {
     { tag: "multi-stage", label: "Multi-stage" },
   ];
 
-  const filteredPresets = useMemo(() =>
-    useCaseFilters.length === 0
-      ? PRESETS
-      : PRESETS.filter(p => p.useCases?.some(uc => useCaseFilters.includes(uc))),
-    [useCaseFilters]
-  );
+  const filteredPresets = useMemo(() => {
+    let list = PRESETS.filter((p) => {
+      if (showAdvancedPresets) return true;
+      const m = p.maturity ?? "experimental";
+      return SIMPLE_MATURITY.has(m);
+    });
+    if (useCaseFilters.length > 0) {
+      list = list.filter((p) => p.useCases?.some((uc) => useCaseFilters.includes(uc)));
+    }
+    // If current selection is hidden in Simple mode, still show it so UI doesn't blank.
+    if (!showAdvancedPresets && form.preset && !list.some((p) => p.id === form.preset.id)) {
+      list = [form.preset, ...list];
+    }
+    return list;
+  }, [useCaseFilters, showAdvancedPresets, form.preset]);
 
   // Derived for the action bar
   const canStart = !form.busy && !!form.isActive && !form.preflightBlocked;
@@ -165,7 +179,35 @@ export function SetupForm() {
         )}
 
         <Section title="Swarm Mode">
-          <div className="text-xs text-ink-400 mb-1">Choose the swarm coordination pattern (topology / preset). This sets roles, parallelism, and deliverables.</div>
+          <div className="text-xs text-ink-400 mb-1">
+            Choose the swarm coordination pattern.{" "}
+            <strong className="text-ink-300">Simple</strong> shows production-ready modes
+            (core + supported). Enable Advanced for experimental/research presets.
+          </div>
+          <div className="mb-2 flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowAdvancedPresets(false)}
+              className={`text-[10px] px-2 py-0.5 rounded border ${
+                !showAdvancedPresets
+                  ? "border-emerald-600 bg-emerald-900/40 text-emerald-300"
+                  : "border-ink-600 text-ink-400 hover:bg-ink-800"
+              }`}
+            >
+              Simple (recommended)
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowAdvancedPresets(true)}
+              className={`text-[10px] px-2 py-0.5 rounded border ${
+                showAdvancedPresets
+                  ? "border-amber-600 bg-amber-900/30 text-amber-300"
+                  : "border-ink-600 text-ink-400 hover:bg-ink-800"
+              }`}
+            >
+              Advanced (all presets)
+            </button>
+          </div>
 
           {/* Use-case filter, powered by tables in docs/swarm-patterns.md (Recommended Preset Combinations for Research) and STATUS.md preset matrix */}
           <div className="mb-2">

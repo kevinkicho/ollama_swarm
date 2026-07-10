@@ -17,6 +17,7 @@ import { OwSubtasksPanel } from "./OwSubtasksPanel";
 import { MemoryLogPanel } from "./MemoryLogPanel";
 import { CloneBanner } from "./CloneBanner";
 import { IdentityStrip } from "./IdentityStrip";
+import { RunOutcomeBanner } from "./RunOutcomeBanner";
 import { ProjectGraphPanel } from "../features/projectGrowth/ProjectGraphPanel";
 
 import { TranscriptTimeline } from "./TranscriptTimeline";
@@ -470,6 +471,7 @@ export const SwarmView = memo(function SwarmView() {
         </div>
       ) : null}
       <IdentityStrip />
+      <RunOutcomeBanner />
       <div className="flex-1 flex min-h-0">
       <aside className="w-[280px] shrink-0 border-r border-ink-700 p-3 overflow-y-auto space-y-2 bg-ink-800">
         <div className="flex items-center justify-between mb-2">

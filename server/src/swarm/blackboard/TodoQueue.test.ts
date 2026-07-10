@@ -584,6 +584,18 @@ describe("TodoQueue — reapStaleInProgress (Phase 2 reaper)", () => {
     assert.equal(q.get(id)?.endedAt, 2_000);
     assert.equal(q.get(id)?.reason, undefined);
   });
+
+  it("reapStalePendingCommit releases auditor-stalled todos to pending", () => {
+    const q = new TodoQueue();
+    const id = q.post({ description: "x", expectedFiles: ["a.ts"], createdBy: "p" });
+    q.dequeue("worker", undefined, 1_000);
+    q.proposeCommit(id, [{ op: "create", file: "a.ts", content: "x" }], ["a.ts"], 1_000);
+    assert.equal(q.get(id)?.status, "pending-commit");
+    const reaped = q.reapStalePendingCommit(601_001, 600_000);
+    assert.deepEqual(reaped, [id]);
+    assert.equal(q.get(id)?.status, "pending");
+    assert.match(q.get(id)?.reason ?? "", /auditor timeout/);
+  });
 });
 
 // T-Item-3 (2026-05-04): hypothesis groupId + listGroup + markGroupSettled

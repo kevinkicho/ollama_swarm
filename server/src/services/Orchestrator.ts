@@ -7,10 +7,7 @@ import type { RepoService } from "./RepoService.js";
 import type { AgentState, SwarmEvent, SwarmPhase, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
 import { normalizeSwarmStatusRunConfig } from "../types/run.js";
 import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/SwarmRunner.js";
-import { RoundRobinRunner } from "../swarm/RoundRobinRunner.js";
-import { BaselineRunner } from "../swarm/BaselineRunner.js";
-import { BaselineSwarmHarness } from "../swarm/BaselineSwarmHarness.js";
-import { PipelineRunner } from "../swarm/PipelineRunner.js";
+
 import { roleForAgent, selectRoleCatalog } from "../swarm/roles.js";
 import { ConformanceMonitor } from "./ConformanceMonitor.js";
 import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
@@ -1652,29 +1649,23 @@ export class Orchestrator {
     const opts: RunnerOpts = this.createRunnerOpts(runId, manager, wrappedEmit, cfg);
 
     const { createRunner } = await import("../swarm/presetRouter.js");
-
-    switch (preset) {
-      // Special cases: role-diff → RoundRobin with custom roles
-      case "role-diff": {
-        const roles = selectRoleCatalog({ customRoles: cfg.roles, userDirective: cfg.userDirective, dynamicRoles: cfg.dynamicRoles });
-        return new RoundRobinRunner(opts, { roles });
-      }
-      // Special case: baseline with parallel-clone harness
-      case "baseline": {
-        if ((cfg.baselineAttempts ?? 1) > 1) {
-          return new BaselineSwarmHarness(opts);
-        }
-        return new BaselineRunner(opts);
-      }
-      // Special case: pipeline chains sub-runs
-      case "pipeline": {
-        const factory = async (p: PresetId) => this.buildRunner(p, cfg, ctx);
-        return new PipelineRunner(opts, factory);
-      }
-      // Standard presets: delegate to factory
-      default:
-        return createRunner(cfg, opts);
-    }
+    // Unified factory (role-diff / baseline multi / pipeline via hooks).
+    const roles =
+      preset === "role-diff"
+        ? selectRoleCatalog({
+            customRoles: cfg.roles,
+            userDirective: cfg.userDirective,
+            dynamicRoles: cfg.dynamicRoles,
+          })
+        : undefined;
+    return createRunner(cfg, opts, {
+      rolesForRoleDiff: roles,
+      baselineMultiAttempt: preset === "baseline" && (cfg.baselineAttempts ?? 1) > 1,
+      pipelineFactory:
+        preset === "pipeline"
+          ? async (p: PresetId) => this.buildRunner(p, cfg, ctx)
+          : undefined,
+    });
   }
 
   /**

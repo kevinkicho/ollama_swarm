@@ -1,9 +1,9 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-07-09 (Release 1.0 Phases 0–7 foundation: security, crash races, quota≠stuck, V2 phase partial SoT, CI matrix, eval honesty, Brain approve-to-provision.)
+**Last updated:** 2026-07-09 (Simple/Advanced presets; Brain control-surface + CLI; pending-commit reaper; unified createRunner; eval preset coverage.)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
-> **Release track:** See [`docs/RELEASE-1.0-PLAN.md`](RELEASE-1.0-PLAN.md). Trusted-appliance posture: default bind `127.0.0.1`, optional `SWARM_API_TOKEN`, MCP spawn off by default, workspace roots, SSRF guard on `web_fetch`. Brain auto-provision **off** unless `SWARM_BRAIN_AUTO_PROVISION=true` or explicit `approved: true`.
+> **Release track:** See [`docs/RELEASE-1.0-PLAN.md`](RELEASE-1.0-PLAN.md). Setup **Simple** = core+supported (default blackboard). Brain agents: `GET /api/swarm/brain/control-surface` + [`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`](BRAIN-OS-FOR-EXTERNAL-AGENTS.md).
 
 > **2026-04-29 — opencode subprocess removed (E3 Phases 1–5).** Every prompt
 > now goes through a direct `SessionProvider` (Ollama / Anthropic / OpenAI)

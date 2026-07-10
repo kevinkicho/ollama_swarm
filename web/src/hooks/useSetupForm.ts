@@ -27,7 +27,7 @@ export function useSetupForm(navigate: (path: string) => void) {
 
   const [repoUrl, setRepoUrl] = useState(initialFromUrl.repoUrl);
   const [parentPath, setParentPath] = useState(initialFromUrl.parentPath); // user must set a real local workspace/clone dir before start
-  const [presetId, _setPresetId] = useState<string>(initialFromUrl.preset || "round-robin");
+  const [presetId, _setPresetId] = useState<string>(initialFromUrl.preset || "blackboard");
   const [agentCount, setAgentCount] = useState(3);
   const [model, setModel] = useState(initialFromUrl.model || PRESETS[0].recommendedModel);
   const [provider, setProvider] = useState<Provider>(() => detectProvider(PRESETS[0].recommendedModel));
