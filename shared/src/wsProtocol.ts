@@ -164,6 +164,11 @@ export type Deliverable = z.infer<typeof DeliverableSchema>;
 export const SwarmEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("transcript_append"), entry: z.any() }),
   z.object({ type: z.literal("agent_state"), agent: AgentStateSchema, runId: z.string().optional() }),
+  z.object({
+    type: z.literal("agents_roster"),
+    agents: z.array(AgentStateSchema),
+    runId: z.string().optional(),
+  }),
   z.object({ type: z.literal("swarm_state"), phase: SwarmPhaseSchema, round: z.number(), runId: z.string().optional() }),
   z.object({
     type: z.literal("agent_streaming"),

@@ -186,6 +186,42 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
     };
     return { agents: { ...s.agents, [norm.id]: norm } };
   }),
+  replaceAgents: (list) =>
+    set((s) => {
+      const agents: Record<string, AgentState> = {};
+      for (const a of list) {
+        const id = a.id || `agent-${a.index ?? 0}`;
+        agents[id] = {
+          ...a,
+          id,
+          index: (a.index ?? 0) as number,
+        };
+      }
+      // Empty roster: also drop activity/stream ghosts from prior phase.
+      if (list.length === 0) {
+        return {
+          agents: {},
+          agentActivity: {},
+          streaming: {},
+          streamingMeta: {},
+        };
+      }
+      // Keep activity/stream only for agents still in the roster.
+      const nextActivity: typeof s.agentActivity = {};
+      const nextStreaming: typeof s.streaming = {};
+      const nextMeta: typeof s.streamingMeta = {};
+      for (const id of Object.keys(agents)) {
+        if (s.agentActivity[id]) nextActivity[id] = s.agentActivity[id];
+        if (s.streaming[id] !== undefined) nextStreaming[id] = s.streaming[id];
+        if (s.streamingMeta[id]) nextMeta[id] = s.streamingMeta[id];
+      }
+      return {
+        agents,
+        agentActivity: nextActivity,
+        streaming: nextStreaming,
+        streamingMeta: nextMeta,
+      };
+    }),
   clearTranscript: () => set({ transcript: [] }),
   removeTranscriptEntry: (id) =>
     set((s) => {

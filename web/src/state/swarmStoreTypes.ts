@@ -188,6 +188,8 @@ export interface SwarmStore {
     earlyStopDetail?: string;
   }) => void;
   upsertAgent: (a: AgentState) => void;
+  /** Replace entire agent roster (pipeline handoff / killAll). */
+  replaceAgents: (agents: AgentState[]) => void;
   appendEntry: (e: TranscriptEntry) => void;
   /** Batch-load transcript from REST hydrate — one set() to avoid virtual-list flicker. */
   hydrateTranscriptEntries: (entries: TranscriptEntry[]) => void;

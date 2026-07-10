@@ -80,6 +80,57 @@ test("reduceToSnapshot — agent_state upserts by id, latest fields win", () => 
   assert.equal(snap.agents[1].id, "a2");
 });
 
+test("reduceToSnapshot — nested agent_state.agent shape (wire format)", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "agent_state", {
+      agent: { id: "agent-1", index: 1, status: "thinking", activityLabel: "standup" },
+    }),
+  ]);
+  assert.equal(snap.agents.length, 1);
+  assert.equal(snap.agents[0].id, "agent-1");
+  assert.equal(snap.agents[0].status, "thinking");
+  assert.equal(snap.agents[0].activityLabel, "standup");
+});
+
+test("reduceToSnapshot — agent_activity builds timeline and agent phase", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "agent_activity", {
+      agentId: "agent-1",
+      agentIndex: 1,
+      phase: "waiting",
+      label: "synthesis",
+      ts: 1000,
+    }),
+    rec(1, "agent_activity", {
+      agentId: "agent-1",
+      agentIndex: 1,
+      phase: "streaming",
+      label: "synthesis",
+      ts: 2000,
+    }),
+    rec(2, "agent_activity", {
+      agentId: "agent-1",
+      agentIndex: 1,
+      phase: "done",
+      ts: 3000,
+    }),
+  ]);
+  assert.equal(snap.activityTimeline.length, 3);
+  assert.equal(snap.activityTimeline[0].label, "synthesis");
+  assert.equal(snap.activityTimeline[2].phase, "done");
+  assert.equal(snap.agents[0].status, "ready");
+  assert.equal(snap.agents[0].activityPhase, "done");
+});
+
+test("reduceToSnapshot — agents_roster empty clears ghosts", () => {
+  const snap = reduceToSnapshot([
+    rec(0, "agent_state", { id: "agent-1", index: 1, status: "ready" }),
+    rec(1, "agent_state", { id: "agent-3", index: 3, status: "stopped" }),
+    rec(2, "agents_roster", { agents: [] }),
+  ]);
+  assert.equal(snap.agents.length, 0);
+});
+
 test("reduceToSnapshot — run_summary marks terminal + sets finishedAt", () => {
   const snap = reduceToSnapshot([
     rec(0, "run_started", { runId: "r1", preset: "blackboard" }),

@@ -96,6 +96,7 @@ export function RunDetailView({
         <div className="grid grid-cols-3 gap-2 text-[10px] text-ink-400">
           <Stat label="transcript" value={d.transcriptCount} />
           <Stat label="agent state" value={d.agentStateUpdates} />
+          <Stat label="activity" value={d.agentActivityEvents ?? 0} />
           <Stat label="streaming ends" value={d.streamingEndCount} />
           <Stat label="model shifts" value={d.modelShiftCount} />
           <Stat label="todo failed" value={d.todoFailed} />
@@ -107,6 +108,36 @@ export function RunDetailView({
             value={d.maxColdStartMs != null ? String(d.maxColdStartMs) : "—"}
           />
         </div>
+        {(d.activityTimeline?.length ?? 0) > 0 ? (
+          <div className="space-y-1">
+            <div className="text-[9px] uppercase tracking-wider text-sky-400 font-semibold">
+              Activity timeline ({d.activityTimeline!.length})
+            </div>
+            <ol className="max-h-[140px] overflow-y-auto space-y-0.5 font-mono text-[10px] border border-ink-800 rounded p-1.5 bg-ink-950/40">
+              {d.activityTimeline!.slice(-40).map((step, i) => (
+                <li
+                  key={`${step.ts}-${step.agentId}-${i}`}
+                  className="flex gap-2 py-0.5 border-b border-ink-900/70 last:border-0"
+                >
+                  <span className="text-ink-600 shrink-0 w-[52px]">
+                    {new Date(step.ts).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    })}
+                  </span>
+                  <span className="text-sky-400/90 shrink-0 w-[64px] truncate">
+                    {step.agentId.replace(/^agent-/, "a")}
+                  </span>
+                  <span className="text-amber-300/90 shrink-0 w-[64px]">{step.phase}</span>
+                  <span className="text-ink-400 truncate flex-1">
+                    {step.label ?? step.kind ?? "—"}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : null}
         {d.lastConformanceScore != null ? (
           <p className="text-[10px] text-ink-500">
             last conformance {d.lastConformanceScore}

@@ -23,6 +23,15 @@ export interface DerivedRunState {
   errors: string[];
   transcriptCount: number;
   agentStateUpdates: number;
+  agentActivityEvents?: number;
+  activityTimeline?: Array<{
+    ts: number;
+    agentId: string;
+    agentIndex?: number;
+    phase: string;
+    label?: string;
+    kind?: string;
+  }>;
   hasSummary: boolean;
   agentCount?: number;
   clonePath?: string;
@@ -67,6 +76,7 @@ export function guessEventCategory(type: string): EventCategory {
   if (
     type === "agent_state" ||
     type === "agent_activity" ||
+    type === "agents_roster" ||
     type === "swarm_state" ||
     type === "run_started" ||
     type === "run_summary"
@@ -92,8 +102,14 @@ export function eventOneLiner(ev: { type: string } & Record<string, unknown>): s
       const agent = ev.agent as { id?: string; status?: string } | undefined;
       return `${agent?.id ?? "?"} → ${agent?.status ?? "?"}`;
     }
-    case "agent_activity":
-      return `${String(ev.agentId ?? "?")} activity → ${String(ev.phase ?? "?")}`;
+    case "agent_activity": {
+      const label = ev.label ? ` · ${String(ev.label)}` : "";
+      return `${String(ev.agentId ?? "?")} ${String(ev.phase ?? "?")}${label}`;
+    }
+    case "agents_roster": {
+      const n = Array.isArray(ev.agents) ? (ev.agents as unknown[]).length : 0;
+      return n === 0 ? "roster cleared" : `roster → ${n} agent(s)`;
+    }
     case "agent_streaming":
       return `${String(ev.agentId ?? "?")} streaming (+${String((ev.text as string)?.length ?? 0)} chars)`;
     case "agent_streaming_end":
@@ -154,6 +170,8 @@ export function normalizeDerived(d: Partial<DerivedRunState> | undefined): Deriv
     errors: d?.errors ?? [],
     transcriptCount: d?.transcriptCount ?? 0,
     agentStateUpdates: d?.agentStateUpdates ?? 0,
+    agentActivityEvents: d?.agentActivityEvents ?? 0,
+    activityTimeline: d?.activityTimeline ?? [],
     hasSummary: d?.hasSummary ?? false,
     phaseTimeline: d?.phaseTimeline ?? [],
     eventTypeCounts: d?.eventTypeCounts ?? {},

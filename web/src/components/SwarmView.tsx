@@ -143,10 +143,18 @@ export const SwarmView = memo(function SwarmView() {
   const isLiveActivity = streamingCount > 0 || isActiveSwarmPhase(phase);
   const isTerminal = hasTerminalSummary || hasTerminalRunFinished || (isTerminalSwarmPhase(phase) && !isLiveActivity);
 
-  // Always show the agents reported by the active runner (delegated by PipelineRunner for composite presets).
-  // Transparent sequencing means the current phase's runner (council or blackboard) provides the agent list.
-  // No blanket index-0 filter (prevents incorrect hiding of brain during exec phase or wrong agents during planning).
-  const displayAgents = agentList;
+  // Live roster from store (cleared via agents_roster on killAll / pipeline handoff).
+  // Defense-in-depth: when runConfig.agentCount is known, hide leftover indices
+  // from a prior pipeline phase that never received a roster clear.
+  const displayAgents = (() => {
+    const count = cfg?.agentCount;
+    if (count == null || count < 1) return agentList;
+    const maxIndex = cfg?.dedicatedAuditor ? count + 1 : count;
+    return agentList.filter((a) => {
+      if (a.index === 0) return true; // brain / special
+      return a.index >= 1 && a.index <= maxIndex;
+    });
+  })();
   // Capability-driven tabs: only based on preset or actual data presence.
   const hasBoardCapability = !cfg || cfg.preset === "blackboard" || !!(summary as any)?.board || (Array.isArray((summary as any)?.todos) && (summary as any).todos.length > 0);
   const showBlackboardTabs = hasBoardCapability;

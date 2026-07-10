@@ -91,6 +91,11 @@ export interface BoardCountsDTO {
 export type SwarmEventBody =
   | { type: "transcript_append"; entry: TranscriptEntry }
   | { type: "agent_state"; agent: AgentState; runId?: string; phaseIndex?: number; phasePreset?: string }
+  /**
+   * Authoritative full roster replacement. Empty array clears ghosts after
+   * killAll / pipeline phase handoff. Non-empty replaces the UI agent map.
+   */
+  | { type: "agents_roster"; agents: AgentState[]; runId?: string }
   | { type: "swarm_state"; phase: SwarmPhase; round: number; phaseIndex?: number; phasePreset?: string }
   | { type: "agent_streaming"; agentId: string; agentIndex: number; text: string }
   | { type: "agent_streaming_end"; agentId: string }

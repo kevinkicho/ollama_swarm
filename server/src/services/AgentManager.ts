@@ -874,6 +874,7 @@ export class AgentManager {
     this.agentStates.clear();
     this.firstPromptLogged.clear();
     this.promptActivityByAgent.clear();
+    this.lastActivityByAgent.clear();
     this.streamingThrottle.clearAll();
     for (const stream of this.streamingByAgent.values()) {
       if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);
@@ -884,6 +885,9 @@ export class AgentManager {
     this.messageRoles.clear();
     this.capturedUsageMessageIds.clear();
     this.warmupElapsedByAgent.clear();
+    // Authoritative empty roster — client must drop ghost cards from prior
+    // phases (pipeline handoff) or post-kill leftover stopped rows.
+    this.onEvent({ type: "agents_roster", agents: [] });
     if (escaped > 0) {
       this.onEvent({
         type: "error",

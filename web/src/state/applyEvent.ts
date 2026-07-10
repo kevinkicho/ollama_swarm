@@ -37,6 +37,9 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
     case "agent_state":
       s.upsertAgent(ev.agent);
       break;
+    case "agents_roster":
+      s.replaceAgents(ev.agents);
+      break;
     case "swarm_state":
       s.setPhase(ev.phase, ev.round, {
         ...(ev.planningSubphase ? { planningSubphase: ev.planningSubphase } : {}),

@@ -295,6 +295,8 @@ export interface BoardCountsDTO {
 export type SwarmEvent =
   | { type: "transcript_append"; entry: TranscriptEntry }
   | { type: "agent_state"; agent: AgentState; runId?: string }
+  /** Full roster replace — empty clears ghosts (pipeline phase handoff / killAll). */
+  | { type: "agents_roster"; agents: AgentState[]; runId?: string }
   | {
       type: "swarm_state";
       phase: SwarmPhase;

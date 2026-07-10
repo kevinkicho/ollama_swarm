@@ -63,6 +63,66 @@ describe("applyEventToStore", () => {
     });
   });
 
+  describe("agents_roster", () => {
+    it("replaces the full agent map and clears activity/stream on empty", () => {
+      const store = createSwarmStore();
+      applyEventToStore(
+        {
+          type: "agent_state",
+          agent: { id: "agent-1", index: 1, status: "thinking" },
+        },
+        store.getState(),
+      );
+      applyEventToStore(
+        {
+          type: "agent_state",
+          agent: { id: "agent-3", index: 3, status: "ready" },
+        },
+        store.getState(),
+      );
+      applyEventToStore(
+        {
+          type: "agent_activity",
+          agentId: "agent-1",
+          agentIndex: 1,
+          phase: "waiting",
+          ts: 1,
+          label: "x",
+        },
+        store.getState(),
+      );
+      applyEventToStore({ type: "agents_roster", agents: [] }, store.getState());
+      assert.deepEqual(store.getState().agents, {});
+      assert.deepEqual(store.getState().agentActivity, {});
+    });
+
+    it("installs the new roster only", () => {
+      const store = createSwarmStore();
+      applyEventToStore(
+        {
+          type: "agent_state",
+          agent: { id: "agent-9", index: 9, status: "stopped" },
+        },
+        store.getState(),
+      );
+      applyEventToStore(
+        {
+          type: "agents_roster",
+          agents: [
+            { id: "agent-1", index: 1, status: "ready" },
+            { id: "agent-2", index: 2, status: "spawning" },
+          ],
+        },
+        store.getState(),
+      );
+      assert.deepEqual(Object.keys(store.getState().agents).sort(), [
+        "agent-1",
+        "agent-2",
+      ]);
+      assert.equal(store.getState().agents["agent-9"], undefined);
+    });
+  });
+
   describe("agent_state", () => {
     it("upserts an agent", () => {
       const agent: AgentState = {

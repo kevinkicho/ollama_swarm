@@ -37,6 +37,17 @@ export interface ReplayAgentSnapshot {
   port?: number;
   sessionId?: string;
   model?: string;
+  activityLabel?: string;
+  activityPhase?: string;
+}
+
+export interface ReplayActivityStep {
+  ts: number;
+  agentId: string;
+  agentIndex?: number;
+  phase: string;
+  label?: string;
+  kind?: string;
 }
 
 export interface ReplayTodoSnapshot {
@@ -56,6 +67,8 @@ export interface ReplaySnapshot {
   finishedAt: number | null;
   transcript: ReadonlyArray<{ id: string; role: string; text: string; ts: number; agentId?: string; agentIndex?: number }>;
   agents: ReadonlyArray<ReplayAgentSnapshot>;
+  /** Prompt-session activity timeline up to this cursor. */
+  activityTimeline: ReadonlyArray<ReplayActivityStep>;
   todos: ReadonlyArray<ReplayTodoSnapshot>;
   findings: ReadonlyArray<{ id: string; text: string; ts: number }>;
   contract: { missionStatement?: string; criteria?: ReadonlyArray<{ description: string; status?: string }> } | null;
@@ -91,6 +104,7 @@ const EMPTY_SNAPSHOT: ReplaySnapshot = {
   finishedAt: null,
   transcript: [],
   agents: [],
+  activityTimeline: [],
   todos: [],
   findings: [],
   contract: null,
@@ -122,6 +136,7 @@ export function reduceToSnapshot(records: ReadonlyArray<ReplayRecord>): ReplaySn
   // Mutating local copies for accumulation; freeze before return.
   const transcript: Array<ReplaySnapshot["transcript"][number]> = [];
   const agents: Map<string, ReplayAgentSnapshot> = new Map();
+  const activityTimeline: ReplayActivityStep[] = [];
   const todos: Map<string, ReplayTodoSnapshot> = new Map();
   const findings: Array<{ id: string; text: string; ts: number }> = [];
   const errors: Array<{ message: string; ts: number }> = [];
@@ -154,19 +169,73 @@ export function reduceToSnapshot(records: ReadonlyArray<ReplayRecord>): ReplaySn
           }
         }
         break;
-      case "agent_state":
-        if (typeof ev.id === "string") {
-          const prior = agents.get(ev.id) ?? { id: ev.id };
-          agents.set(ev.id, {
+      case "agent_state": {
+        // Wire format is { agent: AgentState }; older flat tests use top-level fields.
+        const nested = ev.agent && typeof ev.agent === "object"
+          ? (ev.agent as Record<string, unknown>)
+          : null;
+        const id =
+          (nested && typeof nested.id === "string" ? nested.id : undefined)
+          ?? (typeof ev.id === "string" ? ev.id : undefined);
+        if (id) {
+          const src = nested ?? (ev as Record<string, unknown>);
+          const prior = agents.get(id) ?? { id };
+          agents.set(id, {
             ...prior,
-            ...(typeof ev.index === "number" ? { index: ev.index } : {}),
-            ...(typeof ev.status === "string" ? { status: ev.status } : {}),
-            ...(typeof ev.port === "number" ? { port: ev.port } : {}),
-            ...(typeof ev.sessionId === "string" ? { sessionId: ev.sessionId } : {}),
-            ...(typeof ev.model === "string" ? { model: ev.model } : {}),
+            ...(typeof src.index === "number" ? { index: src.index } : {}),
+            ...(typeof src.status === "string" ? { status: src.status } : {}),
+            ...(typeof src.port === "number" ? { port: src.port } : {}),
+            ...(typeof src.sessionId === "string" ? { sessionId: src.sessionId } : {}),
+            ...(typeof src.model === "string" ? { model: src.model } : {}),
+            ...(typeof src.activityLabel === "string"
+              ? { activityLabel: src.activityLabel }
+              : {}),
           });
         }
         break;
+      }
+      case "agents_roster": {
+        agents.clear();
+        const list = Array.isArray(ev.agents) ? (ev.agents as Array<Record<string, unknown>>) : [];
+        for (const a of list) {
+          if (typeof a.id !== "string") continue;
+          agents.set(a.id, {
+            id: a.id,
+            ...(typeof a.index === "number" ? { index: a.index } : {}),
+            ...(typeof a.status === "string" ? { status: a.status } : {}),
+            ...(typeof a.model === "string" ? { model: a.model } : {}),
+          });
+        }
+        break;
+      }
+      case "agent_activity": {
+        if (typeof ev.agentId === "string" && typeof ev.phase === "string") {
+          const step: ReplayActivityStep = {
+            ts: typeof ev.ts === "number" ? ev.ts : record.ts,
+            agentId: ev.agentId,
+            phase: ev.phase,
+            ...(typeof ev.agentIndex === "number" ? { agentIndex: ev.agentIndex } : {}),
+            ...(typeof ev.label === "string" ? { label: ev.label } : {}),
+            ...(typeof ev.kind === "string" ? { kind: ev.kind } : {}),
+          };
+          activityTimeline.push(step);
+          const prior = agents.get(ev.agentId) ?? { id: ev.agentId };
+          agents.set(ev.agentId, {
+            ...prior,
+            ...(typeof ev.agentIndex === "number" ? { index: ev.agentIndex } : {}),
+            activityPhase: ev.phase,
+            ...(typeof ev.label === "string" ? { activityLabel: ev.label } : {}),
+            // Map control-plane phases onto a coarse status for sidebar-like views.
+            status:
+              ev.phase === "done"
+                ? "ready"
+                : ev.phase === "retrying"
+                  ? "retrying"
+                  : "thinking",
+          });
+        }
+        break;
+      }
       case "todo_posted":
         if (typeof ev.id === "string") {
           todos.set(ev.id, {
@@ -251,6 +320,7 @@ export function reduceToSnapshot(records: ReadonlyArray<ReplayRecord>): ReplaySn
     ...snap,
     transcript: Object.freeze(transcript),
     agents: Object.freeze([...agents.values()].sort((a, b) => (a.index ?? 0) - (b.index ?? 0))),
+    activityTimeline: Object.freeze(activityTimeline),
     todos: Object.freeze([...todos.values()]),
     findings: Object.freeze(findings),
     errors: Object.freeze(errors),

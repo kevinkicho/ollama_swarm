@@ -48,16 +48,24 @@ export class PipelineRunner implements SwarmRunner {
 
   status(): SwarmStatus {
     const currentStatus = this.currentRunner?.status();
+    const agentActivity =
+      currentStatus?.agentActivity
+      ?? (typeof this.opts.manager.getActivitySnapshot === "function"
+        ? this.opts.manager.getActivitySnapshot()
+        : undefined);
     const base = {
       phase: this.phase,
       round: this.round,
       repoUrl: this.active?.repoUrl,
       localPath: this.active?.localPath,
       model: this.active?.model,
+      // Prefer live child roster; fall back to manager (empty after killAll handoff).
       agents: currentStatus?.agents ?? this.opts.manager.toStates(),
       transcript: [...this.transcript],
-      streaming: currentStatus?.streaming,
-      // Phase 10: no currentPhase/phases exposed.
+      streaming: currentStatus?.streaming ?? this.opts.manager.getPartialStreams?.(),
+      ...(agentActivity && Object.keys(agentActivity).length > 0
+        ? { agentActivity }
+        : {}),
     } as SwarmStatus;
     return base;
   }
@@ -213,6 +221,21 @@ export class PipelineRunner implements SwarmRunner {
       this.appendSystem(
         `[Pipeline] Completed phase ${i + 1}/${pipeline.phases.length}: ${phase.preset}`,
       );
+
+      // Phase handoff: release agents + clear client roster so the next
+      // phase cannot inherit ghost cards (different agentCount / ids).
+      // Child runners often killAll on close-out; this is idempotent and
+      // still emits agents_roster [] for UI.
+      if (!isLastPhase && !this.stopping) {
+        try {
+          await this.opts.manager.killAll();
+        } catch (e) {
+          this.appendSystem(
+            `[Pipeline] Phase handoff killAll failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+        this.currentRunner = null;
+      }
     }
 
     this.currentRunner = null;

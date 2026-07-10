@@ -102,7 +102,14 @@ export class RunEventHub {
     if (type.includes("brain") || type === "analysis" || type === "provision") return "brain";
     // agent_streaming is data-plane (media); agent_activity is control-plane session.
     if (type === "transcript_append" || type.startsWith("agent_stream")) return "transcript";
-    if (type === "agent_activity" || type === "agent_state" || type === "swarm_state") return "agent";
+    if (
+      type === "agent_activity"
+      || type === "agent_state"
+      || type === "agents_roster"
+      || type === "swarm_state"
+    ) {
+      return "agent";
+    }
     if (type === "error" || type.includes("health")) return "diag";
     if (type.includes("token") || type.includes("cost")) return "usage";
     return "other";

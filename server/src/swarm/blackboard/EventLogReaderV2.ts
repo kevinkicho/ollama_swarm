@@ -155,6 +155,20 @@ export interface DerivedRunState {
   errors: string[];
   transcriptCount: number;
   agentStateUpdates: number;
+  /** Count of agent_activity control-plane events. */
+  agentActivityEvents: number;
+  /**
+   * Compact activity timeline (waiting/streaming/done with labels) for
+   * history / debug inspection — last N session transitions.
+   */
+  activityTimeline: Array<{
+    ts: number;
+    agentId: string;
+    agentIndex?: number;
+    phase: string;
+    label?: string;
+    kind?: string;
+  }>;
   /** True if a "run_summary" event was seen (run completed cleanly). */
   hasSummary: boolean;
   agentCount?: number;
@@ -204,7 +218,11 @@ export function computeAnomalyFlags(state: DerivedRunState): string[] {
   if (state.runId && state.transcriptCount > 0 && !state.hasSummary) {
     flags.push("no_summary");
   }
-  if (state.streamingEventCount > 0 && state.agentStateUpdates === 0) {
+  if (
+    state.streamingEventCount > 0
+    && state.agentStateUpdates === 0
+    && state.agentActivityEvents === 0
+  ) {
     flags.push("activity_gap");
   }
   if (state.errors.length > 0) flags.push("errors");
@@ -224,6 +242,8 @@ export function deriveRunState(slice: RunSlice): DerivedRunState {
     errors: [],
     transcriptCount: 0,
     agentStateUpdates: 0,
+    agentActivityEvents: 0,
+    activityTimeline: [],
     hasSummary: false,
     phaseTimeline: [],
     eventTypeCounts: {},
@@ -276,6 +296,27 @@ export function deriveRunState(slice: RunSlice): DerivedRunState {
         break;
       case "agent_state":
         state.agentStateUpdates += 1;
+        break;
+      case "agent_activity": {
+        state.agentActivityEvents += 1;
+        if (typeof ev.agentId === "string" && typeof ev.phase === "string") {
+          state.activityTimeline.push({
+            ts: r.ts,
+            agentId: ev.agentId,
+            ...(typeof ev.agentIndex === "number" ? { agentIndex: ev.agentIndex } : {}),
+            phase: ev.phase,
+            ...(typeof ev.label === "string" ? { label: ev.label } : {}),
+            ...(typeof ev.kind === "string" ? { kind: ev.kind } : {}),
+          });
+          // Bound memory on very long autonomous runs.
+          if (state.activityTimeline.length > 200) {
+            state.activityTimeline.splice(0, state.activityTimeline.length - 200);
+          }
+        }
+        break;
+      }
+      case "agents_roster":
+        // Roster clear/replace is a lifecycle boundary (pipeline handoff).
         break;
       case "agent_streaming":
         state.streamingEventCount += 1;
