@@ -8,7 +8,7 @@ import { BrainProposalsPanel } from "./BrainProposalsPanel";
 import { QuickNavPanel } from "./QuickNavPanel";
 import { useSwarm } from "../state/store";
 // Phase 10: brain always available (unless other config).
-import { RunHistoryDropdown } from "./RunHistory";
+import { RunHistoryDropdown } from "./runHistory";
 import { EventLogPanel } from "./EventLogPanel";
 import { apiFetch } from "../lib/apiFetch";
 
@@ -341,7 +341,7 @@ export function SystemWrapper({
 
           {!sidebarCollapsed && (
             <div className="p-2 space-y-3 min-w-0 max-w-full overflow-x-hidden">
-              <SystemStatusPanel />
+              <SystemStatusPanel projectPath={clonePathForNav || parentPath} />
               <RunQueuePanel parentPath={parentPath} onViewRun={handleViewRun} onStopRun={handleStopRun} />
               <MetricsOverviewPanel parentPath={parentPath} />
               <BrainActivityPanel brainHealth={brainHealth} activities={brainActivities} />

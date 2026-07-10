@@ -23,7 +23,7 @@ import { ProjectGraphPanel } from "../features/projectGrowth/ProjectGraphPanel";
 import { TranscriptTimeline } from "./TranscriptTimeline";
 import { PlanningTab } from "./PlanningTab";
 import { OutcomeChip } from "./OutcomeChip";
-import { roleForRow } from "./RunHistory";
+import { roleForRow } from "./runHistory";
 import { AgentStatsCards } from "./AgentStatsCards";
 import { buildResumeStartPayload } from "../lib/resumeRun";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";

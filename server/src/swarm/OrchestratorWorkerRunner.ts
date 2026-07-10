@@ -18,8 +18,9 @@ import { formatChatReceipt, userEntryVisibleTo } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 
-import { buildSeedSummary } from "./runSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
+import { buildOrchestratorWorkerSeedMessage } from "./orchestratorWorkerSeed.js";
+import { runOwLoopBody } from "./orchestratorWorkerLoop.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
@@ -34,7 +35,6 @@ import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import {
   readDirective,
-  buildDirectiveBlock,
   pickDeliverableTitle,
   pickAnswerSectionTitle,
   pickDeliverableSubtitle,
@@ -119,215 +119,33 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
     const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
-    // 2026-05-02 (OW directive lever): the lead's plan becomes
-    // "decompose the directive into worker subtasks" instead of
-    // "tell me about this repo via N lenses". Workers get the
-    // directive as context so off-topic findings can be filtered
-    // honestly (same valve as map-reduce #1).
-    // 2026-05-03 (Phase A): directive block extracted to shared helper.
-    const dirCtx = readDirective(cfg);
-    const lines = [
-      `Project clone: ${clonePath}`,
-      `Repo: ${cfg.repoUrl}`,
-      `Top-level entries: ${tree.join(", ") || "(empty)"}`,
-      "",
-      ...buildDirectiveBlock(dirCtx, {
-        framingLines: [
-          "The lead decomposes the directive into worker subtasks; workers execute in parallel toward the directive; lead synthesizes a directive answer at the end.",
-        ],
-      }),
-      "Pattern: Orchestrator–worker. Agent 1 is the LEAD; other agents are WORKERS.",
-      "Lead will produce a plan (one subtask per worker), workers will execute in parallel with no visibility of peers, then lead will synthesize.",
-    ];
-    this.appendSystem(lines.join("\n"), buildSeedSummary(cfg.repoUrl, clonePath, tree));
+    const { text, summary } = buildOrchestratorWorkerSeedMessage({ clonePath, cfg, tree });
+    this.appendSystem(text, summary);
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
     let crashMessage: string | undefined;
     try {
-      const agents = this.opts.manager.list();
-      const lead = agents.find((a) => a.index === 1);
-      const workers = agents.filter((a) => a.index > 1);
-      if (!lead) throw new Error("lead agent (index 1) did not spawn");
-      if (workers.length === 0) throw new Error("no workers spawned");
-
-      // 2026-05-03 (Phase B): budget + dead-loop guards extracted to shared helpers.
-      const tokenBaseline = snapshotLifetimeTokens();
-      const planEmptyGuard = new PlanEmptyDeadLoopGuard({
-        roleLabel: "lead",
-      });
-
-      for (let r = 1; r <= cfg.rounds; r++) {
-        if (!this.checkRoundBudget(cfg, "cycle", r, tokenBaseline)) break;
-
-        // PLAN — lead gets the full transcript (including any prior cycles'
-        // syntheses) and produces a fresh plan.
-        this.appendSystem(`Cycle ${r}/${cfg.rounds}: lead planning.`);
-        let planText = await this.runLeadTurn(
-          lead,
-          r,
-          cfg.rounds,
-          buildLeadPlanPrompt(r, cfg.rounds, workers.map((w) => w.index), [...this.transcript], cfg.userDirective),
-          "plan",
-        );
-        if (this.stopping) break;
-
-        if (cfg.postSynthesisCritique && planText) {
-          const proposals = this.transcript
-            .filter(e => e.role === "agent" && e.agentIndex !== 1)
-            .slice(-3)
-            .map(e => ({ workerId: `agent-${e.agentIndex}`, text: e.text }));
-          planText = await runPostSynthesisCritique({
-            synthesis: planText,
-            proposals,
-            criticAgent: workers[0] ?? lead,
-            manager: this.opts.manager,
-            appendSystem: (text) => this.appendSystem(text),
-            stopping: this.stopping,
-            runDiscussionAgent: (agent, prompt, opts) => this.runDiscussionAgent(agent, prompt, opts),
-            stats: this.stats,
-            presetName: "orchestrator-worker",
-          });
-        }
-
-        const plan = parsePlan(planText, workers.map((w) => w.index));
-        // Phase B (Task #101): lead short-circuit. Honor done:true
-        // even if the model also emitted assignments alongside —
-        // the explicit done flag is a stronger signal than any
-        // backup work it might have queued. Skip on cycle 1 (the
-        // prompt forbids it; this is defense-in-depth).
-        if (plan.done === true && r > 1) {
-          this.earlyStopDetail = `lead-reports-done after cycle ${r}/${cfg.rounds}`;
-          this.appendSystem(
-            `Lead reports done — ending OW early at cycle ${r}/${cfg.rounds}.`,
-          );
-          break;
-        }
-
-        // 2026-05-06: when the lead produces no parseable assignments,
-        // retry once with a re-prompt that explicitly asks for JSON
-        // before counting this cycle as empty. This cuts ~50% of
-        // early-stop scenarios where the lead emitted valid thinking
-        // but forgot the JSON block.
-        let finalPlan = plan;
-        if (plan.assignments.length === 0 && planText.length > 20) {
-          this.appendSystem(
-            `Cycle ${r}: lead output was not valid JSON assignments — retrying with explicit format reminder.`,
-          );
-          const retryPrompt = buildLeadPlanPrompt(r, cfg.rounds, workers.map((w) => w.index), [...this.transcript], cfg.userDirective)
-            + "\n\nIMPORTANT: Your response MUST contain a ```json code block with an \"assignments\" array. For example:\n```json\n{\n  \"assignments\": [\n    {\"agentIndex\": 2, \"subtask\": \"...\", \"successCriteria\": \"...\"},\n    {\"agentIndex\": 3, \"subtask\": \"...\", \"successCriteria\": \"...\"}\n  ]\n}\n```\nDo NOT just explore the repo — you MUST output the JSON block.";
-          const retryText = await this.runLeadTurn(lead, r, cfg.rounds, retryPrompt, "plan");
-          if (!this.stopping) {
-            const retryPlan = parsePlan(retryText, workers.map((w) => w.index));
-            if (retryPlan.assignments.length > 0) {
-              finalPlan = retryPlan;
-              this.appendSystem(`Cycle ${r}: retry succeeded — got ${retryPlan.assignments.length} assignments.`);
-            }
-          }
-        }
-
-        const planHit = planEmptyGuard.recordCycle(finalPlan.assignments);
-        if (finalPlan.assignments.length === 0) {
-          this.appendSystem(
-            `Cycle ${r}: lead produced no parseable assignments — skipping execute phase this cycle. Raw lead output preserved in transcript. (consecutive=${planHit.consecutive})`,
-          );
-          if (planHit.tripped) {
-            this.earlyStopDetail = planHit.earlyStopDetail;
-            this.appendSystem(
-              `Lead has produced empty plans for ${planHit.consecutive} consecutive cycles — ending OW early to avoid burning wall-clock on dead loops.`,
-            );
-            break;
-          }
-          continue;
-        }
-        // Counter resets automatically inside recordCycle when assignments.length > 0.
-
-        // T182 (2026-05-04): surface effort distribution + run a peer
-        // review of the lead's decomposition. Both fire ONCE per cycle
-        // (right after planning, before execute) so workers see any
-        // peer-review concern in the system bubble — too late for
-        // round 1 (workers already have prompts queued by then) but
-        // valid for round 2+ when the lead can refine.
-        const efforts = summarizeEffortDistribution(plan.assignments);
-        if (efforts) this.appendSystem(`[T182 effort distribution] ${efforts}`);
-        // Peer review: pick the lowest-index worker (NOT the lead, NOT
-        // the worker assigned to the same subtask we're reviewing) and
-        // ask them to flag obvious issues with the plan. Best-effort:
-        // any failure is logged + ignored — workers still fire.
-        if (workers.length >= 2) {
-          await this.runDecompositionPeerReview(
-            workers[0]!,
-            r,
-            cfg.rounds,
-            plan,
-            cfg.userDirective,
-          );
-        }
-
-        // EXECUTE — workers fire in parallel. Each sees ONLY its assigned
-        // subtask + the seed, not the full transcript or peer reports.
-        // Unit 18b (2026-04-22): pre-batch parallel warmup REMOVED. v4
-        // battle test showed it didn't help OW (same 50% success vs
-        // worse) — the parallel cold-start ceiling applied to the warmup
-        // batch too. OW relies on serial spawn-warmup from start() only.
-        const seedSnapshot = this.transcript.filter((e) => e.role === "system");
-        // Task #53: stagger the N parallel worker prompts to avoid the
-        // Pattern 3 cold-start queue race confirmed in 2026-04-24 logs.
-        await staggerStart(plan.assignments, (a) => {
-          const w = workers.find((x) => x.index === a.agentIndex);
-          if (!w) return Promise.resolve();
-          return this.runWorkerTurn(
-            w,
-            r,
-            cfg.rounds,
-            a.subtask,
-            seedSnapshot,
-            cfg.userDirective,
-            a.successCriteria,
-          );
-        });
-        if (this.stopping) break;
-
-        // T195 (2026-05-04): cross-worker handoffs. Scan worker reports
-        // from THIS cycle for HANDOFF lines + dispatch a mini-wave to
-        // the named workers BEFORE synthesis. Best-effort: handoff
-        // failure doesn't block synthesis. Only one mini-wave per
-        // cycle (handoffs from the mini-wave itself are deferred to
-        // the next cycle to bound runaway re-dispatch).
-        if (!this.stopping) {
-          await this.dispatchHandoffWave(workers, r, cfg.rounds, seedSnapshot, cfg.userDirective);
-        }
-        if (this.stopping) break;
-
-        // SYNTHESIZE — lead sees the full transcript again (now including
-        // all worker reports from this cycle) and produces a consolidated
-        // answer for the cycle.
-        this.appendSystem(`Cycle ${r}/${cfg.rounds}: lead synthesizing.`);
-        await this.runLeadTurn(
-          lead,
-          r,
-          cfg.rounds,
-          buildLeadSynthesisPrompt(r, cfg.rounds, [...this.transcript], cfg.userDirective),
-          "synthesis",
-        );
-
-        if (cfg.postRoundCritique) {
-          await maybeRunPostRoundCritique({
-            agents: this.opts.manager.list(),
-            round: this.round,
-            totalRounds: cfg.rounds,
-            transcript: this.transcript,
-            userDirective: cfg.userDirective,
-            enabled: cfg.postRoundCritique ?? false,
-            runDiscussionAgent: (agent, prompt, opts) => this.runDiscussionAgent(agent, prompt, opts),
-            stats: this.stats,
-            appendSystem: (text, summary) => this.appendSystem(text, summary),
-            presetName: "orchestrator-worker",
-            stopping: this.stopping,
-          });
-        }
-      }
-      if (!this.stopping) this.appendSystem("Orchestrator–worker run complete.");
+      await runOwLoopBody(
+        {
+          manager: this.opts.manager,
+          transcript: this.transcript,
+          stats: this.stats,
+          getStopping: () => this.stopping,
+          setEarlyStopDetail: (d) => { this.earlyStopDetail = d; },
+          appendSystem: (t, s) => this.appendSystem(t, s as any),
+          checkRoundBudget: (c, u, r, b) => this.checkRoundBudget(c, u, r, b),
+          runDiscussionAgent: (a, p, o) => this.runDiscussionAgent(a, p, o as any),
+          runLeadTurn: (a, r, tr, p, k) => this.runLeadTurn(a, r, tr, p, k),
+          runWorkerTurn: (a, r, tr, s, snap, d, sc) =>
+            this.runWorkerTurn(a, r, tr, s, snap, d, sc),
+          dispatchHandoffWave: (w, r, tr, snap, d) =>
+            this.dispatchHandoffWave(w, r, tr, snap, d),
+          runDecompositionPeerReview: (rev, r, tr, plan, d) =>
+            this.runDecompositionPeerReview(rev, r, tr, plan, d),
+        },
+        cfg,
+      );
     } catch (err) {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });

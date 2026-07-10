@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import * as nodePath from "node:path";
 import type { AgentManager } from "./AgentManager.js";
 import type { RepoService } from "./RepoService.js";
 import type { AgentState, SwarmEvent, SwarmPhase, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
-import { normalizeSwarmStatusRunConfig } from "../types/run.js";
 import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/SwarmRunner.js";
 
 import { roleForAgent, selectRoleCatalog } from "../swarm/roles.js";
 import { ConformanceMonitor } from "./ConformanceMonitor.js";
 import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
 import { tokenTracker } from "./ollamaProxy.js";
+import { setupConformanceAndDriftMonitors as setupConformanceAndDriftMonitorsExtracted } from "./orchestratorMonitors.js";
+import { createWrappedEmit as createWrappedEmitExtracted } from "./orchestratorEmit.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 import {
   applyRunReconfig,
@@ -19,26 +19,27 @@ import {
   type RunReconfigResult,
 } from "../swarm/runReconfig.js";
 import { RunStatePersister, findRecoverableRuns, isRecoverablePhase, loadSnapshot, type RecoverableRun } from "./RunStatePersister.js";
-import {
-  buildTerminalStatusFromSummary,
-  collectClonePathsForSummaryLookup,
-  loadRunSummaryForRunId,
-  lookupTerminalSummaryOnDisk,
-  mergeStatusAgents,
-  resolveStatusAgents,
-  terminalPhaseFromStopReason,
-} from "./runSummaryDiscovery.js";
 import { tryAcquireLock, releaseLock } from "../swarm/cloneLock.js";
 import { config } from "../config.js";
 import { createLogger, rootLogger } from "./logger.js";
 import { ActiveRun } from "./ActiveRun.js";
-import {
-  buildRecoveredCrashSummary,
-  recoverCrashSummaryFromSnapshot,
-} from "./crashSummaryRecovery.js";
 import { RunEventHub } from "./RunEventHub.js";
 import { prepareResearchConfig, isResearchRun } from "../swarm/researchHelpers.js";
 import { BrainIntegration } from "./BrainIntegration.js";
+import {
+  mergeKnownParents,
+  scanForRunParents,
+  readPersistedLastParent,
+  writePersistedLastParent,
+  readPersistedKnownParents,
+  writePersistedKnownParents,
+  KNOWN_PARENTS_MAX,
+} from "./knownParents.js";
+import { statusForRun as statusForRunExtracted } from "./statusForRun.js";
+import { buildSwarmStatusRunConfig } from "./orchestratorRunConfig.js";
+
+// Re-export pure helpers for existing tests (Orchestrator.test.ts).
+export { mergeKnownParents, scanForRunParents, KNOWN_PARENTS_MAX };
 
 /** Thrown when a second start targets a clone that already has an active run. */
 export class WorkspaceBusyError extends Error {
@@ -84,124 +85,6 @@ interface BuildRunnerContext {
 // Re-exported so callers (routes/swarm.ts, index.ts) don't have to reach into
 // the swarm/ namespace to pass a RunConfig.
 export type { RunConfig };
-
-// Persisted lastParentPath store. /tmp survives dev-server restarts
-// but resets on reboot — fine for this use, since the user runs at
-// least once after reboot and the path gets re-set automatically.
-const LAST_PARENT_FILE = nodePath.join(tmpdir(), "ollama-swarm-last-parent.txt");
-function readPersistedLastParent(): string | undefined {
-  try {
-    const v = readFileSync(LAST_PARENT_FILE, "utf8").trim();
-    return v.length > 0 ? v : undefined;
-  } catch (err) {
-    rootLogger.warn('read-persisted-last-parent-failed', { error: err instanceof Error ? err.message : String(err) });
-    return undefined;
-  }
-}
-function writePersistedLastParent(p: string): void {
-  try {
-    writeFileSync(LAST_PARENT_FILE, p, "utf8");
-  } catch (err) {
-    rootLogger.warn('write-persisted-last-parent-failed', { error: err instanceof Error ? err.message : String(err) });
-  }
-}
-
-// #238 + #240 (2026-04-28): persisted set of ALL parent paths the
-// user has ever started a run from. Lets /api/swarm/runs and /api/
-// swarm/memory aggregate across parents instead of being scoped to
-// just the active clone's parent dir. Bounded to KNOWN_PARENTS_MAX
-// entries (LRU on add) so the file doesn't grow unbounded.
-const KNOWN_PARENTS_FILE = nodePath.join(tmpdir(), "ollama-swarm-known-parents.json");
-const KNOWN_PARENTS_MAX = 32;
-function readPersistedKnownParents(): string[] {
-  try {
-    const raw = readFileSync(KNOWN_PARENTS_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
-  } catch (err) {
-    rootLogger.warn('read-persisted-known-parents-failed', { error: err instanceof Error ? err.message : String(err) });
-    return [];
-  }
-}
-function writePersistedKnownParents(paths: string[]): void {
-  try {
-    writeFileSync(KNOWN_PARENTS_FILE, JSON.stringify(paths.slice(0, KNOWN_PARENTS_MAX)), "utf8");
-  } catch (err) {
-    rootLogger.warn('write-persisted-known-parents-failed', { error: err instanceof Error ? err.message : String(err) });
-  }
-}
-
-// #293 (2026-04-28): when /tmp gets cleared (reboot, WSL session
-// reset, manual rm) the persisted parents file disappears AND
-// historical runs become invisible in the dropdown until the user
-// happens to re-run from those parents. The 95-vs-9 bug surfaced
-// during the 9-preset tour: only the CURRENT session's parent was
-// in the list, hiding 86 prior summaries.
-//
-// Fix: at orchestrator construction, scan each project's logs/
-// subdirectories for summary*.json files. Treat those as known
-// parents — backfills the LRU list with everything we can see on
-// disk regardless of /tmp state.
-/** #293: merge persisted (recent, ordered) + scanned (discovered)
- *  parent paths into a single LRU list. Persisted entries keep their
- *  order (most-recent first); scanned entries that aren't already in
- *  the list get appended. Capped at KNOWN_PARENTS_MAX. */
-export function mergeKnownParents(persisted: string[], scanned: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const p of persisted) {
-    if (seen.has(p)) continue;
-    seen.add(p);
-    out.push(p);
-  }
-  for (const p of scanned) {
-    if (seen.has(p)) continue;
-    seen.add(p);
-    out.push(p);
-  }
-  return out.slice(0, KNOWN_PARENTS_MAX);
-}
-
-export function scanForRunParents(cwd: string): string[] {
-  const found = new Set<string>();
-  // Scan for logs/ directories containing {runId}/ subdirectories
-  // with summary*.json files. Runs are stored in <project>/logs/{runId}/.
-  const bases = [cwd, nodePath.dirname(cwd)];
-  for (const base of bases) {
-    // Look for logs/ directory at this base
-    const logsDir = nodePath.join(base, "logs");
-    let logEntries: string[];
-    try {
-      logEntries = readdirSync(logsDir);
-    } catch {
-      continue; // no logs/ dir — fine
-    }
-    for (const entry of logEntries) {
-      const runDir = nodePath.join(logsDir, entry);
-      let stat;
-      try {
-        stat = statSync(runDir);
-      } catch {
-        continue;
-      }
-      if (!stat.isDirectory()) continue;
-      // Check if this run directory has a summary*.json
-      let hasSummary = false;
-      try {
-        for (const e of readdirSync(runDir)) {
-          if (e === "summary.json" || (e.startsWith("summary-") && e.endsWith(".json"))) {
-            hasSummary = true;
-            break;
-          }
-        }
-      } catch {
-        continue;
-      }
-      if (hasSummary) found.add(runDir);
-    }
-  }
-  return [...found];
-}
 
 // T-Item-MultiTenant Phase 3 (2026-05-04): per-active-run record.
 // Aggregates everything the orchestrator tracks PER run. Cross-run
@@ -578,298 +461,21 @@ export class Orchestrator {
   }
 
   statusForRun(runId: string): SwarmStatus | null {
-    const cached = this.statusForRunDiskCache.get(runId);
-    if (
-      cached
-      && Date.now() - cached.at < Orchestrator.STATUS_FOR_RUN_DISK_CACHE_TTL_MS
-    ) {
-      return cached.status;
-    }
-
-    let run = this.runs.get(runId);
-    if (!run && runId) {
-      // tolerant lookup for short prefix (UI may pass 8-char slice)
-      for (const [k, v] of this.runs.entries()) {
-        if (k.startsWith(runId) || runId.startsWith(k)) { run = v; break; }
-      }
-    }
-    if (run) {
-      const status = run.runner.status();
-      const runConfig = this.mergeRunConfig(run.runConfig, status.runConfig) as
-        | Record<string, unknown>
-        | undefined;
-      const roster = resolveStatusAgents({
-        terminalSum: (status.summary as Record<string, unknown> | undefined) ?? null,
-        clonePath: (runConfig?.clonePath ?? runConfig?.localPath) as string | undefined,
-        runConfig,
-        transcript: status.transcript,
-      });
-      const agents = mergeStatusAgents(
-        status.agents as import("./runSummaryDiscovery.js").AgentStateShape[],
-        roster,
-      ) as SwarmStatus["agents"];
-      return {
-        ...status,
-        agents,
-        runId: run.runId, // return canonical full
-        runConfig: this.mergeRunConfig(run.runConfig, status.runConfig),
-        runStartedAt: status.runStartedAt ?? run.startedAt,
-        regions: this.computeRegions(status),
-      };
-    }
-    // Run no longer in memory — fall back to persister file on disk.
-    let pathInfo = this.runPaths.get(runId);
-    if (!pathInfo && runId) {
-      for (const [k, v] of this.runPaths.entries()) {
-        if (k.startsWith(runId) || runId.startsWith(k)) { pathInfo = v; break; }
-      }
-    }
-    let stateFilePath: string | null = pathInfo ? `${pathInfo.clonePath}.run-state.json` : null;
-    let snap = stateFilePath ? loadSnapshot(stateFilePath) : null;
-    if (snap && snap.runId && snap.runId !== runId && !(runId && (snap.runId.startsWith(runId) || runId.startsWith(snap.runId)))) {
-      snap = null; // wrong run's snapshot for this clone
-    }
-    if (!snap) {
-      // Fallback for completed/old runs not in runPaths (e.g. after server restart):
-      // scan known parents for any snapshot containing this runId.
-      const recoverable = findRecoverableRuns(this.knownParentPaths);
-      for (const rec of recoverable) {
-        if (rec.runId === runId || (runId && (rec.runId.startsWith(runId) || runId.startsWith(rec.runId)))) {
-          snap = loadSnapshot(rec.stateFilePath);
-          if (snap) break;
-        }
-      }
-    }
-
-    // Deep-link after server restart: locate summary via clone paths (not every
-    // summary file in every workspace folder — that was ~300–400ms per /status).
-    if (!snap && !pathInfo) {
-      const parents = new Set<string>(this.knownParentPaths || []);
-      try { parents.add(process.cwd()); } catch {}
-      try { parents.add(nodePath.join(process.cwd(), "logs")); } catch {}
-      const last = this.getLastParentPath();
-      if (last) parents.add(last);
-      const clonePaths = collectClonePathsForSummaryLookup([...parents]);
-      const hit = lookupTerminalSummaryOnDisk(runId, clonePaths);
-      if (hit) {
-        return this.cacheDiskStatusForRun(
-          runId,
-          buildTerminalStatusFromSummary(hit.summary, runId, hit.clonePath),
-        );
-      }
-    }
-
-    // Summary-only fallback (no .run-state snapshot for *this* runId, e.g. blackboard
-    // "no-progress" finish + same-clone later run overwrote the sibling state file).
-    // runPaths still has the clonePath, so locate the summary written by PipelineRunner
-    // and synthesize a status. This makes /runs/:id/status and the WS on-connect for
-    // /runs/:id deliver correct phase/agents/transcript/summary instead of falling
-    // back to global idle/other-run and causing run-layer to show the start page.
-    if (!snap && pathInfo?.clonePath) {
-      const cp = pathInfo.clonePath;
-      try {
-        const logsDir = nodePath.join(cp, "logs");
-        let entries: string[] = [];
-        try { entries = readdirSync(logsDir); } catch {}
-        const candidates: string[] = [
-          ...entries.filter((e: string) => /^summary-.*\.json$/.test(e)).map((e: string) => nodePath.join(logsDir, e)),
-          nodePath.join(logsDir, "summary.json"),
-          nodePath.join(cp, "summary.json"),
-        ];
-        // Also descend into per-run subdirs under logs/ (e.g. logs/72b9d79d/summary.json)
-        try {
-          for (const sub of entries) {
-            const subDir = nodePath.join(logsDir, sub);
-            if (existsSync(subDir) && statSync(subDir).isDirectory()) {
-              try {
-                const subEnts = readdirSync(subDir);
-                for (const e of subEnts) {
-                  if (/^summary(?:-.*)?\.json$/.test(e)) {
-                    candidates.push(nodePath.join(subDir, e));
-                  }
-                }
-              } catch {}
-            }
-          }
-        } catch {}
-        // Sort by basename desc to prefer most recent timestamped summary (the final
-        // aggregated one) over older/partial per-phase summaries. Ensures history gets
-        // complete transcript + final run summary grid.
-        const sortedCandidates = [...candidates].sort((a, b) =>
-          nodePath.basename(b).localeCompare(nodePath.basename(a))
-        );
-        for (const cand of sortedCandidates) {
-          try {
-            if (!existsSync(cand)) continue;
-            const sumRaw = readFileSync(cand, "utf8");
-            const sum = JSON.parse(sumRaw);
-            if (sum && (!sum.runId || sum.runId === runId ||
-                (runId && (sum.runId.startsWith(runId) || runId.startsWith(sum.runId))))) {
-              // Phase 10: no migration synthesis of phases. Use summary fields directly if present (legacy only).
-              const effPhase = (sum.stopReason === "completed" ? "completed" :
-                               (sum.stopReason === "crash" || sum.stopReason === "crashed" ? "failed" : "stopped")) as SwarmPhase;
-              const rc = (sum as any).runConfig || { preset: sum.preset };
-              const shapedAgents = Array.isArray(sum.agents)
-                ? sum.agents.map((pa: any) => ({ id: pa.agentId, index: pa.agentIndex, status: "stopped" as const, model: pa.model }))
-                : [];
-              return {
-                phase: effPhase,
-                round: 0,
-                agents: shapedAgents,
-                transcript: (sum.transcript || []) as SwarmStatus["transcript"],
-                contract: sum.contract,
-                summary: sum,
-                runId,
-                runConfig: rc ? {
-                  ...rc,
-                  clonePath: rc.clonePath || rc.localPath || cp,
-                } as any : undefined,
-                runStartedAt: sum.startedAt,
-                wallClockMs: typeof sum.wallClockMs === "number" ? sum.wallClockMs : undefined,
-                endedAt: typeof sum.endedAt === "number" ? sum.endedAt : undefined,
-              } as any;
-            }
-          } catch {}
-        }
-      } catch {}
-    }
-
-    if (!snap) return null;
-
-    let effectivePhase = snap.phase as SwarmPhase;
-    // For finished runs the .run-state snapshot may contain a stale non-terminal
-    // phase (e.g. "executing" from continued blackboard work after PipelineRunner
-    // declared "completed", followed by hard kill with no final flush).
-    // If a summary written by writeRunSummary (with stopReason) is present
-    // under the clone's logs/ (or root), prefer the terminal phase derived from it.
-    //
-    // Abrupt termination (user hard-killed server because UI stop buttons were
-    // missing due to sidebar bug, or process crash/SIGKILL) must NEVER be labeled
-    // "completed". We detect:
-    // - crash sum.stopReason → failed
-    // - non-terminal last snap + no clean terminal sum → "failed" / "crashed"
-    // Scenarios:
-    //   - clean end of all phases + no error + !stopping → completed
-    //   - user Stop/Drain → user / stopped
-    //   - exception in runner (caught) → crash / failed
-    //   - cap hit → cap:xxx (terminal but not failed)
-    //   - no-progress / partial → stopped with detail
-    //   - hard kill / server death mid-run (no finally) → crashed / failed
-    //   - planning phase fail → failed
-    //   - sub phase in pipeline interrupted → crashed if no final main summary
-    // This ensures /status and per-run views report the real end state and hide
-    // ineffective stop/drain buttons.
-    try {
-      const rc = snap.runConfig as any;
-      const cp = rc?.clonePath || rc?.localPath || pathInfo?.clonePath;
-      if (cp) {
-        const logsDir = nodePath.join(cp, "logs");
-        // Scan for summary.json (latest) or timestamped summary-*.json like /run-summary does
-        let entries: string[] = [];
-        try { entries = readdirSync(logsDir); } catch {}
-        const candidates = [
-          ...entries.filter((e) => /^summary-.*\.json$/.test(e)).map(e => nodePath.join(logsDir, e)),
-          nodePath.join(logsDir, "summary.json"),
-          nodePath.join(cp, "summary.json"),
-        ];
-        for (const cand of candidates) {
-          try {
-            if (!existsSync(cand)) continue;
-            const sumRaw = readFileSync(cand, "utf8");
-            const sum = JSON.parse(sumRaw);
-            if (sum && sum.stopReason && (!sum.runId || sum.runId === runId ||
-                (runId && (sum.runId.startsWith(runId) || runId.startsWith(sum.runId))))) {
-              if (sum.stopReason === "completed") {
-                effectivePhase = "completed";
-              } else if (sum.stopReason === "crash" || sum.stopReason === "crashed") {
-                effectivePhase = "failed";
-              } else {
-                effectivePhase = "stopped";
-              }
-              // also try to pull wallClock for ticker
-              if (typeof sum.wallClockMs === 'number') {
-                (snap as any).wallClockMs = sum.wallClockMs;
-              }
-              if (typeof sum.endedAt === 'number') {
-                (snap as any).endedAt = sum.endedAt;
-              }
-              break;
-            }
-          } catch {}
-        }
-      }
-    } catch {}
-
-    // Post-sum abrupt termination detection for hard kills (no graceful stop/catch/finally).
-    // If after all recovery we still have a non-terminal phase for a run that is not
-    // currently active in memory, it means the process died (e.g. user killed server
-    // to stop a stuck run when UI stop buttons were missing).
-    // Never let it stay "completed" or a mid-phase like "executing"/"planning".
-    const terminalPhases = ["completed", "stopped", "failed"];
-    if (!terminalPhases.includes(effectivePhase as any)) {
-      effectivePhase = "failed";
-    } else if (effectivePhase === "completed" && snap && !terminalPhases.includes(snap.phase as any)) {
-      // Spurious "completed" from a sub-phase summary (e.g. planning phase wrote
-      // its "completed", but main execution was hard-killed before final write).
-      // Last snap shows non-terminal → treat as crashed/failed.
-      effectivePhase = "failed";
-    }
-
-    const rc = snap.runConfig as any;
-    const cp = rc?.clonePath || rc?.localPath || pathInfo?.clonePath;
-    let terminalSum = cp ? loadRunSummaryForRunId(cp, runId) : null;
-    if (!terminalSum?.stopReason && cp && effectivePhase === "failed") {
-      terminalSum = buildRecoveredCrashSummary(
-        {
-          runId: snap.runId,
-          preset: snap.preset,
-          phase: snap.phase,
-          startedAt: snap.startedAt,
-          lastEventAt: snap.lastEventAt,
-          transcript: snap.transcript as import("../types.js").TranscriptEntry[],
-          runConfig: rc,
-        },
-        cp,
-        runId,
-      ) as unknown as Record<string, unknown>;
-      void recoverCrashSummaryFromSnapshot(
-        {
-          runId: snap.runId,
-          preset: snap.preset,
-          phase: snap.phase,
-          startedAt: snap.startedAt,
-          lastEventAt: snap.lastEventAt,
-          transcript: snap.transcript as import("../types.js").TranscriptEntry[],
-          runConfig: rc,
-        },
-        cp,
-        runId,
-        this.opts.repos,
-      ).catch(() => {});
-    }
-    if (terminalSum?.stopReason) {
-      effectivePhase = terminalPhaseFromStopReason(terminalSum.stopReason) as SwarmPhase;
-    }
-    const shapedAgents = resolveStatusAgents({
-      terminalSum,
-      clonePath: cp,
-      runConfig: rc,
-      transcript: snap.transcript,
-    });
-    return this.cacheDiskStatusForRun(runId, {
-      phase: effectivePhase,
-      round: 0,
-      agents: shapedAgents,
-      transcript: snap.transcript as SwarmStatus["transcript"],
-      contract: (snap.contract as SwarmStatus["contract"] | undefined)
-        ?? (terminalSum?.contract as SwarmStatus["contract"] | undefined),
-      summary: terminalSum ?? undefined,
+    return statusForRunExtracted(
+      {
+        runs: this.runs,
+        runPaths: this.runPaths,
+        knownParentPaths: this.knownParentPaths,
+        getLastParentPath: () => this.getLastParentPath(),
+        mergeRunConfig: (a, b) => this.mergeRunConfig(a, b),
+        computeRegions: (s) => this.computeRegions(s),
+        cacheDiskStatusForRun: (id, st) => this.cacheDiskStatusForRun(id, st),
+        getDiskCache: (id) => this.statusForRunDiskCache.get(id),
+        diskCacheTtlMs: Orchestrator.STATUS_FOR_RUN_DISK_CACHE_TTL_MS,
+        repos: this.opts.repos,
+      },
       runId,
-      runConfig: rc ? normalizeSwarmStatusRunConfig(rc as SwarmStatusRunConfig & { localPath?: string; extras?: Record<string, unknown> }) : undefined,
-      runStartedAt: snap.startedAt,
-      wallClockMs: typeof terminalSum?.wallClockMs === "number" ? terminalSum.wallClockMs : undefined,
-      endedAt: typeof terminalSum?.endedAt === "number" ? terminalSum.endedAt : undefined,
-    } as SwarmStatus);
+    );
   }
 
   /** T-Item-MultiTenant Phase 5 (2026-05-04): inject for ONE run.
@@ -1171,56 +777,7 @@ export class Orchestrator {
     }
     // Pattern 9: build the runConfig snapshot once and reuse — same fields
     // go to the WS run_started event AND the REST status() snapshot.
-    // Single source of truth so the two paths can't drift.
-    const runConfig: SwarmStatusRunConfig = {
-      preset: cfg.preset,
-      // Per-agent overrides (Unit 42) fall back to cfg.model when absent.
-      plannerModel: cfg.plannerModel ?? cfg.model,
-      workerModel: cfg.workerModel ?? cfg.model,
-      // Auditor model fallback chain matches BlackboardRunner: explicit
-      // override → planner override → main model. Same surface as the
-      // runner so the UI label is honest about what's actually running.
-      auditorModel: cfg.auditorModel ?? cfg.plannerModel ?? cfg.model,
-      dedicatedAuditor: cfg.dedicatedAuditor === true,
-      roles: rolesForRunStarted,
-      repoUrl: cfg.repoUrl,
-      clonePath: cfg.localPath,
-      agentCount: cfg.agentCount,
-      rounds: cfg.rounds,
-      // Phase 4b of #243: include the resolved topology so the UI can
-      // mirror exact agent specs (role chip + model override) without
-      // re-deriving from preset+index. cfg.topology is always populated
-      // by the route layer (synthesized from legacy fields when client
-      // didn't post one).
-      topology: cfg.topology,
-      // Map server cfg caps to client strings for run events / status.
-      wallClockCapMin: cfg.wallClockCapMs ? Math.round(cfg.wallClockCapMs / 60000).toString() : undefined,
-      ambitionTiers: cfg.ambitionTiers !== undefined ? String(cfg.ambitionTiers) : undefined,
-      ...(cfg.userDirective?.trim()
-        ? { userDirective: cfg.userDirective.trim() }
-        : {}),
-      ...(cfg.plannerTools !== undefined ? { plannerTools: cfg.plannerTools } : {}),
-      ...(cfg.webTools !== undefined ? { webTools: cfg.webTools } : {}),
-      ...(cfg.mcpServers ? { mcpServers: cfg.mcpServers } : {}),
-      ...(cfg.thinkGuardRefereeEnabled != null
-        ? { thinkGuardRefereeEnabled: cfg.thinkGuardRefereeEnabled }
-        : {}),
-      ...(cfg.thinkGuardRefereeMaxCallsPerRun != null
-        ? { thinkGuardRefereeMaxCallsPerRun: cfg.thinkGuardRefereeMaxCallsPerRun }
-        : {}),
-      ...(cfg.thinkGuardRefereeMinThinkChars != null
-        ? { thinkGuardRefereeMinThinkChars: cfg.thinkGuardRefereeMinThinkChars }
-        : {}),
-      ...(cfg.thinkGuardRefereeThinkTailMinChars != null
-        ? { thinkGuardRefereeThinkTailMinChars: cfg.thinkGuardRefereeThinkTailMinChars }
-        : {}),
-      ...(cfg.thinkGuardRefereeThinkTailMaxChars != null
-        ? { thinkGuardRefereeThinkTailMaxChars: cfg.thinkGuardRefereeThinkTailMaxChars }
-        : {}),
-      ...(cfg.thinkGuardRefereeMaxOutputTokens != null
-        ? { thinkGuardRefereeMaxOutputTokens: cfg.thinkGuardRefereeMaxOutputTokens }
-        : {}),
-    };
+    const runConfig: SwarmStatusRunConfig = buildSwarmStatusRunConfig(cfg, rolesForRunStarted);
     cfg.thinkGuardRefereeCallsUsed = cfg.thinkGuardRefereeCallsUsed ?? 0;
     const activeRun = this.createActiveRun(runId, startedAt, cfg, runConfig, runner, manager, persister, holdsCloneLock, runHub);
     this.runs.set(runId, activeRun);
@@ -1387,86 +944,27 @@ export class Orchestrator {
     }
   }
 
-  // T192 (2026-05-04): forward chain to a follow-up preset. Polls the
-  // active runner until it stops; reads the top extracted next-action
-  // from this run's next-actions.json sibling; fires a new run with
-  // cfg.chainTo as the preset and the action as the directive. Soft
-  // failures (file missing, no actions, parse error, race with user
-  // starting another run) are logged + swallowed.
+  // T192 (2026-05-04): forward chain — see services/forwardChain.ts
   private async scheduleForwardChain(
     originalCfg: RunConfig,
     originalRunId: string,
     originalRunner: SwarmRunner,
     chainPreset: "blackboard" | "baseline",
   ): Promise<void> {
-    // Poll until the original runner truly stops (terminal phase).
-    // Cap at 4h so a wedged runner doesn't keep this task alive
-    // forever; the caller (orchestrator.start) returned long ago.
-    const POLL_MS = 5_000;
-    const MAX_WAIT_MS = 4 * 60 * 60_000;
-    const waitStartedAt = Date.now();
-    while (
-      originalRunner.isRunning() &&
-      Date.now() - waitStartedAt < MAX_WAIT_MS
-    ) {
-      await new Promise((r) => setTimeout(r, POLL_MS));
-    }
-    // Abandon if the run was stopped or cleaned up while we waited.
-    if (!this.runs.has(originalRunId)) return;
-    // Read the top action from the next-actions JSON sibling. We
-    // dynamically import the helper to keep the orchestrator's
-    // import surface lean.
-    let topAction: string | null = null;
-    try {
-      const { readTopNextAction } = await import("../swarm/wrapUpApplyPhase.js");
-      topAction = await readTopNextAction({
-        clonePath: originalCfg.localPath,
-        runId: originalRunId,
-        // The presetName field selects which JSON file to read —
-        // pass the ORIGINAL preset (e.g. "stigmergy"), not the chain
-        // target. The original run wrote next-actions-stigmergy-*.json.
-        presetName: originalCfg.preset,
-      });
-    } catch (err) {
-      this.opts.emit({
-        type: "error",
-        message: `forward-chain: failed to read next-actions JSON — ${err instanceof Error ? err.message : String(err)}`,
-      });
-      return;
-    }
-    if (!topAction) {
-      this.opts.emit({
-        type: "error",
-        message: `forward-chain: no extractable next-action in deliverable; nothing to chain to ${chainPreset}.`,
-      });
-      return;
-    }
-    // Stop the prior run cleanly so we get a fresh slate, then fire
-    // the chained run. Recursion guard: chainTo cleared.
-    try {
-      await this.stopRun(originalRunId);
-    } catch (err) {
-      this.log.warn('forward-chain-stop-failed', { error: err instanceof Error ? err.message : String(err) });
-    }
-    const chainedCfg: RunConfig = {
-      ...originalCfg,
-      preset: chainPreset,
-      userDirective: topAction,
-      chainTo: undefined, // recursion guard
-      // Keep agentCount; bump to blackboard's min if needed.
-      agentCount:
-        chainPreset === "blackboard" && originalCfg.agentCount < 3
-          ? 3
-          : originalCfg.agentCount,
-    };
-    try {
-      await this.start(chainedCfg);
-    } catch (err) {
-      this.opts.emit({
-        type: "error",
-        message: `forward-chain: chained ${chainPreset} run failed to start — ${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
+    const { scheduleForwardChain } = await import("./forwardChain.js");
+    await scheduleForwardChain(
+      {
+        runsHas: (id) => this.runs.has(id),
+        stopRun: (id) => this.stopRun(id),
+        start: (cfg) => this.start(cfg),
+        emit: (e) => this.opts.emit(e),
+        warn: (msg, meta) => this.log.warn(msg, meta),
+      },
+      originalCfg,
+      originalRunId,
+      originalRunner,
+      chainPreset,
+    );
   }
 
   /**
@@ -1507,78 +1005,17 @@ export class Orchestrator {
     trimmedDirective: string | undefined,
     cfg: RunConfig,
   ): void {
-    if (
-      trimmedDirective &&
-      trimmedDirective.length > 0 &&
-      config.CONFORMANCE_MONITOR &&
-      this.opts.ollamaBaseUrl
-    ) {
-      const ollamaBaseUrl = this.opts.ollamaBaseUrl as string;
-      void (async () => {
-        let anchors: import("../projectGraph/types.js").ProjectGraphAnchors | undefined;
-        if (config.PROJECT_GRAPH_ENABLED && cfg.localPath) {
-          try {
-            const { readProjectGraphSidecar } = await import("../projectGraph/sidecar.js");
-            const sidecar = await readProjectGraphSidecar(cfg.localPath);
-            if (sidecar) anchors = sidecar.anchors;
-          } catch {
-            // best-effort
-          }
-        }
-
-        const monitor = new ConformanceMonitor({
-          runId,
-          directive: trimmedDirective,
-          ollamaBaseUrl,
-          graderModel: cfg.model,
-          getTranscript: () => activeRun.runner.status().transcript ?? [],
-          getPhase: () => activeRun.runner.status().phase ?? "idle",
-          emit: this.opts.emit,
-          isActive: () => activeRun.runner.isRunning(),
-          anchors,
-          getTouchedPaths:
-            cfg.localPath && anchors
-              ? async () => {
-                  const localPath = cfg.localPath;
-                  try {
-                    const gs = await this.opts.repos.gitStatus(localPath);
-                    const { extractDeliverables } = await import("../swarm/blackboard/summary.js");
-                    const d = extractDeliverables(gs.porcelain);
-                    return d?.map((x) => x.path) ?? [];
-                  } catch {
-                    return [];
-                  }
-                }
-              : undefined,
-        });
-        activeRun.attachMonitors(monitor);
-        monitor.start();
-
-        const drift = new EmbeddingDriftMonitor({
-          runId,
-          directive: trimmedDirective,
-          ollamaBaseUrl,
-          getTranscript: () => activeRun.runner.status().transcript ?? [],
-          emit: this.opts.emit,
-          isActive: () => activeRun.runner.isRunning(),
-        });
-        activeRun.attachMonitors(undefined, drift);
-        void drift.start();
-      })();
-    }
+    setupConformanceAndDriftMonitorsExtracted({
+      activeRun,
+      runId,
+      trimmedDirective,
+      cfg,
+      ollamaBaseUrl: this.opts.ollamaBaseUrl,
+      emit: this.opts.emit,
+      repos: this.opts.repos,
+    });
   }
 
-  /**
-   * Deeper extracted slice: creates the wrapped emit that:
-   * - stamps runId
-   * - routes via hub
-   * - calls base emit
-   * - tracks health for brain
-   * - schedules persistence snapshot
-   *
-   * This was previously inline in buildRunner; extracting it is a step toward
-   * separating "event lifecycle + durability" from runner construction.
-   */
   private createWrappedEmit(params: {
     runId: string;
     startedAt: number;
@@ -1587,41 +1024,12 @@ export class Orchestrator {
     hub?: RunEventHub;
     getRunner: () => SwarmRunner;
   }): (e: SwarmEvent) => void {
-    const { runId, startedAt, cfg, persister, hub, getRunner } = params;
-    const baseEmit = this.opts.emit;
-    return (e: SwarmEvent) => {
-      let stamped: SwarmEvent =
-        e.runId === undefined ? { ...e, runId } : e;
-
-      // Phase 10: no phase tagging on events (phase state emitters removed completely).
-
-      if (hub) hub.emit(stamped as any, "lifecycle");
-      baseEmit(stamped);
-      this.brain.trackRunHealth(stamped);
-      const runner = getRunner();
-      if (!runner) return;
-      const status = runner.status();
-      const { preset: p, repoUrl, localPath, agentCount, rounds, model, ...extras } = cfg;
-      persister.schedule({
-        runId,
-        preset: cfg.preset,
-        phase: status?.phase ?? "unknown",
-        startedAt,
-        transcript: status?.transcript ?? [],
-        amendments: this.amendments.list(runId),
-        brainChatHistory: this.brain.getChatHistory(runId),
-        runConfig: {
-          preset: p,
-          repoUrl,
-          localPath,
-          agentCount,
-          rounds,
-          model,
-          ...(Object.keys(extras).length > 0 ? { extras } : {}),
-        },
-        contract: status?.contract,
-      });
-    };
+    return createWrappedEmitExtracted({
+      ...params,
+      baseEmit: this.opts.emit,
+      brain: this.brain,
+      amendments: this.amendments,
+    });
   }
 
   private async buildRunner(

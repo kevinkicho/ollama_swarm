@@ -112,7 +112,8 @@ export async function startupHealthCheck(
     if (runDirs.length > 50) {
       warnings.push(
         `Large number of run directories (${runDirs.length}) ` +
-        `in ${logsDir}. Run: npm run prune-logs:apply`,
+        `in ${logsDir}. Prune via System Status → Prune logs, ` +
+        `Brain chat ("prune logs" then "apply"), or: npm run prune-logs:apply`,
       );
     }
   } catch {

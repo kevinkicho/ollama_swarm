@@ -30,9 +30,10 @@ import type { TranscriptEntry } from "../types.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DJ_SRC = readFileSync(join(__dirname, "DebateJudgeRunner.ts"), "utf8");
+const DJ_STREAMS_SRC = readFileSync(join(__dirname, "debateStreams.ts"), "utf8");
 const DJ_DELIVERABLE_SRC = readFileSync(join(__dirname, "debateDeliverableWriter.ts"), "utf8");
 const DJ_PROMPT_SRC = readFileSync(join(__dirname, "debatePromptHelpers.ts"), "utf8");
-const DJ_ALL = [DJ_SRC, DJ_DELIVERABLE_SRC, DJ_PROMPT_SRC].join("\n\n");
+const DJ_ALL = [DJ_SRC, DJ_STREAMS_SRC, DJ_DELIVERABLE_SRC, DJ_PROMPT_SRC].join("\n\n");
 
 const STUB_VERDICT = {
   winner: "pro" as const,
@@ -355,13 +356,23 @@ describe("buildSignoffPrompt — directive injection", () => {
 
 describe("DebateJudgeRunner — directive plumbing (structural)", () => {
   it("(#1) start() auto-derives proposition when Proposition empty + directive set", () => {
+    // Proposition resolve extracted to debatePropositionResolve.ts
     assert.match(
       DJ_SRC,
-      /this\.proposition === undefined \|\| this\.proposition\.length === 0/,
+      /resolveDebatePropositionAtStart/,
+      "start must call resolveDebatePropositionAtStart",
+    );
+    const resolveSrc = readFileSync(
+      join(__dirname, "debatePropositionResolve.ts"),
+      "utf8",
+    );
+    assert.match(
+      resolveSrc,
+      /proposition === undefined \|\| proposition\.length === 0/,
       "auto-derive must gate on empty proposition",
     );
     assert.match(
-      DJ_SRC,
+      resolveSrc,
       /deriveProposition\(\{[\s\S]{0,200}?directive: directiveTrimmed/,
       "auto-derive must call deriveProposition with the trimmed directive",
     );
@@ -370,24 +381,23 @@ describe("DebateJudgeRunner — directive plumbing (structural)", () => {
   it("(#2) loop threads cfg.userDirective into runDebaterTurn + runJudgeTurn + runNextActionPhase", () => {
     // T-Item-2 (2026-05-04): the per-round calls moved out of `loop`
     // into runSingleStreamDebate (which both single- and multi-stream
-    // paths share). The proposition parameter is now named
-    // `proposition` (was `prop` in the inline loop) + a trailing
-    // `stream` arg threads the optional DebateStream context.
+    // paths share). After debateStreams extract, call sites use free
+    // functions with host first arg.
     assert.match(
-      DJ_SRC,
-      /this\.runDebaterTurn\(pro, "pro", r, cfg\.rounds, proposition, isFinalRound, cfg\.userDirective, stream\)/,
+      DJ_ALL,
+      /runDebaterTurn\((?:host, )?pro, "pro", r, cfg\.rounds, proposition, isFinalRound, cfg\.userDirective, stream\)/,
     );
     assert.match(
-      DJ_SRC,
-      /this\.runDebaterTurn\(con, "con", r, cfg\.rounds, proposition, isFinalRound, cfg\.userDirective, stream\)/,
+      DJ_ALL,
+      /runDebaterTurn\((?:host, )?con, "con", r, cfg\.rounds, proposition, isFinalRound, cfg\.userDirective, stream\)/,
     );
     assert.match(
-      DJ_SRC,
-      /this\.runJudgeTurn\(judge, proposition, r, cfg\.userDirective, stream\)/,
+      DJ_ALL,
+      /runJudgeTurn\((?:host, )?judge, proposition, r, cfg\.userDirective, stream\)/,
     );
     assert.match(
-      DJ_SRC,
-      /this\.runNextActionPhase\(pro, con, judge, prop, finalVerdict, cfg\.userDirective\)/,
+      DJ_ALL,
+      /(?:this\.|host\.)?runNextActionPhase\((?:host, )?pro, con, judge, prop, finalVerdict, cfg\.userDirective\)/,
     );
   });
 
@@ -398,11 +408,11 @@ describe("DebateJudgeRunner — directive plumbing (structural)", () => {
     );
     assert.match(
       DJ_ALL,
-      /buildReviewerPrompt\(proposition, verdict, \[\.\.\.this\.transcript\], userDirective\)/,
+      /buildReviewerPrompt\(proposition, verdict, \[\.\.\.(?:this|host)\.transcript\], userDirective\)/,
     );
     assert.match(
       DJ_ALL,
-      /buildSignoffPrompt\(proposition, verdict, \[\.\.\.this\.transcript\], userDirective\)/,
+      /buildSignoffPrompt\(proposition, verdict, \[\.\.\.(?:this|host)\.transcript\], userDirective\)/,
     );
   });
 

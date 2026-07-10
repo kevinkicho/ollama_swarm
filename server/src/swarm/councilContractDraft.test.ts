@@ -9,21 +9,27 @@ const CONTRACT_BUILDER = readFileSync(
   join(here, "blackboard", "contractBuilder.ts"),
   "utf8",
 );
+// Council draft/merge path extracted to councilContractBuilder.ts
+const COUNCIL_CONTRACT = readFileSync(
+  join(here, "blackboard", "councilContractBuilder.ts"),
+  "utf8",
+);
 const COUNCIL_ADAPTER = readFileSync(join(here, "councilAdapter.ts"), "utf8");
+const ALL_CONTRACT = CONTRACT_BUILDER + "\n" + COUNCIL_CONTRACT;
 
 describe("council contract drafts use repo tools", () => {
   it("shared helper runs explore then emit with tool profiles", () => {
-    assert.match(CONTRACT_BUILDER, /runCouncilContractDraftForAgent/);
-    assert.match(CONTRACT_BUILDER, /resolveToolProfile\("planner"/);
-    assert.match(CONTRACT_BUILDER, /emitProfile = EMIT_ONLY_PROFILE_ID/);
-    assert.match(CONTRACT_BUILDER, /contract explore/);
-    assert.match(CONTRACT_BUILDER, /buildFirstPassContractRepairPrompt/);
+    assert.match(ALL_CONTRACT, /runCouncilContractDraftForAgent/);
+    assert.match(ALL_CONTRACT, /resolveToolProfile\("planner"/);
+    assert.match(ALL_CONTRACT, /emitProfile = EMIT_ONLY_PROFILE_ID/);
+    assert.match(ALL_CONTRACT, /contract explore/);
+    assert.match(ALL_CONTRACT, /buildFirstPassContractRepairPrompt/);
   });
 
   it("skips emit when explore already yields a grounded contract (no duplicate bubbles)", () => {
-    const fnBlock = CONTRACT_BUILDER.slice(
-      CONTRACT_BUILDER.indexOf("export async function runCouncilContractDraftForAgent"),
-      CONTRACT_BUILDER.indexOf("export async function runFirstPassContractOrchestrator"),
+    const fnBlock = COUNCIL_CONTRACT.slice(
+      COUNCIL_CONTRACT.indexOf("export async function runCouncilContractDraftForAgent"),
+      COUNCIL_CONTRACT.indexOf("export async function runFirstPassContractOrchestrator"),
     );
     assert.match(fnBlock, /parseFirstPassContractResponse\(exploreResponse\)/);
     assert.match(fnBlock, /validateContractGrounding/);
@@ -32,21 +38,21 @@ describe("council contract drafts use repo tools", () => {
   });
 
   it("tryCouncilContract does not call tool-free swarm profile for drafts", () => {
-    const tryBlock = CONTRACT_BUILDER.slice(
-      CONTRACT_BUILDER.indexOf("export async function tryCouncilContract"),
-      CONTRACT_BUILDER.indexOf("export async function tryResumeContract"),
+    const tryBlock = COUNCIL_CONTRACT.slice(
+      COUNCIL_CONTRACT.indexOf("export async function tryCouncilContract"),
+      COUNCIL_CONTRACT.length,
     );
     assert.doesNotMatch(tryBlock, /promptAgent\([^)]*"swarm"/);
     assert.match(tryBlock, /runCouncilContractDraftForAgent/);
   });
 
   it("supports shared explore → emit-only council drafts", () => {
-    assert.match(CONTRACT_BUILDER, /runCouncilSharedExplore/);
-    assert.match(CONTRACT_BUILDER, /runCouncilContractEmitForAgent/);
-    assert.match(CONTRACT_BUILDER, /buildCouncilContractEmitUserPrompt/);
-    const tryBlock = CONTRACT_BUILDER.slice(
-      CONTRACT_BUILDER.indexOf("export async function tryCouncilContract"),
-      CONTRACT_BUILDER.indexOf("export async function tryResumeContract"),
+    assert.match(ALL_CONTRACT, /runCouncilSharedExplore/);
+    assert.match(ALL_CONTRACT, /runCouncilContractEmitForAgent/);
+    assert.match(ALL_CONTRACT, /buildCouncilContractEmitUserPrompt/);
+    const tryBlock = COUNCIL_CONTRACT.slice(
+      COUNCIL_CONTRACT.indexOf("export async function tryCouncilContract"),
+      COUNCIL_CONTRACT.length,
     );
     assert.match(tryBlock, /councilSharedExplore/);
     assert.match(tryBlock, /shared explore complete/);

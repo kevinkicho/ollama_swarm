@@ -258,27 +258,30 @@ function extractPresetBlock(source: string, id: string): string | null {
 
 const _here = _dirname(_fileURLToPath(import.meta.url));
 const DEEP_SRC = _read(_join(_here, "OrchestratorWorkerDeepRunner.ts"), "utf8");
+const DEEP_LOOP_SRC = _read(_join(_here, "orchestratorWorkerDeepLoop.ts"), "utf8");
 const DEEP_PROMPT_SRC = _read(_join(_here, "orchestratorWorkerDeepPromptHelpers.ts"), "utf8");
-const DEEP_ALL = [DEEP_SRC, DEEP_PROMPT_SRC].join("\n\n");
+const DEEP_SEED_SRC = _read(_join(_here, "orchestratorWorkerDeepSeed.ts"), "utf8");
+const DEEP_ALL = [DEEP_SRC, DEEP_LOOP_SRC, DEEP_PROMPT_SRC, DEEP_SEED_SRC].join("\n\n");
 
 describe("OrchestratorWorkerDeepRunner — directive plumbing (structural, post Phase A)", () => {
   it("seed uses readDirective + buildDirectiveBlock helpers", () => {
-    assert.match(DEEP_SRC, /readDirective\(cfg\)/);
-    assert.match(DEEP_SRC, /buildDirectiveBlock\(/);
+    assert.match(DEEP_SRC, /buildOrchestratorWorkerDeepSeedMessage/);
+    assert.match(DEEP_SEED_SRC, /readDirective\(cfg\)/);
+    assert.match(DEEP_SEED_SRC, /buildDirectiveBlock\(/);
   });
 
   it("loop threads cfg.userDirective into top plan/synthesis + mid-lead subtree", () => {
     assert.match(
       DEEP_ALL,
-      /buildTopPlanPrompt\(r, cfg\.rounds, liveMidLeads\.map\(\(m\) => m\.index\), \[\.\.\.this\.transcript\], cfg\.userDirective\)/,
-    );
-    assert.match(
-      DEEP_SRC,
-      /this\.runMidLeadSubtree\(midLead, pool, a, r, cfg\.rounds, seedSnapshot, cfg\.userDirective\)/,
+      /buildTopPlanPrompt\(r, cfg\.rounds, liveMidLeads\.map\(\(m\) => m\.index\), \[\.\.\.(?:this|host)\.transcript\], cfg\.userDirective\)/,
     );
     assert.match(
       DEEP_ALL,
-      /buildTopSynthesisPrompt\(r, cfg\.rounds, \[\.\.\.this\.transcript\], cfg\.userDirective\)/,
+      /(?:this|host)\.runMidLeadSubtree\(midLead, pool, a, r, cfg\.rounds, seedSnapshot, cfg\.userDirective\)/,
+    );
+    assert.match(
+      DEEP_ALL,
+      /buildTopSynthesisPrompt\(r, cfg\.rounds, \[\.\.\.(?:this|host)\.transcript\], cfg\.userDirective\)/,
     );
   });
 
@@ -288,12 +291,12 @@ describe("OrchestratorWorkerDeepRunner — directive plumbing (structural, post 
       /buildMidLeadPlanPrompt\([\s\S]{0,300}?userDirective,?\s*\)/,
     );
     assert.match(
-      DEEP_SRC,
-      /this\.runWorkerForMidLead\(w, midLead\.index, round, totalRounds, a\.subtask, seedSnapshot, userDirective\)/,
+      DEEP_ALL,
+      /(?:this|host)\.runWorkerForMidLead\(w, midLead\.index, round, totalRounds, a\.subtask, seedSnapshot, userDirective\)/,
     );
     assert.match(
       DEEP_ALL,
-      /buildMidLeadSynthesisPrompt\(midLead\.index, round, totalRounds, coarseAssignment\.subtask, \[\.\.\.this\.transcript\], userDirective\)/,
+      /buildMidLeadSynthesisPrompt\(midLead\.index, round, totalRounds, coarseAssignment\.subtask, \[\.\.\.(?:this|host)\.transcript\], userDirective\)/,
     );
   });
 

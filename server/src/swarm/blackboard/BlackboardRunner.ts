@@ -47,12 +47,9 @@ import type { RunConfig, RunnerOpts, SwarmRunner } from "../SwarmRunner.js";
 // BlackboardRunner. See docs/known-limitations.md.
 import { FindingsLog } from "./FindingsLog.js";
 import {
-  makeTodoQueueWrappers,
   type TodoQueueWrappers,
 } from "./todoQueueWrappers.js";
 import {
-  buildWireSnapshot,
-  v2QueueCountsToWireCounts,
   v2QueueTodoToWireTodo,
 } from "./boardWireCompat.js";
 import { RunStateObserver } from "./RunStateObserver.js";
@@ -71,7 +68,8 @@ import type { Hunk } from "./applyHunks.js";
 import { voteOnHunks, voteOnHunksWithJudge, type HunkVote, type JudgeFn } from "./hunkVoting.js";
 import { buildJudgePrompt } from "./hunkJudgePrompt.js";
 import { realFilesystemAdapter, realGitAdapter, realVerifyAdapter } from "./v2Adapters.js";
-import { createBoardBroadcaster, type BoardBroadcaster } from "./boardBroadcaster.js";
+import { type BoardBroadcaster } from "./boardBroadcaster.js";
+import { bootstrapBlackboardRunner } from "./blackboardBootstrap.js";
 import {
   type TickAccumulator,
 } from "./caps.js";
@@ -82,6 +80,7 @@ import {
 } from "./stateSnapshot.js";
 import { StateSnapshotScheduler } from "./stateSnapshotScheduler.js";
 import { buildPerAgentStats as buildPerAgentStatsExtracted, type PerAgentCounters, writeRunSummary as writeRunSummaryExtracted } from "./runSummaryWriter.js";
+import { buildWriteRunSummaryContext } from "./writeRunSummaryBag.js";
 import { InteractionTracker } from "./brainOverseer/interactionTracker.js";
 import { ExceptionCollector } from "./brainOverseer/exceptionCollector.js";
 import { SwarmControlCenter } from "../control/SwarmControlCenter.js";
@@ -151,20 +150,11 @@ import {
   status as statusExtracted,
   type StatusContext,
 } from "./statusBuilder.js";
-import {
-  utilCtx as utilCtxBuilder,
-  lifecycleContext as lifecycleContextBuilder,
-  contractContext as contractContextBuilder,
-  tierContext as tierContextBuilder,
-  plannerContext as plannerContextBuilder,
-  workerContext as workerContextBuilder,
-  promptContext as promptContextBuilder,
-  capContext as capContextBuilder,
-  replanContext as replanContextBuilder,
-  auditorContext as auditorContextBuilder,
-  adaptiveWatchdogCtx as adaptiveWatchdogCtxBuilder,
-} from "./contextBuilders.js";
 import type { BlackboardRunnerFields } from "./runnerContextTypes.js";
+import {
+  buildBlackboardContexts,
+  type BlackboardContexts,
+} from "./blackboardContextAccessors.js";
 import {
   startAdaptiveWorkerWatchdog as startAdaptiveWorkerWatchdogExtracted,
   scaleUpAdaptive as scaleUpAdaptiveExtracted,
@@ -245,6 +235,14 @@ import {
   type LifecycleContext,
 } from "./lifecycleRunner.js";
 import type { LifecycleState } from "./lifecycleState.js";
+import {
+  clearExplorationCache as clearExplorationCacheExtracted,
+  getExplorationCache as getExplorationCacheExtracted,
+  getRepoFiles as getRepoFilesExtracted,
+  setExplorationCache as setExplorationCacheExtracted,
+  syncExplorationCacheFromSeed as syncExplorationCacheFromSeedExtracted,
+} from "./explorationCache.js";
+import { getDrainEligibilityInput as getDrainEligibilityInputExtracted } from "./drainEligibilityHost.js";
 
 export class BlackboardRunner implements SwarmRunner {
   private transcript: TranscriptEntry[] = [];
@@ -434,65 +432,50 @@ export class BlackboardRunner implements SwarmRunner {
   });
 
   constructor(private readonly opts: RunnerOpts) {
-    this.boardBroadcaster = createBoardBroadcaster(this.opts.emit);
-    this.findings = new FindingsLog();
-    this.stateSnapshotScheduler = new StateSnapshotScheduler(
-      () => ({
-        phase: this.phase,
-        round: this.round,
-        runBootedAt: this.runBootedAt,
-        runStartedAt: this.runStartedAt,
-        tickAccumulatorActiveElapsedMs: this.tickAccumulator?.activeElapsedMs,
-        active: this.active,
-        contract: this.contract,
-        cloneContract: (c) => this.cloneContract(c),
-        boardSnapshot: () => this.boardSnapshot(),
-        buildPerAgentStats: () => this.buildPerAgentStats(),
-        staleEventCount: this.staleEventCount,
-        auditInvocations: this.auditInvocations,
-        agentRoster: this.agentRoster,
-        terminationReason: this.terminationReason,
-        completionDetail: this.completionDetail,
-        currentTier: this.currentTier,
-        tiersCompleted: this.tiersCompleted,
-        tierHistory: this.tierHistory,
-      }),
-      () => this.active?.localPath,
-    );
-    // boardBroadcaster pulls live snapshots from the todo queue +
-    // findings log, translated to wire shape via boardWireCompat.
-    this.boardBroadcaster.bindSnapshotSource(() => ({
-      snapshot: buildWireSnapshot(this.todoQueue.list(), this.findings.list()),
-      counts: v2QueueCountsToWireCounts(this.todoQueue.counts()),
-    }));
-    // Mutation wrappers — see todoQueueWrappers.ts. The onTerminal
-    // callback feeds the V2 reducer's drain transition; onFailed
-    // routes through replan + bumps stale-events telemetry.
-    this.wrappers = makeTodoQueueWrappers({
+    const boot = bootstrapBlackboardRunner({
+      emit: this.opts.emit,
       todoQueue: this.todoQueue,
-      findings: this.findings,
-      emit: (ev) => this.boardBroadcaster.emit(ev),
+      v2Observer: this.v2Observer,
+      getPhase: () => this.phase,
+      getRound: () => this.round,
+      getRunBootedAt: () => this.runBootedAt,
+      getRunStartedAt: () => this.runStartedAt,
+      getTickAccumulatorActiveElapsedMs: () => this.tickAccumulator?.activeElapsedMs,
+      getActive: () => this.active,
+      getContract: () => this.contract,
+      cloneContract: (c) => this.cloneContract(c),
+      boardSnapshot: () => this.boardSnapshot(),
+      buildPerAgentStats: () => this.buildPerAgentStats(),
+      getStaleEventCount: () => this.staleEventCount,
+      getAuditInvocations: () => this.auditInvocations,
+      getAgentRoster: () => this.agentRoster,
+      getTerminationReason: () => this.terminationReason,
+      getCompletionDetail: () => this.completionDetail,
+      getCurrentTier: () => this.currentTier,
+      getTiersCompleted: () => this.tiersCompleted,
+      getTierHistory: () => this.tierHistory,
       scheduleStateWrite: () => this.scheduleStateWrite(),
-      onTerminal: (kind, remaining) => {
-        this.v2Observer.apply({
-          type: kind === "committed" ? "todo-committed" : "todo-skipped",
-          ts: Date.now(),
-          remainingTodos: remaining,
-        });
-      },
-      onFailed: (todoId) => {
+      bumpStaleAndEnqueueReplan: (todoId) => {
         this.staleEventCount++;
         this.enqueueReplan(todoId);
       },
     });
+    this.boardBroadcaster = boot.boardBroadcaster;
+    this.findings = boot.findings;
+    this.stateSnapshotScheduler = boot.stateSnapshotScheduler;
+    this.wrappers = boot.wrappers;
   }
 
   private asFields(): BlackboardRunnerFields {
     return this as unknown as BlackboardRunnerFields;
   }
 
+  private contexts(): BlackboardContexts {
+    return buildBlackboardContexts(this.asFields());
+  }
+
   private utilCtx(): RunnerUtilContext {
-    return utilCtxBuilder(this.asFields());
+    return this.contexts().util();
   }
 
   private allCriteriaResolvedSnapshot(): boolean { return allCriteriaResolvedSnapshotExtracted(this.tierContext()); }
@@ -581,18 +564,18 @@ export class BlackboardRunner implements SwarmRunner {
 
   private cloneContract(c: ExitContract): ExitContract { return cloneContractExtracted(c); }
 
-  // --- Context builders ---
+  // --- Context builders (via blackboardContextAccessors) ---
 
-  private lifecycleContext(): LifecycleContext { return lifecycleContextBuilder(this.asFields()); }
-  private contractContext(): ContractContext { return contractContextBuilder(this.asFields()); }
-  private tierContext(): TierContext { return tierContextBuilder(this.asFields()); }
-  private plannerContext(): PlannerContext { return plannerContextBuilder(this.asFields()); }
-  private workerContext(): WorkerContext { return workerContextBuilder(this.asFields()); }
-  private promptContext(): PromptContext { return promptContextBuilder(this.asFields()); }
-  private capContext(): CapContext { return capContextBuilder(this.asFields()); }
-  private replanContext(): ReplanContext { return replanContextBuilder(this.asFields()); }
-  private auditorContext(): AuditorContext { return auditorContextBuilder(this.asFields()); }
-  private adaptiveWatchdogCtx(): AdaptiveWatchdogContext { return adaptiveWatchdogCtxBuilder(this.asFields()); }
+  private lifecycleContext(): LifecycleContext { return this.contexts().lifecycle(); }
+  private contractContext(): ContractContext { return this.contexts().contract(); }
+  private tierContext(): TierContext { return this.contexts().tier(); }
+  private plannerContext(): PlannerContext { return this.contexts().planner(); }
+  private workerContext(): WorkerContext { return this.contexts().worker(); }
+  private promptContext(): PromptContext { return this.contexts().prompt(); }
+  private capContext(): CapContext { return this.contexts().cap(); }
+  private replanContext(): ReplanContext { return this.contexts().replan(); }
+  private auditorContext(): AuditorContext { return this.contexts().auditor(); }
+  private adaptiveWatchdogCtx(): AdaptiveWatchdogContext { return this.contexts().adaptiveWatchdog(); }
 
   private async runPlanner(agent: Agent, seed: PlannerSeed, isFallbackAttempt = false): Promise<void> { return runPlannerExtracted(this.plannerContext(), agent, seed, isFallbackAttempt); }
 
@@ -697,47 +680,51 @@ export class BlackboardRunner implements SwarmRunner {
 
     const agentStats: PerAgentStat[] = this.buildPerAgentStats();
     const counts = this.boardCounts();
+    const advice = this.swarmControl.getAdviceHistory();
 
-    await writeRunSummaryExtracted({
-      cfg,
-      runBootedAt: this.runBootedAt!,
-      gitPorcelainAtRunStart: this.gitPorcelainAtRunStart,
-      runStartedAt: this.runStartedAt,
-      tickAccumulatorActiveElapsedMs: this.tickAccumulator?.activeElapsedMs,
-      stopping: this.isStopping() || this.isUserStopRequested(),
-      userStopRequested: this.isUserStopRequested(),
-      wasDrained: this.isWasDrained(),
-      getLastSummary: () => this.lastSummary,
-      crashMessage,
-      terminationReason: this.terminationReason,
-      completionDetail: this.completionDetail,
-      staleEventCount: this.staleEventCount,
-      auditInvocations: this.auditInvocations,
-      currentTier: this.currentTier,
-      tiersCompleted: this.tiersCompleted,
-      tierHistory: this.tierHistory,
-      contract: this.contract,
-      transcript: this.transcript,
-      agentStats,
-      boardCounts: { committed: counts.committed, skipped: counts.skipped, stale: counts.stale, total: counts.total },
-      gitStatus,
-      errorTracker: this.errorTracker,
-      controlAdvice: (() => {
-        const h = this.swarmControl.getAdviceHistory();
-        return h.length > 0 ? [...h] : undefined;
-      })(),
-      v2State: {
-        phase: this.v2Observer.getState().phase,
-        enteredAt: this.v2Observer.getState().enteredAt,
-        detail: this.v2Observer.getState().detail,
-        pausedReason: this.v2Observer.getState().pausedReason,
-      },
-      v2QueueState: { counts: this.todoQueue.counts() },
-      cloneContract: (c) => this.cloneContract(c),
-      lastSummarySetter: (s) => { this.lastSummary = s; },
-      emit: this.opts.emit,
-      appendSystem: (msg, ...args) => this.appendSystem(msg, ...args),
-    });
+    await writeRunSummaryExtracted(
+      buildWriteRunSummaryContext(
+        {
+          active: cfg,
+          runBootedAt: this.runBootedAt!,
+          gitPorcelainAtRunStart: this.gitPorcelainAtRunStart,
+          runStartedAt: this.runStartedAt,
+          tickAccumulatorActiveElapsedMs: this.tickAccumulator?.activeElapsedMs,
+          isStopping: () => this.isStopping(),
+          isUserStopRequested: () => this.isUserStopRequested(),
+          isWasDrained: () => this.isWasDrained(),
+          getLastSummary: () => this.lastSummary,
+          terminationReason: this.terminationReason,
+          completionDetail: this.completionDetail,
+          staleEventCount: this.staleEventCount,
+          auditInvocations: this.auditInvocations,
+          currentTier: this.currentTier,
+          tiersCompleted: this.tiersCompleted,
+          tierHistory: this.tierHistory,
+          contract: this.contract,
+          transcript: this.transcript,
+          agentStats,
+          boardCounts: {
+            committed: counts.committed,
+            skipped: counts.skipped,
+            stale: counts.stale,
+            total: counts.total,
+          },
+          gitStatus,
+          errorTracker: this.errorTracker,
+          controlAdvice: advice.length > 0 ? [...advice] : undefined,
+          v2Observer: this.v2Observer,
+          todoQueue: this.todoQueue,
+          cloneContract: (c) => this.cloneContract(c),
+          lastSummarySetter: (s) => {
+            this.lastSummary = s;
+          },
+          emit: this.opts.emit,
+          appendSystem: (msg, summary) => this.appendSystem(msg, summary),
+        },
+        crashMessage,
+      ),
+    );
   }
 
   private buildPerAgentStats(): PerAgentStat[] {
@@ -855,7 +842,7 @@ export class BlackboardRunner implements SwarmRunner {
       enqueueReplan: (id) => this.enqueueReplan(id),
       scheduleStateWrite: () => this.scheduleStateWrite(),
       adaptiveWatchdogCtx: () => this.adaptiveWatchdogCtx(),
-    };
+    } satisfies QueueReaperContext;
   }
 
   private startQueueReaper(): void { startQueueReaperExtracted(this.queueReaperCtx()); }
@@ -880,45 +867,42 @@ export class BlackboardRunner implements SwarmRunner {
     return promptPlannerSafelyExtracted(this.promptContext(), primaryAgent, promptText, agentName, ollamaFormat, activity);
   }
 
+  private explorationHost(): import("./explorationCache.js").ExplorationCacheHost {
+    return this as unknown as import("./explorationCache.js").ExplorationCacheHost;
+  }
+
   getExplorationCache(): import("@ollama-swarm/shared/explorationCache").ExplorationCacheEntry[] {
-    return this.explorationCache;
+    return getExplorationCacheExtracted(this.explorationHost());
   }
 
   setExplorationCache(
     cache: import("@ollama-swarm/shared/explorationCache").ExplorationCacheEntry[],
   ): void {
-    this.explorationCache = cache;
+    setExplorationCacheExtracted(this.explorationHost(), cache);
   }
 
   clearExplorationCache(): void {
-    this.explorationCache = [];
+    clearExplorationCacheExtracted(this.explorationHost());
   }
 
   syncExplorationCacheFromSeed(seed: PlannerSeed): void {
-    if (seed.explorationCache?.length) {
-      this.explorationCache = seed.explorationCache;
-    }
-    if (seed.repoFiles?.length) {
-      this.repoFilesCache = [...seed.repoFiles];
-    }
+    syncExplorationCacheFromSeedExtracted(this.explorationHost(), seed);
   }
 
   getRepoFiles(): readonly string[] {
-    return this.repoFilesCache;
+    return getRepoFilesExtracted(this.explorationHost());
   }
 
   getDrainEligibilityInput(partial: { claimed: number; pendingCommit: number }): import("./drainEligibility.js").DrainEligibilityInput {
-    const workerThinking = this.opts.manager.toStates().some(
-      (a) => a.index > 1 && (a.status === "thinking" || a.status === "retrying"),
+    return getDrainEligibilityInputExtracted(
+      {
+        phase: this.phase,
+        replanPending: this.replanPending,
+        replanRunning: this.replanRunning,
+        managerToStates: () => this.opts.manager.toStates(),
+      },
+      partial,
     );
-    return {
-      phase: this.phase,
-      claimed: partial.claimed,
-      pendingCommit: partial.pendingCommit,
-      replanPending: this.replanPending.size,
-      replanRunning: this.replanRunning,
-      workerThinking,
-    };
   }
 
   private async promptAgent(agent: Agent, prompt: string, agentName: import("../../tools/ToolDispatcher.js").ProfileName = "swarm", formatExpect: "json" | "free" = "json", ollamaFormat?: "json" | Record<string, unknown>, activity?: { kind?: string; label?: string; maxToolTurns?: number; mode?: "explore" | "emit"; promptWallClockMs?: number }): Promise<string> { return promptAgentExtracted(this.promptContext(), agent, prompt, agentName, formatExpect, ollamaFormat, activity); }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { RunSummary, RunSummaryDigest } from "../types";
-import { fmtMs } from "./RunHistory";
+import { fmtMs } from "./runHistory";
 import { apiFetch } from "../lib/apiFetch";
 
 interface TimelineEntry extends RunSummaryDigest {

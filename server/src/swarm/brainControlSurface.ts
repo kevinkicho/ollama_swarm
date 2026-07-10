@@ -192,6 +192,27 @@ export const BRAIN_CONTROL_SURFACE = {
     },
     {
       method: "GET",
+      path: "/api/swarm/maintenance/status",
+      phase: "meta",
+      purpose: "App log/run pressure; pass ?clonePath= for target-repo project logs status",
+    },
+    {
+      method: "POST",
+      path: "/api/swarm/maintenance/prune",
+      phase: "meta",
+      purpose: "Prune/purge app logs/runs or project clone logs (default dry-run)",
+      bodyHints: [
+        "target?: logs|runs|all|project-logs (default logs)",
+        "clonePath?: required for project-logs",
+        "mode?: prune|purge",
+        "apply?: boolean (default false)",
+        "keepDays?: number",
+        "maxKeep?: number",
+        "keepNArchives?: number",
+      ],
+    },
+    {
+      method: "GET",
       path: "/api/health",
       phase: "meta",
       purpose: "Liveness",
@@ -215,5 +236,7 @@ export const BRAIN_CONTROL_SURFACE = {
     summary: "ollama-swarm summary --run-id <id> --clone-path ...",
     recommend: "ollama-swarm recommend --directive ...",
     controlSurface: "ollama-swarm control-surface",
+    pruneLogs:
+      "ollama-swarm prune-logs [--apply] [--target logs|runs|all|project-logs] [--clone-path ...] [--mode prune|purge]",
   },
 } as const;

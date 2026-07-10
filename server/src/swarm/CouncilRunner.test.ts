@@ -13,7 +13,23 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const COUNCIL_SRC = readFileSync(join(__dirname, "CouncilRunner.ts"), "utf8");
 const DELIVERABLE_SRC = readFileSync(join(__dirname, "councilDeliverable.ts"), "utf8");
 const SYNTHESIS_SRC = readFileSync(join(__dirname, "councilSynthesis.ts"), "utf8");
-const ALL_COUNCIL_SRC = COUNCIL_SRC + "\n" + DELIVERABLE_SRC + "\n" + SYNTHESIS_SRC;
+const AUDIT_CYCLE_SRC = readFileSync(join(__dirname, "councilAuditCycle.ts"), "utf8");
+const SEED_SRC = readFileSync(join(__dirname, "councilSeed.ts"), "utf8");
+const STANDUP_SRC = readFileSync(join(__dirname, "councilStandup.ts"), "utf8");
+const PROMPT_HELPERS_SRC = readFileSync(join(__dirname, "councilPromptHelpers.ts"), "utf8");
+const STOP_SRC = readFileSync(join(__dirname, "councilStop.ts"), "utf8");
+const CYCLE_SRC = readFileSync(join(__dirname, "councilRunCycle.ts"), "utf8");
+const ALL_COUNCIL_SRC = [
+  COUNCIL_SRC,
+  DELIVERABLE_SRC,
+  SYNTHESIS_SRC,
+  AUDIT_CYCLE_SRC,
+  SEED_SRC,
+  STANDUP_SRC,
+  PROMPT_HELPERS_SRC,
+  STOP_SRC,
+  CYCLE_SRC,
+].join("\n");
 
 const system = (text: string): TranscriptEntry => ({
   id: crypto.randomUUID(),
@@ -179,12 +195,12 @@ describe("buildCouncilSynthesisPrompt", () => {
 
 test("CouncilRunner.seed uses readDirective + buildDirectiveBlock helpers", () => {
   assert.match(
-    COUNCIL_SRC,
+    ALL_COUNCIL_SRC,
     /readDirective\(cfg\)/,
     "seed must call readDirective(cfg) via shared helper",
   );
   assert.match(
-    COUNCIL_SRC,
+    ALL_COUNCIL_SRC,
     /buildDirectiveBlock\(/,
     "seed must call buildDirectiveBlock via shared helper",
   );
@@ -192,17 +208,17 @@ test("CouncilRunner.seed uses readDirective + buildDirectiveBlock helpers", () =
 
 test("CouncilRunner.runTurn forwards cfg.userDirective into buildCouncilPrompt", () => {
   assert.match(
-    COUNCIL_SRC,
-    /this\.runTurn\(agent, r, (3|effectiveRounds|cfg\.rounds), snapshot, cfg\.userDirective\)/,
+    ALL_COUNCIL_SRC,
+    /(?:this|host)\.runTurn\(agent, r, (3|effectiveRounds|cfg\.rounds), snapshot, cfg\.userDirective\)/,
     "loop must thread cfg.userDirective into runTurn",
   );
   assert.match(
-    COUNCIL_SRC,
+    ALL_COUNCIL_SRC,
     /buildCouncilPrompt\(/,
     "runTurn must thread userDirective into buildCouncilPrompt",
   );
   assert.match(
-    COUNCIL_SRC,
+    ALL_COUNCIL_SRC,
     /buildStandupPrompt\(/,
     "standup prompt builder must exist",
   );
@@ -223,33 +239,34 @@ test("CouncilRunner.stop — hard stop enters stopping, writes summary, kills ag
     "CouncilRunner must implement stop()",
   );
   assert.match(
-    COUNCIL_SRC,
+    ALL_COUNCIL_SRC,
     /enterImmediateShutdown/,
     "hard stop must freeze transcript and suppress streaming before close-out waits",
   );
   assert.match(
-    COUNCIL_SRC,
+    STOP_SRC,
     /beginRunShutdown/,
     "hard stop must abort in-flight provider work immediately",
   );
   assert.match(
-    COUNCIL_SRC,
+    STOP_SRC,
     /setPhase\("stopping"\)/,
     "hard stop must enter stopping phase immediately (not draining)",
   );
   assert.match(
-    COUNCIL_SRC,
-    /await this\.writeSummary\(cfg\)/,
+    STOP_SRC,
+    /writeSummary/,
     "hard stop must write run summary before tearing down agents",
   );
   assert.match(
-    COUNCIL_SRC,
-    /formatPortReleaseLine\(killResult\)/,
+    STOP_SRC,
+    /formatPortReleaseLine/,
     "hard stop must emit kill result transcript line",
   );
-  const stopBody = COUNCIL_SRC.match(/async stop\(\): Promise<void> \{[\s\S]*?\n  \}/)?.[0] ?? "";
+  // Facade stop() only delegates — drain phase is exclusive to councilDrain.
+  assert.match(COUNCIL_SRC, /councilStopExtracted/);
   assert.doesNotMatch(
-    stopBody,
+    STOP_SRC.match(/export async function councilStop[\s\S]*?^export async function councilDrain/m)?.[0] ?? "",
     /setPhase\("draining"\)/,
     "hard stop must not use draining phase (soft drain is drain())",
   );
@@ -257,12 +274,12 @@ test("CouncilRunner.stop — hard stop enters stopping, writes summary, kills ag
 
 test("CouncilRunner — enqueues synthesis todos after cycle 1 synthesis", () => {
   assert.match(
-    COUNCIL_SRC,
+    CYCLE_SRC,
     /extractActionableTodos\(/,
     "cycle 1 must extract actionable todos from synthesis",
   );
   assert.match(
-    COUNCIL_SRC,
+    CYCLE_SRC,
     /createdBy: "council-synthesis"/,
     "synthesis todos must be posted to the queue",
   );
@@ -270,12 +287,12 @@ test("CouncilRunner — enqueues synthesis todos after cycle 1 synthesis", () =>
 
 test("CouncilRunner — reconciles worker skips before audit", () => {
   assert.match(
-    COUNCIL_SRC,
+    ALL_COUNCIL_SRC,
     /reconcileCriteriaFromSkips/,
     "must promote criteria when workers skip with already-done reasons",
   );
   assert.match(
-    COUNCIL_SRC,
+    ALL_COUNCIL_SRC,
     /skipEvidence/,
     "must pass skip evidence into council audit",
   );
@@ -288,19 +305,20 @@ test("CouncilRunner.drain — soft stop is separate from hard stop", () => {
     "CouncilRunner must expose drain() for soft stop",
   );
   assert.match(
-    COUNCIL_SRC,
+    STOP_SRC,
     /setPhase\("draining"\)/,
     "soft drain must enter draining phase",
   );
 });
 
 test("CouncilRunner — summary is written after loop settles on drain/stop", () => {
-  assert.match(COUNCIL_SRC, /closingRequested/, "must gate audit on drain/stop");
-  assert.match(COUNCIL_SRC, /awaitLoopThenCloseOut/, "must await loop before close-out summary");
-  assert.match(COUNCIL_SRC, /workerDrainPromise/, "stop must wait for execution workers");
+  assert.match(ALL_COUNCIL_SRC, /closingRequested/, "must gate audit on drain/stop");
+  assert.match(ALL_COUNCIL_SRC, /awaitLoopThenCloseOut/, "must await loop before close-out summary");
+  assert.match(ALL_COUNCIL_SRC, /workerDrainPromise/, "stop must wait for execution workers");
+  // Audit cycle host uses closingRequested() after extract from the facade.
   assert.match(
-    COUNCIL_SRC,
-    /if \(this\.closingRequested\(\)\) return "stop"/,
+    AUDIT_CYCLE_SRC,
+    /if \(host\.closingRequested\(\)\) return "stop"/,
     "must skip audit when draining",
   );
 });
@@ -311,9 +329,10 @@ test("CouncilRunner.stop — hard stop must not set drainRequested (soft drain o
 });
 
 test("CouncilRunner — audit stuck sets earlyStopDetail and terminal message before summary", () => {
-  assert.match(COUNCIL_SRC, /earlyStopDetail = `audit-stuck:/, "stuck stop must set earlyStopDetail");
-  assert.match(COUNCIL_SRC, /appendCouncilTerminalMessage/, "terminal line must precede summary write");
-  assert.match(COUNCIL_SRC, /reconcileCriteriaFromLedger/, "must reconcile criteria from ledger commits");
-  assert.match(COUNCIL_SRC, /buildUnmetFailSignature/, "stuck detector must use ledger fail signature");
-  assert.doesNotMatch(COUNCIL_SRC, /tryBrainFallback/i, "council run recovery must not use in-run brain");
+  // Stuck detector lives in councilAuditCycle (extracted from CouncilRunner facade).
+  assert.match(AUDIT_CYCLE_SRC, /setEarlyStopDetail\(`audit-stuck:/, "stuck stop must set earlyStopDetail");
+  assert.match(ALL_COUNCIL_SRC, /appendCouncilTerminalMessage/, "terminal line must precede summary write");
+  assert.match(ALL_COUNCIL_SRC, /reconcileCriteriaFromLedger/, "must reconcile criteria from ledger commits");
+  assert.match(ALL_COUNCIL_SRC, /buildUnmetFailSignature/, "stuck detector must use ledger fail signature");
+  assert.doesNotMatch(ALL_COUNCIL_SRC, /tryBrainFallback/i, "council run recovery must not use in-run brain");
 });

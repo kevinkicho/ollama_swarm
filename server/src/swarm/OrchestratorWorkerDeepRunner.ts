@@ -53,9 +53,6 @@ import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 
-import {
-  buildSeedSummary,
-} from "./runSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
@@ -71,12 +68,13 @@ import {
 } from "./OrchestratorWorkerRunner.js";
 import {
   readDirective,
-  buildDirectiveBlock,
   pickDeliverableTitle,
   pickAnswerSectionTitle,
   pickDeliverableSubtitle,
   maybeDirectiveSection,
 } from "./directivePromptHelpers.js";
+import { buildOrchestratorWorkerDeepSeedMessage } from "./orchestratorWorkerDeepSeed.js";
+import { runOwDeepLoopBody } from "./orchestratorWorkerDeepLoop.js";
 import {
   buildTopPlanPrompt,
   buildMidLeadPlanPrompt,
@@ -163,198 +161,36 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
     const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
     const t = this.topology!;
-    // 2026-05-02 (OW-Deep directive lever): orchestrator decomposes
-    // directive into coarse mid-lead questions; mid-leads decompose
-    // those into worker subtasks; workers execute toward the directive.
-    // 2026-05-03 (Phase A): directive block extracted to shared helper.
-    const dirCtx = readDirective(cfg);
-    const lines = [
-      `Project clone: ${clonePath}`,
-      `Repo: ${cfg.repoUrl}`,
-      `Top-level entries: ${tree.join(", ") || "(empty)"}`,
-      "",
-      ...buildDirectiveBlock(dirCtx, {
-        framingLines: [
-          "The orchestrator decomposes the directive into coarse questions for each mid-lead. Each mid-lead decomposes its coarse question into worker subtasks. Workers execute toward the directive. Mid-leads + orchestrator synthesize a directive answer.",
-        ],
-      }),
-      "Pattern: 3-tier orchestrator-worker (deep).",
-      `  Tier 1 — orchestrator (agent 1)`,
-      `  Tier 2 — ${t.midLeadIndices.length} mid-leads (agents ${t.midLeadIndices.join(", ")})`,
-      `  Tier 3 — ${t.workerIndices.length} workers, partitioned across mid-leads`,
-      "",
-      "Per cycle: orchestrator dispatches one coarse subtask per mid-lead; each mid-lead breaks its subtask into worker subtasks; workers execute in parallel; mid-leads synthesize upward; orchestrator synthesizes the cycle.",
-    ];
-    this.appendSystem(lines.join("\n"), buildSeedSummary(cfg.repoUrl, clonePath, tree));
+    const { text, summary } = buildOrchestratorWorkerDeepSeedMessage({
+      clonePath,
+      cfg,
+      tree,
+      midLeadIndices: t.midLeadIndices,
+      workerIndices: t.workerIndices,
+    });
+    this.appendSystem(text, summary);
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
     let crashMessage: string | undefined;
     try {
-      const t = this.topology!;
-      const allAgents = this.opts.manager.list();
-      const orchestrator = allAgents.find((a) => a.index === t.orchestratorIndex);
-      const midLeads = t.midLeadIndices
-        .map((idx) => allAgents.find((a) => a.index === idx))
-        .filter((a): a is Agent => a !== undefined);
-      if (!orchestrator) throw new Error(`orchestrator agent (index ${t.orchestratorIndex}) did not spawn`);
-      if (midLeads.length === 0) throw new Error("no mid-leads spawned");
-
-      // Per-mid-lead worker pool, resolved once.
-      const workerPools: Agent[][] = t.workerByMidLead.map((indices) =>
-        indices
-          .map((idx) => allAgents.find((a) => a.index === idx))
-          .filter((a): a is Agent => a !== undefined),
+      await runOwDeepLoopBody(
+        {
+          manager: this.opts.manager,
+          transcript: this.transcript,
+          topology: this.topology ?? null,
+          getCyclePushbacks: () => this.cyclePushbacks,
+          setCyclePushbacks: (m) => { this.cyclePushbacks = m; },
+          getStopping: () => this.stopping,
+          setEarlyStopDetail: (d) => { this.earlyStopDetail = d; },
+          appendSystem: (t) => this.appendSystem(t),
+          checkRoundBudget: (c, u, r, b) => this.checkRoundBudget(c, u, r, b),
+          runAgent: (a, p) => this.runAgent(a, p),
+          runMidLeadSubtree: (ml, pool, a, r, tr, snap, d) =>
+            this.runMidLeadSubtree(ml, pool, a, r, tr, snap, d),
+        },
+        cfg,
       );
-      // A mid-lead with zero spawned workers is dead weight; drop it from
-      // this run rather than dispatching empty cycles.
-      const liveMidLeads: Agent[] = [];
-      const liveWorkerPools: Agent[][] = [];
-      for (let i = 0; i < midLeads.length; i++) {
-        if (workerPools[i]!.length > 0) {
-          liveMidLeads.push(midLeads[i]!);
-          liveWorkerPools.push(workerPools[i]!);
-        }
-      }
-      if (liveMidLeads.length === 0) {
-        throw new Error("no mid-leads with at least 1 worker — topology degenerate");
-      }
-
-      // 2026-05-03 (Phase B): budget + dead-loop guards extracted to shared helpers.
-      const tokenBaseline = snapshotLifetimeTokens();
-      const planEmptyGuard = new PlanEmptyDeadLoopGuard({
-        roleLabel: "orchestrator",
-      });
-
-      for (let r = 1; r <= cfg.rounds; r++) {
-        if (!this.checkRoundBudget(cfg, "cycle", r, tokenBaseline)) break;
-
-        // Phase 1 — TOP-PLAN
-        this.appendSystem(`Cycle ${r}/${cfg.rounds}: orchestrator planning at top level.`);
-        const topPlanText = await this.runAgent(
-          orchestrator,
-          buildTopPlanPrompt(r, cfg.rounds, liveMidLeads.map((m) => m.index), [...this.transcript], cfg.userDirective),
-        );
-        if (this.stopping) break;
-        const topPlan = parsePlan(topPlanText, liveMidLeads.map((m) => m.index));
-        if (topPlan.done === true && r > 1) {
-          this.earlyStopDetail = `orchestrator-reports-done after cycle ${r}/${cfg.rounds}`;
-          this.appendSystem(
-            `Orchestrator reports done — ending OW-deep early at cycle ${r}/${cfg.rounds}.`,
-          );
-          break;
-        }
-
-        // 2026-05-06: retry once when the orchestrator produces no parseable
-        // assignments, with an explicit format reminder. Same pattern as OW.
-        let finalTopPlan = topPlan;
-        if (topPlan.assignments.length === 0 && topPlanText.length > 20) {
-          this.appendSystem(
-            `Cycle ${r}: orchestrator output was not valid JSON assignments — retrying with format reminder.`,
-          );
-          const retryPrompt = buildTopPlanPrompt(r, cfg.rounds, liveMidLeads.map((m) => m.index), [...this.transcript], cfg.userDirective)
-            + "\n\nIMPORTANT: Your response MUST contain a ```json code block with an \"assignments\" array. For example:\n```json\n{\n  \"assignments\": [\n    {\"agentIndex\": 2, \"subtask\": \"...\", \"successCriteria\": \"...\"},\n    {\"agentIndex\": 3, \"subtask\": \"...\", \"successCriteria\": \"...\"}\n  ]\n}\n```\nDo NOT just explore the repo — you MUST output the JSON block.";
-          const retryText = await this.runAgent(orchestrator, retryPrompt);
-          if (!this.stopping) {
-            const retryPlan = parsePlan(retryText, liveMidLeads.map((m) => m.index));
-            if (retryPlan.assignments.length > 0) {
-              finalTopPlan = retryPlan;
-              this.appendSystem(`Cycle ${r}: retry succeeded — got ${retryPlan.assignments.length} assignments.`);
-            }
-          }
-        }
-
-        // 2026-05-03 (Phase B): plan-empty guard extracted to shared class.
-        const planHit = planEmptyGuard.recordCycle(finalTopPlan.assignments);
-        if (finalTopPlan.assignments.length === 0) {
-          this.appendSystem(
-            `Cycle ${r}: orchestrator produced no parseable mid-lead assignments — skipping execute phase this cycle. (consecutive=${planHit.consecutive})`,
-          );
-          if (planHit.tripped) {
-            this.earlyStopDetail = planHit.earlyStopDetail;
-            this.appendSystem(
-              `Orchestrator has produced empty plans for ${planHit.consecutive} consecutive cycles — ending OW-deep early to avoid burning wall-clock on dead loops.`,
-            );
-            break;
-          }
-          continue;
-        }
-        // Counter resets automatically inside recordCycle when assignments.length > 0.
-
-        // Phase 2 + 3 + 4 — Each mid-lead, in parallel: plan → workers → synth.
-        // The seed snapshot all sub-prompts share is the system messages
-        // captured BEFORE this cycle's per-mid-lead activity.
-        const seedSnapshot = this.transcript.filter((e) => e.role === "system");
-        // T199 (2026-05-04): clear cycle's pushback tracker before the
-        // mid-lead subtrees populate it.
-        this.cyclePushbacks = new Map();
-        await staggerStart(topPlan.assignments, async (a) => {
-          const midLeadIdx = a.agentIndex;
-          const midLeadPos = liveMidLeads.findIndex((m) => m.index === midLeadIdx);
-          if (midLeadPos < 0) return;
-          const midLead = liveMidLeads[midLeadPos]!;
-          const pool = liveWorkerPools[midLeadPos]!;
-          await this.runMidLeadSubtree(midLead, pool, a, r, cfg.rounds, seedSnapshot, cfg.userDirective);
-        });
-        if (this.stopping) break;
-
-        // T199 (2026-05-04): bidirectional refinement auto-replan.
-        // After mid-leads run, if cfg.bidirectionalRefinement is set
-        // AND any mid-lead pushed back, fire ONE orchestrator-level
-        // replan that sees the pushbacks + dispatches a corrected
-        // mini-cycle. Capped at 1 replan per cycle to bound runtime.
-        if (
-          cfg.bidirectionalRefinement &&
-          this.cyclePushbacks.size > 0 &&
-          !this.stopping
-        ) {
-          const pbSummary = [...this.cyclePushbacks.entries()]
-            .map(([idx, pb]) => `Mid-lead ${idx}: ${pb}`)
-            .join("\n  ");
-          this.appendSystem(
-            `[T199 bidirectional refinement] ${this.cyclePushbacks.size} mid-lead(s) pushed back; firing orchestrator REPLAN.\n  ${pbSummary}`,
-          );
-          const replanPrompt = buildOrchestratorReplanPrompt({
-            originalPlan: topPlan,
-            pushbacks: this.cyclePushbacks,
-            availableMidLeadIndices: liveMidLeads.map((m) => m.index),
-            round: r,
-            totalRounds: cfg.rounds,
-            userDirective: cfg.userDirective,
-          });
-          const replanText = await this.runAgent(orchestrator, replanPrompt);
-          if (!this.stopping) {
-            const replan = parsePlan(replanText, liveMidLeads.map((m) => m.index));
-            if (replan.assignments.length > 0) {
-              this.appendSystem(
-                `[T199 bidirectional refinement] orchestrator emitted ${replan.assignments.length} revised assignment(s); dispatching refinement wave.`,
-              );
-              this.cyclePushbacks = new Map(); // clear so the refinement wave doesn't re-trigger
-              await staggerStart(replan.assignments, async (a) => {
-                const midLeadIdx = a.agentIndex;
-                const midLeadPos = liveMidLeads.findIndex((m) => m.index === midLeadIdx);
-                if (midLeadPos < 0) return;
-                const midLead = liveMidLeads[midLeadPos]!;
-                const pool = liveWorkerPools[midLeadPos]!;
-                await this.runMidLeadSubtree(midLead, pool, a, r, cfg.rounds, seedSnapshot, cfg.userDirective);
-              });
-            } else {
-              this.appendSystem(
-                `[T199 bidirectional refinement] orchestrator's replan parsed empty — proceeding to synthesis with the original wave's outputs.`,
-              );
-            }
-          }
-        }
-        if (this.stopping) break;
-
-        // Phase 5 — TOP-SYNTH
-        this.appendSystem(`Cycle ${r}/${cfg.rounds}: orchestrator synthesizing across mid-lead reports.`);
-        await this.runAgent(
-          orchestrator,
-          buildTopSynthesisPrompt(r, cfg.rounds, [...this.transcript], cfg.userDirective),
-        );
-      }
-      if (!this.stopping) this.appendSystem("Orchestrator-worker-deep run complete.");
     } catch (err) {
       crashMessage = err instanceof Error ? err.message : String(err);
       this.opts.emit({ type: "error", message: crashMessage });

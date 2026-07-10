@@ -126,6 +126,25 @@ export const BrainProvisionBody = z.object({
   approved: z.literal(true),
 });
 
+/** Disk retention: app logs/runs or project clone logs under clonePath/logs/. */
+export const MaintenancePruneBody = z.object({
+  /**
+   * logs | runs | all = ollama_swarm app cwd.
+   * project-logs = target repo logs under clonePath (run summaries + per-run dirs).
+   */
+  target: z.enum(["logs", "runs", "all", "project-logs"]).optional().default("logs"),
+  /** Required when target is project-logs. Absolute path to the project clone. */
+  clonePath: z.string().min(1).max(500).optional(),
+  /** prune = retention defaults; purge = delete all except protected active runs. */
+  mode: z.enum(["prune", "purge"]).optional().default("prune"),
+  /** false = dry-run (default); true = delete. */
+  apply: z.boolean().optional().default(false),
+  keepDays: z.coerce.number().int().min(0).max(365).optional(),
+  /** logs: max run dirs; runs: max kept beyond keep-days. 0 allowed for purge. */
+  maxKeep: z.coerce.number().int().min(0).max(500).optional(),
+  keepNArchives: z.coerce.number().int().min(0).max(200).optional(),
+});
+
 import type { Request, Response, NextFunction } from "express";
 
 // Extracted from swarm.ts (2026-05-09 UML-B)

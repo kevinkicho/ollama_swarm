@@ -310,14 +310,17 @@ import { fileURLToPath as _fileURLToPath } from "node:url";
 
 const _here = _dirname(_fileURLToPath(import.meta.url));
 const MR_SRC = _read(_join(_here, "MapReduceRunner.ts"), "utf8");
+const MR_LOOP_SRC = _read(_join(_here, "mapReduceLoopBody.ts"), "utf8");
 const MR_DELIVERABLE_SRC = _read(_join(_here, "mapReduceDeliverableWriter.ts"), "utf8");
 const MR_PROMPT_SRC = _read(_join(_here, "mapReducePromptHelpers.ts"), "utf8");
-const MR_ALL = [MR_SRC, MR_DELIVERABLE_SRC, MR_PROMPT_SRC].join("\n\n");
+const MR_SEED_SRC = _read(_join(_here, "mapReduceSeed.ts"), "utf8");
+const MR_ALL = [MR_SRC, MR_LOOP_SRC, MR_DELIVERABLE_SRC, MR_PROMPT_SRC, MR_SEED_SRC].join("\n\n");
 
 describe("MapReduceRunner — directive plumbing (structural, post Phase A)", () => {
   it("(#1 + Phase A) seed uses readDirective + buildDirectiveBlock helpers", () => {
-    assert.match(MR_SRC, /readDirective\(cfg\)/);
-    assert.match(MR_SRC, /buildDirectiveBlock\(/);
+    assert.match(MR_SRC, /buildMapReduceSeedMessage/);
+    assert.match(MR_SEED_SRC, /readDirective\(cfg\)/);
+    assert.match(MR_SEED_SRC, /buildDirectiveBlock\(/);
   });
 
   it("(#1) runMapperTurn forwards cfg.userDirective + reframing into buildMapperPrompt", () => {
@@ -325,8 +328,8 @@ describe("MapReduceRunner — directive plumbing (structural, post Phase A)", ()
     // arg from the previous reducer's RE-TASK lines. Both directive
     // AND reframing must be threaded through.
     assert.match(
-      MR_SRC,
-      /this\.runMapperTurn\([\s\S]{0,300}cfg\.userDirective[\s\S]{0,200}reframing/,
+      MR_ALL,
+      /(?:this|host)\.runMapperTurn\([\s\S]{0,300}cfg\.userDirective[\s\S]{0,200}reframing/,
       "loop must thread cfg.userDirective + reframing into runMapperTurn",
     );
     assert.match(
@@ -338,8 +341,8 @@ describe("MapReduceRunner — directive plumbing (structural, post Phase A)", ()
 
   it("(#1) runReducerTurn forwards cfg.userDirective into buildReducerPrompt", () => {
     assert.match(
-      MR_SRC,
-      /this\.runReducerTurn\([\s\S]{0,200}cfg\.userDirective\)/,
+      MR_ALL,
+      /(?:this|host)\.runReducerTurn\([\s\S]{0,200}cfg\.userDirective\)/,
       "loop must thread cfg.userDirective into runReducerTurn",
     );
     assert.match(

@@ -4,11 +4,13 @@
 // and every spawn through spawnAgentNoOpencode (no real subprocess).
 import type { ChildProcess } from "node:child_process";
 import { config } from "../config.js";
-import { treeKill, killByPid, killByPort, isProcessAlive } from "./treeKill.js";
+import { treeKill } from "./treeKill.js";
 import { AgentPidTracker } from "./agentPids.js";
 import type { AgentState, SwarmEvent } from "../types.js";
 import { tokenTracker } from "./ollamaProxy.js";
 import { createSession, type Session } from "./Session.js";
+import { escalateProcessKill } from "./agentKill.js";
+import { StreamingTextThrottle } from "./agentStreaming.js";
 
 
 // Unit 17: minimal-token warmup prompt sent to each new agent right
@@ -17,46 +19,11 @@ import { createSession, type Session } from "./Session.js";
 // runner's first real prompt doesn't pay cold-start latency.
 export const WARMUP_PROMPT_TEXT = "Reply with one word: ok";
 
-// Phase 3 of #314: pure extractor — given a message.updated event's
-// info payload, return a UsageRecord-shaped object when the message
-// is a finished assistant turn from a non-Ollama provider with real
-// token counts. Ollama is excluded because the proxy already captures
-// it; double-counting would inflate the cost cap. Returns null in
-// every other case so the caller's call site stays one branch.
-export interface ExtractedUsage {
-  ts: number;
-  promptTokens: number;
-  responseTokens: number;
-  durationMs: number;
-  model: string;
-  path: string;
-}
-
-export function extractUsageFromMessageInfo(info: {
-  role?: string;
-  providerID?: string;
-  modelID?: string;
-  time?: { completed?: number };
-  tokens?: { input?: number; output?: number };
-}): ExtractedUsage | null {
-  if (info.role !== "assistant") return null;
-  if (!info.providerID || info.providerID === "ollama") return null;
-  if (info.time?.completed === undefined) return null;
-  const promptTokens = info.tokens?.input ?? 0;
-  const responseTokens = info.tokens?.output ?? 0;
-  if (promptTokens + responseTokens <= 0) return null;
-  // Reconstruct the prefixed model string so CostTracker.detectProvider
-  // works downstream. Fallback to providerID alone when modelID missing.
-  const model = info.modelID ? `${info.providerID}/${info.modelID}` : info.providerID;
-  return {
-    ts: Date.now(),
-    promptTokens,
-    responseTokens,
-    durationMs: 0,
-    model,
-    path: "/sdk-direct",
-  };
-}
+// Usage extraction lives in agentUsage.ts; re-export for existing imports.
+export {
+  extractUsageFromMessageInfo,
+  type ExtractedUsage,
+} from "./agentUsage.js";
 
 export interface Agent {
   id: string;
@@ -208,6 +175,7 @@ export class AgentManager {
   // absent (older callers / tests), PID tracking is a no-op — the
   // manager still works, orphans just don't get reclaimed.
   private readonly pidTracker?: AgentPidTracker;
+  private readonly streamingThrottle: StreamingTextThrottle;
   constructor(
     private readonly onState: (s: AgentState) => void,
     private readonly onEvent: (e: SwarmEvent) => void = () => {},
@@ -218,6 +186,19 @@ export class AgentManager {
     pidTracker?: AgentPidTracker,
   ) {
     this.pidTracker = pidTracker;
+    this.streamingThrottle = new StreamingTextThrottle({
+      shouldSuppress: (id) =>
+        this.runStreamingSuppressed || this.suppressStreamingFor.has(id),
+      onStreaming: (p) =>
+        this.onEvent({
+          type: "agent_streaming",
+          agentId: p.agentId,
+          agentIndex: p.agentIndex,
+          text: p.text,
+        }),
+      onStreamingEnd: (agentId) =>
+        this.onEvent({ type: "agent_streaming_end", agentId }),
+    });
   }
 
   getLastActivity(sessionId: string): number | undefined {
@@ -353,21 +334,13 @@ export class AgentManager {
     }
     this.streamingByAgent.clear();
 
-    for (const timer of this.streamingFlushTimers.values()) clearTimeout(timer);
-    this.streamingFlushTimers.clear();
-    this.latestStreamingText.clear();
-    this.partialStreams.clear();
+    this.streamingThrottle.clearAll();
     this.partsByAgent.clear();
     this.messageRoles.clear();
   }
 
   private endStreamingUi(agentId: string): void {
-    const flushTimer = this.streamingFlushTimers.get(agentId);
-    if (flushTimer) clearTimeout(flushTimer);
-    this.streamingFlushTimers.delete(agentId);
-    this.latestStreamingText.delete(agentId);
-    this.partialStreams.delete(agentId);
-    this.onEvent({ type: "agent_streaming_end", agentId });
+    this.streamingThrottle.markDone(agentId);
   }
 
   // E3 Phase 3 (slice): construct an Agent without spawning an opencode
@@ -620,12 +593,6 @@ export class AgentManager {
   // "agents_ready" structured summary. Cleared on respawn + killAll.
   private warmupElapsedByAgent = new Map<string, number>();
 
-  // Task #39: per-agent partial-stream buffer. Updated on every
-  // `message.part.updated` event with text content; cleared on
-  // `session.idle` (stream finalized) and on killAll (run end).
-  // getPartialStreams() returns a snapshot for the REST catch-up.
-  private partialStreams = new Map<string, { text: string; updatedAt: number }>();
-
   // Task #166: per-agent in-flight stream-prompt accumulator. When
   // promptWithRetry uses streamPrompt() instead of the blocking
   // session.prompt(), we register state here keyed by agent.id —
@@ -641,15 +608,6 @@ export class AgentManager {
   // 2nd+ prompts in _stream_prompt_start / _stream_chunk_timeout_fired
   // / _sse_probe_recovery diag entries.
   private streamPromptCount = new Map<string, number>();
-  // Task #172: trailing-edge throttle for agent_streaming WS events.
-  // SSE text snapshots arrive every ~50ms during model output; emitting
-  // each one to the UI causes "vibrating text" (full re-render) and
-  // wasted WS bandwidth. Coalesce to ~10/sec by buffering the latest
-  // text and flushing once per STREAMING_THROTTLE_MS window.
-  // Flushed immediately on session.idle so the final state lands
-  // before agent_streaming_end fires.
-  private streamingFlushTimers = new Map<string, NodeJS.Timeout>();
-  private latestStreamingText = new Map<string, string>();
   // Task #174: per-(agent,part) text accumulator. OpenCode emits
   // MULTIPLE text parts per message (e.g. an initial 29-char echo
   // part, then the actual N-thousand-char response part). Each part
@@ -763,7 +721,7 @@ export class AgentManager {
     this.agents.delete(id);
     this.agentStates.delete(id);
     this.lastActivity.delete(a.sessionId);
-    this.partialStreams.delete(id);
+    this.streamingThrottle.clearAgent(id);
     this.firstPromptLogged.delete(id);
     this.warmupElapsedByAgent.delete(id);
     // Emit removal so the UI store drops the panel
@@ -799,121 +757,36 @@ export class AgentManager {
     this.eventAborts.clear();
     let escaped = 0;
     const tasks = [...this.agents.values()].map(async (a) => {
-      // Bug: a hung opencode subprocess can leave session.abort() pending
-      // forever (HTTP request never returns), wedging killAll and blocking
-      // every subsequent run with phase=stopping. Race the abort against a
-      // 5s timeout so worst-case we proceed to the kill chain regardless.
-      // Found 2026-04-28 during the 9-preset tour after debate-judge
-      // hung post-run; orchestrator stayed in `stopping` 18+ minutes.
-      // E3 Phase 5: opencode session.abort gone; nothing to abort.
-      treeKill(a.child);
-      // Unit 41 + Task #122: verified kill with three-stage escalation.
-      // We do NOT return until every PID we spawned is confirmed dead,
-      // OR we have exhausted all stages. The /stop route awaits this.
-      //
-      // Stage 1 (up to 3 s): treeKill via ChildProcess, poll every
-      //   300 ms with one retry at the 0.9 s mark.
-      // Stage 2 (up to 3 s): killByPid (direct taskkill /F /PID or
-      //   SIGTERM→SIGKILL on POSIX), poll every 300 ms. Bypasses the
-      //   ChildProcess handle — catches cases where the Windows shell
-      //   wrapper died but its opencode grandchild is still holding a
-      //   port.
-      // Stage 3 (Task #122, up to 3 s): killByPort. The opencode
-      //   binary actually exec()s through a launcher that exits
-      //   within seconds — the captured child.pid is dead, but a
-      //   different node PID owns the port. Look up the actual
-      //   listener PID and kill it. This is what was leaking the
-      //   most orphans before.
-      // If all stages fail the PID is counted as "escaped" and the
-      // startup orphan sweep remains the safety net.
+      // Unit 41 + Task #122: multi-stage kill (treeKill → killByPid → killByPort).
+      const result = await escalateProcessKill({ child: a.child, port: a.port });
+      if (result.escaped) escaped += 1;
       const pid = a.child?.pid;
       if (pid !== undefined) {
-        let dead = !isProcessAlive(pid);
-        for (let i = 0; i < 10 && !dead; i++) {
-          await new Promise((r) => setTimeout(r, 300));
-          if (!isProcessAlive(pid)) { dead = true; break; }
-          if (i === 2) treeKill(a.child); // retry treeKill at 0.9 s
-        }
-        if (!dead) {
-          killByPid(pid);
-          for (let i = 0; i < 10 && !dead; i++) {
-            await new Promise((r) => setTimeout(r, 300));
-            if (!isProcessAlive(pid)) { dead = true; break; }
-            if (i === 2) killByPid(pid); // retry killByPid at 0.9 s
-          }
-        }
-        // Task #122: stage 3 — port-based escalation. Always run when
-        // the port is still listening, even if `dead` claims true (the
-        // tracked PID is dead but a different process can still hold
-        // the port — common with opencode launchers).
-        const portKilled = (a.port !== undefined && a.port > 0) ? killByPort(a.port) : [];
-        if (portKilled.length > 0) {
-          // Wait for port-targeted PIDs to die.
-          let allPortDead = false;
-          for (let i = 0; i < 10 && !allPortDead; i++) {
-            await new Promise((r) => setTimeout(r, 300));
-            allPortDead = portKilled.every((p) => !isProcessAlive(p));
-            if (i === 2 && !allPortDead) {
-              for (const p of portKilled) killByPid(p);
-            }
-          }
-          if (!allPortDead) escaped += 1;
-          else dead = true; // count as cleaned up
-        } else if (!dead) {
-          escaped += 1;
-        }
-        // Unit 41: await the PID-log remove rather than fire-and-forget
-        // so /stop's response reflects on-disk reality. Still wrapped
-        // in try/catch so a transient I/O error doesn't poison the
-        // whole kill chain.
         try {
           await this.pidTracker?.remove(pid);
         } catch {
-          // ignore — remove() already swallows errors internally
+          // ignore
         }
       }
-      // E3 Phase 5: no port allocator — port is sentinel 0.
       this.lastActivity.delete(a.sessionId);
-      // "stopped" state already broadcast before killed=true at top of killAll.
     });
     const total = tasks.length;
     await Promise.allSettled(tasks);
     this.agents.clear();
     this.agentStates.clear();
-    // Improvement #4: each run gets its own cold-start measurement.
-    // killAll fires at run-end, so clearing here means the next run's
-    // first prompts emit fresh "cold_start" diag records.
     this.firstPromptLogged.clear();
     this.promptActivityByAgent.clear();
-    // Task #39: drop any residual partial-stream buffers — agent IDs
-    // from the killed run no longer exist; the next run spawns fresh.
-    this.partialStreams.clear();
-    // Task #166: reject + drop any in-flight streamPrompt awaiters so
-    // they don't wedge a caller that's blocked waiting for chunks
-    // that will never arrive on a killed agent.
+    this.streamingThrottle.clearAll();
     for (const stream of this.streamingByAgent.values()) {
       if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);
       stream.reject(new Error("agent killed"));
     }
     this.streamingByAgent.clear();
-    // Task #172: cancel pending throttle flushes — no point emitting
-    // streaming text for an agent that's been killed.
-    for (const timer of this.streamingFlushTimers.values()) clearTimeout(timer);
-    this.streamingFlushTimers.clear();
-    this.latestStreamingText.clear();
-    // Task #174: drop per-part accumulators for killed agents.
     this.partsByAgent.clear();
-    // Task #179: drop message-role classification for killed agents.
     this.messageRoles.clear();
-    // Phase 3 of #314: drop usage-capture dedupe set.
     this.capturedUsageMessageIds.clear();
-    // 2026-04-27: drop warmup timing cache so the next run doesn't
-    // surface a previous run's warmup elapsed in its agents_ready summary.
     this.warmupElapsedByAgent.clear();
     if (escaped > 0) {
-      // Unit 41: surface unkillable PIDs to the UI rather than swallowing
-      // silently. The next dev-server startup sweep will still reclaim
-      // them, but the user deserves to know stop wasn't 100 % clean.
       this.onEvent({
         type: "error",
         message: `stop: ${escaped}/${total} agent process(es) did not exit within the verified-kill window. Startup sweep will reclaim on next restart.`,
@@ -922,94 +795,14 @@ export class AgentManager {
     return { total, escaped };
   }
 
-  // Subscribe to the per-agent opencode SSE event stream. Any event from our
-  // session counts as "activity" (so the orchestrator's idle watchdog sees
-  // work happening). Text part updates get forwarded to the UI as streaming
-  // deltas so you can watch an agent type in real time.
-
-  // Task #172: throttled streaming-text dispatch. Agent text snapshots
-  // arrive every ~50ms during model output; we coalesce to one emit
-  // per STREAMING_THROTTLE_MS (100ms = 10 Hz). Trailing-edge timer:
-  // first chunk schedules a flush, subsequent chunks just update the
-  // latest text, the timer fires once and emits the latest snapshot.
-  // 2026-04-27 (UI Phase 2): dropped 100 → 33 (30Hz). At 100ms (10Hz)
-  // the throttle was visibly choppy when chunks arrived rapidly — and
-  // when chunks arrived in BIG batches (V2 OllamaClient direct path),
-  // the throttle would deliver a single big update with nothing
-  // visually in between. 33ms (~30Hz) lets the UI feel smooth without
-  // overwhelming the WS channel — same cadence modern chat UIs use.
-  private static readonly STREAMING_THROTTLE_MS = 33;
-
   // V2 Step 1: public hook for the Ollama-direct path (promptWithRetry).
-  // Bypasses the SSE/streamPrompt machinery entirely — caller already
-  // has the cumulative text from the chunked-HTTP read and just needs
-  // to mirror it into the existing per-agent buffers + trigger a UI
-  // emit (throttled, same as the SSE path).
   recordStreamingText(agentId: string, agentIndex: number, cumulativeText: string): void {
     if (this.runStreamingSuppressed) return;
-    const agent = this.agents.get(agentId) ?? ({ id: agentId, index: agentIndex } as Agent);
-    const isFirstByte = !this.partialStreams.has(agentId);
-    this.partialStreams.set(agentId, { text: cumulativeText, updatedAt: Date.now() });
-    // First byte: emit immediately so the dock leaves "awaiting first token"
-    // as soon as onChunk fires — do not wait for the 33ms throttle.
-    this.scheduleStreamingFlush(agent, cumulativeText, isFirstByte);
+    this.streamingThrottle.record(agentId, agentIndex, cumulativeText);
   }
 
-  // V2 Step 1: emit the streaming-end event for the Ollama-direct path
-  // so the PersistentStreamBubble flips to "done ✓" the same way it
-  // does for the SSE path's session.idle.
   markStreamingDone(agentId: string, opts?: { preservePartial?: boolean }): void {
-    const agent = this.agents.get(agentId);
-    if (agent) this.flushStreamingNow(agent);
-    this.onEvent({ type: "agent_streaming_end", agentId });
-    if (!opts?.preservePartial) {
-      this.partialStreams.delete(agentId);
-    }
-    const flushTimer = this.streamingFlushTimers.get(agentId);
-    if (flushTimer) clearTimeout(flushTimer);
-    this.streamingFlushTimers.delete(agentId);
-    this.latestStreamingText.delete(agentId);
-  }
-
-  private scheduleStreamingFlush(agent: Agent, text: string, flushNow = false): void {
-    this.latestStreamingText.set(agent.id, text);
-    if (flushNow) {
-      this.emitStreamingChunk(agent);
-    }
-    if (this.streamingFlushTimers.has(agent.id)) return;
-    this.streamingFlushTimers.set(
-      agent.id,
-      setTimeout(() => {
-        this.streamingFlushTimers.delete(agent.id);
-        const latest = this.latestStreamingText.get(agent.id);
-        if (latest === undefined) return;
-        this.emitStreamingChunk(agent, latest);
-      }, AgentManager.STREAMING_THROTTLE_MS),
-    );
-  }
-
-  private emitStreamingChunk(agent: Agent, text?: string): void {
-    const latest = text ?? this.latestStreamingText.get(agent.id);
-    if (latest === undefined) return;
-    if (this.runStreamingSuppressed) return;
-    if (this.suppressStreamingFor.has(agent.id)) return;
-    this.onEvent({
-      type: "agent_streaming",
-      agentId: agent.id,
-      agentIndex: agent.index,
-      text: latest,
-    });
-  }
-
-  private flushStreamingNow(agent: Agent): void {
-    const timer = this.streamingFlushTimers.get(agent.id);
-    if (timer) {
-      clearTimeout(timer);
-      this.streamingFlushTimers.delete(agent.id);
-    }
-    const latest = this.latestStreamingText.get(agent.id);
-    this.latestStreamingText.delete(agent.id);
-    this.emitStreamingChunk(agent, latest);
+    this.streamingThrottle.markDone(agentId, opts);
   }
 
   // Task #39: expose the current per-agent partial-stream buffer as a
@@ -1018,7 +811,7 @@ export class AgentManager {
   // a defensive copy — callers can't mutate our internal map.
   getPartialStreams(): Record<string, { text: string; updatedAt: number }> {
     const out: Record<string, { text: string; updatedAt: number }> = {};
-    for (const [agentId, s] of this.partialStreams.entries()) {
+    for (const [agentId, s] of this.streamingThrottle.getAllPartials().entries()) {
       out[agentId] = { text: s.text, updatedAt: s.updatedAt };
     }
     return out;
@@ -1036,47 +829,5 @@ export class AgentManager {
   // body which is gone — zero remaining callers.
 }
 
-// Robust error-to-string that handles non-Error throwables (plain
-// objects like { data: {...} } that the OpenCode SDK can throw when
-// throwOnError=true). Falls back through: Error.message → .name +
-// .message → JSON.stringify → String. Without this, concurrent-spawn
-// races surface in the UI as "[object Object]" — useless for
-// debugging.
-function stringifyError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (err && typeof err === "object") {
-    const o = err as { name?: string; message?: string; code?: string };
-    const head = o.name ? `${o.name}: ` : "";
-    if (o.message) return head + o.message;
-    try {
-      return head + JSON.stringify(err).slice(0, 500);
-    } catch {
-      return head + String(err);
-    }
-  }
-  return String(err);
-}
-
-// Task #192: pull the latest ASSISTANT message's concatenated text-part
-// content from a session.messages response. Used by probeAndDecide to
-// check whether the model is still producing tokens when SSE goes quiet.
-// Returns null if no assistant message exists yet (early in the call).
-function extractLatestAssistantText(res: unknown): string | null {
-  // Shape: { data: Array<{ info: Message, parts: Part[] }> } per SDK gen
-  // — but the SDK wrapper sometimes returns the array directly. Handle both.
-  const wrapper = res as { data?: unknown };
-  const list = (wrapper?.data ?? res) as Array<{ info?: { role?: string }; parts?: Array<{ type?: string; text?: string }> }>;
-  if (!Array.isArray(list)) return null;
-  // Find LAST assistant message (most recent).
-  for (let i = list.length - 1; i >= 0; i--) {
-    const msg = list[i];
-    if (msg?.info?.role !== "assistant") continue;
-    const parts = msg.parts ?? [];
-    let combined = "";
-    for (const p of parts) {
-      if (p?.type === "text" && typeof p.text === "string") combined += p.text;
-    }
-    return combined;
-  }
-  return null;
-}
+// Text helpers live in agentTextUtils.ts (available for prompt/probe paths).
+export { stringifyError, extractLatestAssistantText } from "./agentTextUtils.js";

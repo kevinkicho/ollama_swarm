@@ -8,6 +8,9 @@ import { pickSelfCritiqueAgent } from "./moaPromptHelpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MOA_RUNNER_SRC = readFileSync(join(__dirname, "MoaRunner.ts"), "utf8");
+const MOA_LOOP_SRC = readFileSync(join(__dirname, "moaLoopBody.ts"), "utf8");
+const MOA_RUN_ONE_SRC = readFileSync(join(__dirname, "moaRunOne.ts"), "utf8");
+const ALL_MOA_SRC = [MOA_RUNNER_SRC, MOA_LOOP_SRC, MOA_RUN_ONE_SRC].join("\n");
 
 test("buildProposerPrompt — peer-hidden framing + seed + repo files", () => {
   const prompt = buildProposerPrompt({
@@ -131,19 +134,21 @@ test("buildAggregatorPrompt — variant 'actionability' adds actionability bias"
 // calls" which structural matching catches well.
 
 test("MoaRunner.runOne — emits markStatus(thinking) before the prompt", () => {
-  const runOneMatch = MOA_RUNNER_SRC.match(/private async runOne[\s\S]*?\n  \}/);
-  assert.ok(runOneMatch, "runOne private method must exist");
-  assert.match(runOneMatch[0], /markStatus\([^)]*"thinking"\)/, "must mark thinking before prompt");
-  assert.match(runOneMatch[0], /emitAgent(Status|State)\([^,]+,\s*"thinking"/, "must emit agent state/thinking so WS sees the transition");
+  // Implementation lives in moaRunOne.ts (thin MoaRunner.runOne delegates).
+  assert.match(MOA_RUN_ONE_SRC, /markStatus\([^)]*"thinking"\)/, "must mark thinking before prompt");
+  assert.match(
+    MOA_RUN_ONE_SRC,
+    /emitAgent(Status|State)\([^,]+,\s*"thinking"/,
+    "must emit agent state/thinking so WS sees the transition",
+  );
+  assert.match(MOA_RUNNER_SRC, /moaRunOne\(/, "MoaRunner.runOne must delegate to moaRunOne");
 });
 
 test("MoaRunner.runOne — emits markStatus(ready) in a finally block (fires even on prompt error)", () => {
-  const runOneMatch = MOA_RUNNER_SRC.match(/private async runOne[\s\S]*?\n  \}/);
-  assert.ok(runOneMatch, "runOne private method must exist");
-  const body = runOneMatch[0];
+  const body = MOA_RUN_ONE_SRC;
   assert.match(body, /try\s*\{/, "must use try/...");
   assert.match(body, /\}\s*finally\s*\{/, "...finally block so ready state always fires");
-  const finallyMatch = body.match(/finally\s*\{[\s\S]*?\}\s*$/);
+  const finallyMatch = body.match(/finally\s*\{[\s\S]*?\n  \}/);
   assert.ok(finallyMatch, "finally block must exist");
   assert.match(finallyMatch[0], /markStatus\([^)]*"ready"\)/, "finally must mark ready");
   assert.match(finallyMatch[0], /emitAgent(Status|State)\([^,]+,\s*"ready"\)/, "finally must emit agent state/ready");
@@ -255,17 +260,17 @@ test("MoaRunner.loop — captures round-N validProposals + threads to round N+1'
   // round's validProposals at the END of each iteration so the NEXT
   // iteration sees them, (c) pass priorProposals to buildProposerPrompt.
   assert.match(
-    MOA_RUNNER_SRC,
+    ALL_MOA_SRC,
     /let priorProposals: string\[\] = \[\]/,
     "loop must initialize priorProposals as empty array",
   );
   assert.match(
-    MOA_RUNNER_SRC,
+    ALL_MOA_SRC,
     /priorProposals = validProposals\.map\(\(p\) => p\.text\)/,
     "end-of-round must capture validProposals' texts into priorProposals",
   );
   assert.match(
-    MOA_RUNNER_SRC,
+    ALL_MOA_SRC,
     /buildProposerPrompt\(\{[\s\S]{0,600}priorProposals,/,
     "buildProposerPrompt call must thread priorProposals",
   );
@@ -306,12 +311,12 @@ test("MoaRunner.loop — calls gatherProposerContext and threads to all rounds (
   // Structural: gather is called BEFORE the round loop (single-shot
   // for cost), and the result threads to buildProposerPrompt.
   assert.match(
-    MOA_RUNNER_SRC,
+    ALL_MOA_SRC,
     /gatherProposerContext\(\{[\s\S]{0,300}clonePath: destPath/,
     "loop must call gatherProposerContext with the clone path",
   );
   assert.match(
-    MOA_RUNNER_SRC,
+    ALL_MOA_SRC,
     /buildProposerPrompt\(\{[\s\S]{0,800}repoExcerpts,/,
     "buildProposerPrompt call must thread repoExcerpts",
   );
@@ -347,12 +352,12 @@ test("MoaRunner.loop — extracts user-role transcript entries before building p
   // and pass them as `userMessages` to both prompt builders. Otherwise
   // the type field accepts the prop but no real chat reaches the agent.
   assert.match(
-    MOA_RUNNER_SRC,
-    /this\.transcript\.filter\(\(e\) => e\.role === "user"\)/,
+    ALL_MOA_SRC,
+    /(?:this|host)\.transcript\.filter\(\(e\) => e\.role === "user"\)/,
     "loop must filter transcript for role==='user' entries each round",
   );
   assert.match(
-    MOA_RUNNER_SRC,
+    ALL_MOA_SRC,
     /buildProposerPrompt\(\{[\s\S]{0,800}userMessages,/,
     "buildProposerPrompt call must thread userMessages",
   );
@@ -360,7 +365,7 @@ test("MoaRunner.loop — extracts user-role transcript entries before building p
   // filtered list (`aggUserMessages`) for @mention routing — the call
   // site maps to the userMessages prop name via shorthand-disable.
   assert.match(
-    MOA_RUNNER_SRC,
+    ALL_MOA_SRC,
     /buildAggregatorPrompt\(\{[\s\S]{0,400}userMessages: aggUserMessages/,
     "buildAggregatorPrompt call must thread per-aggregator userMessages (lever #3 @mention filter)",
   );
@@ -408,12 +413,12 @@ test("MoaRunner.loop — designates LAST proposer as challenger when N≥2 (#2)"
   // Structural: the per-proposer build must compute isChallenger from
   // index === proposers.length - 1 AND proposers.length >= 2.
   assert.match(
-    MOA_RUNNER_SRC,
+    ALL_MOA_SRC,
     /isChallenger\s*=\s*proposers\.length >= 2 && idx === proposers\.length - 1/,
     "challenger designation must gate on N≥2 AND last-index",
   );
   assert.match(
-    MOA_RUNNER_SRC,
+    ALL_MOA_SRC,
     /variant: isChallenger \? "challenger" : "default"/,
     "buildProposerPrompt call must pass variant from isChallenger flag",
   );
@@ -431,8 +436,8 @@ test("MoaRunner — runAggregatorSelfCritique exists with right signature (#3)",
   // The synthesis variable in the loop body must be reassigned from
   // the self-critique result so a REVISE actually replaces the original.
   assert.match(
-    MOA_RUNNER_SRC,
-    /synthesis = await this\.runAggregatorSelfCritique\(/,
+    ALL_MOA_SRC,
+    /synthesis = await (?:this|host)\.runAggregatorSelfCritique\(/,
     "loop must reassign synthesis from self-critique result",
   );
 });
@@ -441,8 +446,8 @@ test("MoaRunner.loop — uses thresholdForDeliverableShape for convergence (#5)"
   // Structural: convergence threshold must derive from the rubric's
   // shape, not hard-coded to 0.7.
   assert.match(
-    MOA_RUNNER_SRC,
-    /thresholdForDeliverableShape\(this\.derivedRubric\?\.deliverableShape\)/,
+    ALL_MOA_SRC,
+    /thresholdForDeliverableShape\((?:this\.derivedRubric|host\.getDerivedRubric\(\))\?\.deliverableShape\)/,
     "convergence threshold must derive from rubric.deliverableShape",
   );
 });

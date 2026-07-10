@@ -32,13 +32,23 @@ describe("replanner recovery — auditor salvage", () => {
 
 describe("auditorRunner — parse salvage extensions", () => {
   it("salvages hunk-review JSON after repair fails", () => {
-    assert.match(AUDITOR_SRC, /kind: "hunk-review"/);
-    assert.match(AUDITOR_SRC, /parseHunkReviewResponse\(salvage\.json\)/);
+    // Hunk review lives in auditorPendingCommits.ts (extracted).
+    const pendingSrc = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "auditorPendingCommits.ts"),
+      "utf8",
+    );
+    assert.match(pendingSrc, /kind: "hunk-review"/);
+    assert.match(pendingSrc, /parseHunkReviewResponse\(salvage\.json\)/);
   });
 
   it("salvages auditor verdict JSON before sibling retry", () => {
-    assert.match(AUDITOR_SRC, /kind: "auditor"/);
-    assert.match(AUDITOR_SRC, /parseAuditorResponse\(salvage\.json\)/);
-    assert.match(AUDITOR_SRC, /before sibling retry/);
+    // Core auditor cycle lives in auditorRunCore.ts (extracted).
+    const coreSrc = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), "auditorRunCore.ts"),
+      "utf8",
+    );
+    assert.match(coreSrc, /kind: "auditor"/);
+    assert.match(coreSrc, /parseAuditorResponse\(salvage\.json\)/);
+    assert.match(coreSrc, /before sibling retry/);
   });
 });

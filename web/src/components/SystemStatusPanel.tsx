@@ -26,6 +26,8 @@ interface HealthData {
 
 interface SystemStatusPanelProps {
   className?: string;
+  /** Active project clone or parent path — enables project-logs prune UI. */
+  projectPath?: string;
 }
 
 const PROVIDER_LABELS: Record<Provider, string> = {
@@ -36,7 +38,33 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   opencode: "OpenCode",
 };
 
-export function SystemStatusPanel({ className = "" }: SystemStatusPanelProps) {
+interface ProjectLogsStatus {
+  root: string;
+  logsRunDirCount: number;
+  summaryFileCount: number;
+  logsNeedsPrune: boolean;
+  logsRunDirWarnThreshold: number;
+  totalBytesApprox?: number;
+}
+
+interface MaintenanceStatus {
+  logsRunDirCount: number;
+  logsRunDirWarnThreshold: number;
+  logsNeedsPrune: boolean;
+  runsEntryCount: number;
+  project?: ProjectLogsStatus;
+}
+
+interface PruneApiResult {
+  apply: boolean;
+  summary: string;
+  deletedCount: number;
+  logsRunDirsRemaining?: number;
+}
+
+type PruneScope = "app" | "project";
+
+export function SystemStatusPanel({ className = "", projectPath }: SystemStatusPanelProps) {
   const providers = useProviders();
   const { model, provider, setModel, setProvider, toolsEnabled } = useSystemLayerModel();
   const [health, setHealth] = useState<HealthData | null>(null);
@@ -44,12 +72,22 @@ export function SystemStatusPanel({ className = "" }: SystemStatusPanelProps) {
   const [probing, setProbing] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [retestNote, setRetestNote] = useState<string | null>(null);
+  const [maint, setMaint] = useState<MaintenanceStatus | null>(null);
+  const [pruneBusy, setPruneBusy] = useState(false);
+  const [pruneNote, setPruneNote] = useState<string | null>(null);
+  const [pruneConfirm, setPruneConfirm] = useState<null | { scope: PruneScope; mode: "prune" | "purge" }>(
+    null,
+  );
 
   const fetchStatus = useCallback(async () => {
     try {
-      const [healthRes, providersRes] = await Promise.all([
+      const maintQs = projectPath
+        ? `?clonePath=${encodeURIComponent(projectPath)}`
+        : "";
+      const [healthRes, providersRes, maintRes] = await Promise.all([
         apiFetch("/api/health", { cache: "no-store" }),
         apiFetch("/api/providers", { cache: "no-store" }),
+        apiFetch(`/api/swarm/maintenance/status${maintQs}`, { cache: "no-store" }),
       ]);
       if (!healthRes.ok) throw new Error(`health ${healthRes.status}`);
       const healthBody = (await healthRes.json()) as HealthData;
@@ -67,12 +105,19 @@ export function SystemStatusPanel({ className = "" }: SystemStatusPanelProps) {
         }
       }
       setHealth(healthBody);
+      if (maintRes.ok) {
+        setMaint((await maintRes.json()) as MaintenanceStatus);
+      } else {
+        // clonePath may be unknown until a run is tracked — fall back to app-only
+        const fallback = await apiFetch("/api/swarm/maintenance/status", { cache: "no-store" });
+        if (fallback.ok) setMaint((await fallback.json()) as MaintenanceStatus);
+      }
     } catch {
       setHealth(null);
     } finally {
       setLoading(false);
     }
-  }, [provider]);
+  }, [provider, projectPath]);
 
   useEffect(() => {
     void fetchStatus();
@@ -91,6 +136,50 @@ export function SystemStatusPanel({ className = "" }: SystemStatusPanelProps) {
     const t = setTimeout(() => setRetestNote(null), 8000);
     return () => clearTimeout(t);
   }, [retestNote]);
+
+  useEffect(() => {
+    if (!pruneNote) return;
+    const t = setTimeout(() => setPruneNote(null), 12_000);
+    return () => clearTimeout(t);
+  }, [pruneNote]);
+
+  const runPrune = async (
+    apply: boolean,
+    scope: PruneScope,
+    mode: "prune" | "purge" = "prune",
+  ) => {
+    setPruneBusy(true);
+    setPruneNote(null);
+    try {
+      const payload: Record<string, unknown> =
+        scope === "project"
+          ? {
+              target: "project-logs",
+              clonePath: projectPath,
+              mode,
+              apply,
+            }
+          : { target: "logs", mode: "prune", apply };
+      const res = await apiFetch("/api/swarm/maintenance/prune", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const body = (await res.json().catch(() => ({}))) as PruneApiResult & { error?: string };
+      if (!res.ok) throw new Error(body.error ?? `prune failed (${res.status})`);
+      setPruneNote(body.summary ?? (apply ? "Pruned." : "Dry-run complete."));
+      if (!apply && (body.deletedCount ?? 0) > 0) {
+        setPruneConfirm({ scope, mode });
+      } else {
+        setPruneConfirm(null);
+      }
+      await fetchStatus();
+    } catch (err) {
+      setPruneNote(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPruneBusy(false);
+    }
+  };
 
   const retest = async () => {
     setProbing(true);
@@ -236,6 +325,100 @@ export function SystemStatusPanel({ className = "" }: SystemStatusPanelProps) {
           {noTools ? (
             <div className="text-[9px] text-amber-400/90 whitespace-nowrap truncate">
               No file tools on this provider
+            </div>
+          ) : null}
+          {maint ? (
+            <div className="pt-1 mt-1 border-t border-ink-700/80 space-y-1.5">
+              <div
+                className={`text-[9px] whitespace-nowrap truncate ${
+                  maint.logsNeedsPrune ? "text-amber-400/90" : "text-ink-500"
+                }`}
+                title={`App server logs/ run dirs (warn > ${maint.logsRunDirWarnThreshold})`}
+              >
+                App logs · {maint.logsRunDirCount}
+                {maint.logsNeedsPrune ? " · prune?" : ""}
+              </div>
+              {maint.project ? (
+                <div
+                  className={`text-[9px] whitespace-nowrap truncate ${
+                    maint.project.logsNeedsPrune ? "text-amber-400/90" : "text-ink-500"
+                  }`}
+                  title={`Target repo ${maint.project.root}/logs — run summaries & dirs (warn > ${maint.project.logsRunDirWarnThreshold})`}
+                >
+                  Project · {maint.project.logsRunDirCount} dirs
+                  {maint.project.summaryFileCount > 0
+                    ? ` · ${maint.project.summaryFileCount} summaries`
+                    : ""}
+                  {maint.project.logsNeedsPrune ? " · prune?" : ""}
+                </div>
+              ) : projectPath ? (
+                <div className="text-[9px] text-ink-600 truncate" title={projectPath}>
+                  Project path set · no logs yet
+                </div>
+              ) : null}
+
+              {!pruneConfirm ? (
+                <div className="flex flex-col gap-0.5">
+                  <button
+                    type="button"
+                    disabled={pruneBusy}
+                    onClick={() => void runPrune(false, "app", "prune")}
+                    className="text-[9px] px-1.5 py-0.5 rounded border border-ink-700 text-ink-500 hover:text-ink-300 hover:border-ink-500 disabled:opacity-40 w-full text-left"
+                    title="Dry-run prune of ollama_swarm app logs/ (server cwd)"
+                  >
+                    {pruneBusy ? "…" : "Prune app logs…"}
+                  </button>
+                  {projectPath ? (
+                    <>
+                      <button
+                        type="button"
+                        disabled={pruneBusy}
+                        onClick={() => void runPrune(false, "project", "prune")}
+                        className="text-[9px] px-1.5 py-0.5 rounded border border-ink-700 text-ink-500 hover:text-ink-300 hover:border-ink-500 disabled:opacity-40 w-full text-left"
+                        title="Dry-run prune of target repo logs/ (summary-*.json + old run dirs)"
+                      >
+                        {pruneBusy ? "…" : "Prune project logs…"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={pruneBusy}
+                        onClick={() => void runPrune(false, "project", "purge")}
+                        className="text-[9px] px-1.5 py-0.5 rounded border border-ink-700/80 text-ink-600 hover:text-amber-300/90 hover:border-amber-800/50 disabled:opacity-40 w-full text-left"
+                        title="Dry-run purge: delete all project run logs except active runs"
+                      >
+                        {pruneBusy ? "…" : "Purge project logs…"}
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="flex gap-1">
+                  <button
+                    type="button"
+                    disabled={pruneBusy}
+                    onClick={() =>
+                      void runPrune(true, pruneConfirm.scope, pruneConfirm.mode)
+                    }
+                    className="text-[9px] px-1.5 py-0.5 rounded border border-amber-700/60 text-amber-300/90 hover:bg-amber-900/30 disabled:opacity-40 flex-1"
+                    title="Delete items from the dry-run preview"
+                  >
+                    {pruneBusy ? "…" : "Delete"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={pruneBusy}
+                    onClick={() => setPruneConfirm(null)}
+                    className="text-[9px] px-1.5 py-0.5 rounded border border-ink-700 text-ink-500 hover:text-ink-300 disabled:opacity-40"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+              {pruneNote ? (
+                <div className="text-[8px] text-ink-400 leading-snug line-clamp-3" title={pruneNote}>
+                  {pruneNote}
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

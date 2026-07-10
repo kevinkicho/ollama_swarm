@@ -11,96 +11,43 @@
 //   - mirroring into AgentPanel + History (Phase 4)
 // Each later phase adds columns or adjacent UI without restructuring.
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   type AgentColor,
-  type AgentRole,
   type AgentSpec,
   type Topology,
-  AGENT_COLORS,
   countAgentsWithRole,
   defaultRoleForIndex,
   isRoleStructural,
   minWorkerCountForPreset,
   synthesizeTopology,
 } from "../../../../shared/src/topology";
-import { detectProvider, modelsForProvider, type Provider } from "../../../../shared/src/providers";
+import { modelsForProvider, type Provider } from "../../../../shared/src/providers";
 import { useAvailableModels } from "../../hooks/useAvailableModels";
 import { useProviders } from "../../hooks/useProviders";
 import { ModelSelect } from "./ModelSelect";
+import {
+  writeLastUsed,
+  readSavedList,
+  writeSavedList,
+  SAVED_MAX,
+  type SavedTopology,
+} from "./topologyStorage";
+import {
+  ColorPicker,
+  RoleChip,
+  ApplyAllSelect,
+  nextAddableRole,
+} from "./topologyChips";
+import {
+  TOPOLOGY_PROVIDER_ORDER,
+  TOPOLOGY_PROVIDER_LABELS,
+  topologyProviderAvailable,
+  agentRowProvider,
+  modelMatchesProvider,
+} from "./topologyHelpers";
 
-// Phase 2 of #243: tailwind color name → swatch CSS for the per-row
-// color picker. Single source of truth — AgentPanel's color border
-// uses the same palette so picks are consistent across the UI.
-const COLOR_SWATCH_CLASS: Record<AgentColor, string> = {
-  emerald: "bg-emerald-500",
-  sky: "bg-sky-500",
-  amber: "bg-amber-500",
-  violet: "bg-violet-500",
-  rose: "bg-rose-500",
-  teal: "bg-teal-500",
-  fuchsia: "bg-fuchsia-500",
-  lime: "bg-lime-500",
-};
-
-// Phase 3 of #243: saved-topology library + per-preset last-used
-// persistence in localStorage. Survives dev-server restarts so the
-// user's preferred shape comes back automatically.
-//
-// Schema:
-//   ollama-swarm:topology:last-used:{preset} → Topology (last shape
-//     used on this preset, written on every grid change)
-//   ollama-swarm:topology:saved → SavedTopology[] (named entries the
-//     user explicitly saved). Capped at 32 entries; oldest evicted
-//     when full.
-
-const LAST_USED_PREFIX = "ollama-swarm:topology:last-used:";
-const SAVED_KEY = "ollama-swarm:topology:saved";
-const SAVED_MAX = 32;
-
-interface SavedTopology {
-  name: string;
-  preset: string;
-  topology: Topology;
-  ts: number;
-}
-
-function readLastUsed(presetId: string): Topology | null {
-  try {
-    const raw = localStorage.getItem(`${LAST_USED_PREFIX}${presetId}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed && Array.isArray(parsed.agents)) return parsed as Topology;
-  } catch {
-    // localStorage disabled / parse error — silent fallback to defaults.
-  }
-  return null;
-}
-function writeLastUsed(presetId: string, t: Topology): void {
-  try {
-    localStorage.setItem(`${LAST_USED_PREFIX}${presetId}`, JSON.stringify(t));
-  } catch {
-    // quota / disabled — silent.
-  }
-}
-function readSavedList(): SavedTopology[] {
-  try {
-    const raw = localStorage.getItem(SAVED_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed as SavedTopology[];
-  } catch {
-    // ignore
-  }
-  return [];
-}
-function writeSavedList(list: SavedTopology[]): void {
-  try {
-    localStorage.setItem(SAVED_KEY, JSON.stringify(list.slice(0, SAVED_MAX)));
-  } catch {
-    // ignore
-  }
-}
+export { topologyForPreset } from "./topologyHelpers";
 
 interface TopologyGridProps {
   preset: {
@@ -120,166 +67,6 @@ interface TopologyGridProps {
   // top level still made the per-row override search local /api/tags
   // (empty for users who only use cloud models).
   provider: Provider;
-}
-
-// Roles that CAN be added incrementally (the user can add another one
-// of these). Today this is just "worker" for blackboard, "mapper" for
-// map-reduce, "drafter" for council, "explorer" for stigmergy,
-// "peer" for round-robin. Other roles are structural (planner, judge,
-// reducer, orchestrator) and the preset's defaults always include the
-// right number — never user-added.
-function nextAddableRole(preset: string): AgentRole | null {
-  switch (preset) {
-    case "blackboard":
-      return "worker";
-    case "map-reduce":
-      return "mapper";
-    case "council":
-      return "drafter";
-    case "stigmergy":
-      return "explorer";
-    case "round-robin":
-      return "peer";
-    case "orchestrator-worker":
-    case "orchestrator-worker-deep":
-      return "worker";
-    case "role-diff":
-      return "role-diff";
-    case "debate-judge":
-      // Fixed at 3 — never addable.
-      return null;
-    default:
-      return "worker";
-  }
-}
-
-const ROLE_CHIP_STYLES: Record<AgentRole, string> = {
-  planner: "bg-emerald-900/40 border-emerald-700/50 text-emerald-200",
-  auditor: "bg-violet-900/40 border-violet-700/50 text-violet-200",
-  orchestrator: "bg-amber-900/40 border-amber-700/50 text-amber-200",
-  "mid-lead": "bg-amber-950/60 border-amber-600/60 text-amber-100",
-  reducer: "bg-violet-900/40 border-violet-700/50 text-violet-200",
-  judge: "bg-rose-900/40 border-rose-700/50 text-rose-200",
-  pro: "bg-emerald-900/40 border-emerald-700/50 text-emerald-200",
-  con: "bg-rose-900/40 border-rose-700/50 text-rose-200",
-  worker: "bg-ink-700 border-ink-600 text-ink-200",
-  mapper: "bg-violet-900/30 border-violet-700/40 text-violet-200",
-  drafter: "bg-sky-900/40 border-sky-700/50 text-sky-200",
-  explorer: "bg-teal-900/40 border-teal-700/50 text-teal-200",
-  peer: "bg-ink-700 border-ink-600 text-ink-300",
-  "role-diff": "bg-fuchsia-900/40 border-fuchsia-700/50 text-fuchsia-200",
-};
-
-function ColorPicker({
-  value,
-  onChange,
-}: {
-  value: AgentColor | undefined;
-  onChange: (c: AgentColor | undefined) => void;
-}) {
-  return (
-    <div className="flex items-center gap-1 flex-wrap">
-      {AGENT_COLORS.map((c) => (
-        <button
-          key={c}
-          type="button"
-          onClick={() => onChange(value === c ? undefined : c)}
-          className={`w-4 h-4 rounded-full ${COLOR_SWATCH_CLASS[c]} ${
-            value === c ? "ring-2 ring-ink-100 ring-offset-1 ring-offset-ink-900" : "opacity-60 hover:opacity-100"
-          } transition`}
-          title={value === c ? `${c} (click to clear)` : c}
-          aria-label={`Pick color ${c}`}
-        />
-      ))}
-    </div>
-  );
-}
-
-const TOPOLOGY_PROVIDER_ORDER: readonly Provider[] = [
-  "ollama",
-  "ollama-cloud",
-  "opencode",
-  "anthropic",
-  "openai",
-];
-
-const TOPOLOGY_PROVIDER_LABELS: Record<Provider, string> = {
-  ollama: "Ollama (local)",
-  "ollama-cloud": "Ollama Cloud",
-  opencode: "OpenCode",
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-};
-
-function topologyProviderAvailable(
-  p: Provider,
-  status: ReturnType<typeof useProviders>,
-): boolean {
-  if (p === "ollama" || p === "ollama-cloud") return true;
-  if (p === "opencode") return status.providers?.opencode?.available ?? false;
-  return status.providers ? status.providers[p].available : true;
-}
-
-function agentRowProvider(agent: AgentSpec, formProvider: Provider): Provider {
-  return agent.provider ?? formProvider;
-}
-
-function modelMatchesProvider(model: string, next: Provider): boolean {
-  const detected = detectProvider(model);
-  if (detected === next) return true;
-  return next === "ollama-cloud" && model.includes(":cloud");
-}
-
-/** Header-row bulk apply — arrow only; row dropdowns stay full-width. */
-function ApplyAllSelect({
-  ariaLabel,
-  onApply,
-  children,
-}: {
-  ariaLabel: string;
-  onApply: (value: string) => void;
-  children: ReactNode;
-}) {
-  const [resetKey, setResetKey] = useState(0);
-  return (
-    <div
-      className="relative inline-flex items-center justify-center w-6 h-6 shrink-0 group"
-      title="Apply to all agents in this column"
-    >
-      <select
-        key={resetKey}
-        defaultValue=""
-        aria-label={ariaLabel}
-        onChange={(e) => {
-          const v = e.target.value;
-          if (!v) return;
-          onApply(v);
-          setResetKey((k) => k + 1);
-        }}
-        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-      >
-        <option value="" />
-        {children}
-      </select>
-      <span
-        className="pointer-events-none inline-flex items-center justify-center w-6 h-6 rounded border border-ink-600 bg-ink-900/80 text-[10px] text-ink-400 group-hover:text-ink-200 group-hover:border-ink-500"
-        aria-hidden
-      >
-        ▾
-      </span>
-    </div>
-  );
-}
-
-function RoleChip({ role, structural }: { role: AgentRole; structural: boolean }) {
-  return (
-    <span
-      className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold uppercase tracking-wide ${ROLE_CHIP_STYLES[role]}`}
-      title={structural ? "Structural — required by this preset" : "Flexible — you can scale this role"}
-    >
-      {structural ? "🔒 " : ""}{role}
-    </span>
-  );
 }
 
 export function TopologyGrid({ preset, topology, setTopology, defaultModel, provider }: TopologyGridProps) {
@@ -928,51 +715,4 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
   );
 }
 
-// Convenience: build the initial topology when SetupForm picks a
-// preset for the first time or the user switches presets. Phase 3
-// adds a `lastUsed` opt-in that consults localStorage for the user's
-// previous shape on this preset; SetupForm passes lastUsed=true on
-// preset-change so switching back to a preset restores what the user
-// had set up before. Fresh page-load also benefits since the
-// auto-save survives reloads.
-export function topologyForPreset(
-  presetId: string,
-  agentCount: number,
-  options?: {
-    dedicatedAuditor?: boolean;
-    plannerModel?: string;
-    workerModel?: string;
-    auditorModel?: string;
-    lastUsed?: boolean;
-  },
-): Topology {
-  // Recover cropology structure (roles, colors, tags, temp) from localStorage
-  // but NOT model selections — models come from the current form state only.
-  // The old overlay forced stale defaults (glm-5.1:cloud) onto recovered
-  // topologies, silently ignoring the user's real model choice.
-  if (options?.lastUsed) {
-    const recovered = readLastUsed(presetId);
-    if (recovered && recovered.agents.length >= 1) {
-      // Apply current form models to recovered structure
-      const applyModel = (a: AgentSpec): string | undefined => {
-        // Never use cached model — always use current form state.
-        // If the user set an explicit per-role model in Advanced, use it;
-        // otherwise leave undefined (runner falls through to `model`).
-        if (a.role === "planner" || a.role === "orchestrator" || a.role === "reducer" || a.role === "judge") {
-          return options?.plannerModel || undefined;
-        }
-        if (a.role === "auditor") {
-          return options?.auditorModel || undefined;
-        }
-        return options?.workerModel || undefined;
-      };
-      return {
-        agents: recovered.agents.map((a) => ({
-          ...a,
-          model: applyModel(a),
-        })),
-      };
-    }
-  }
-  return synthesizeTopology(presetId, agentCount, options);
-}
+

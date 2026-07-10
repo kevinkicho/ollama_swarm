@@ -48,6 +48,7 @@ Commands (full control loop for agents):
   summary           Fetch run summary (--run-id + --clone-path)
   recommend         Preset recommendation for a directive
   control-surface   Machine-readable API map for Brain agents
+  prune-logs        Prune logs/ (and optionally runs/) retention (default dry-run)
 
 Examples for Brain-OS agents:
   ollama-swarm control-surface --json
@@ -60,6 +61,9 @@ Examples for Brain-OS agents:
   ollama-swarm drain --run-id abc123
   ollama-swarm stop --run-id abc123
   ollama-swarm summary --run-id abc123 --clone-path "C:\\\\path\\\\to\\\\clone"
+  ollama-swarm prune-logs
+  ollama-swarm prune-logs --apply
+  ollama-swarm prune-logs --target all --apply
 
 Common options:
   --config <file>          JSON config (from Brain chat)
@@ -68,6 +72,8 @@ Common options:
   --agent-count <n>  --rounds <n>  --model <str>
   --parent-path, --repo-url, --server, --clone-path, --run-id, --text
   --intent suggest|steer|ask  --dry-run  --json  --help
+  --apply  --target logs|runs|all|project-logs  --mode prune|purge  (prune-logs)
+  --clone-path <path>   (required for --target project-logs)
 `);
 }
 
@@ -262,6 +268,68 @@ async function cmdRecommend(values, serverUrl) {
   }
 }
 
+async function cmdPruneLogs(values, serverUrl) {
+  const base = serverUrl.replace(/\/$/, '');
+  if (values['dry-run'] && values.apply) {
+    console.error('prune-logs: use either --apply or --dry-run, not both');
+    process.exit(1);
+  }
+  // Default dry-run unless --apply
+  const apply = values.apply === true;
+  const target = values.target || 'logs';
+  const mode = values.mode || 'prune';
+  const clonePath = values['clone-path'];
+  if (target === 'project-logs' && !clonePath) {
+    console.error('prune-logs --target project-logs requires --clone-path');
+    process.exit(1);
+  }
+  const body = { target, apply, mode };
+  if (clonePath) body.clonePath = clonePath;
+  if (values['keep-days'] != null) body.keepDays = Number(values['keep-days']);
+  if (values['max-keep'] != null) body.maxKeep = Number(values['max-keep']);
+
+  if (!apply) {
+    let statusUrl = `${base}/api/swarm/maintenance/status`;
+    if (clonePath) statusUrl += `?clonePath=${encodeURIComponent(clonePath)}`;
+    const status = await fetchJson(statusUrl);
+    if (!values.json) {
+      console.log(
+        `[app] logs run dirs: ${status.logsRunDirCount}` +
+          (status.logsNeedsPrune ? ' (over threshold)' : '') +
+          `; runs entries: ${status.runsEntryCount}`,
+      );
+      if (status.project) {
+        console.log(
+          `[project] ${status.project.root}: ${status.project.logsRunDirCount} run dirs, ` +
+            `${status.project.summaryFileCount} summary files` +
+            (status.project.logsNeedsPrune ? ' (prune recommended)' : ''),
+        );
+      }
+    }
+  }
+
+  const url = `${base}/api/swarm/maintenance/prune`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  if (values.json) {
+    console.log(JSON.stringify(data));
+  } else {
+    console.log(data.summary || JSON.stringify(data, null, 2));
+    if (!apply) {
+      console.log(
+        'Tip: add --apply to delete. Project logs: --target project-logs --clone-path "C:\\\\path\\\\to\\\\repo" [--mode purge]',
+      );
+    }
+  }
+}
+
 async function cmdStart(values, serverUrl) {
   let config = {};
 
@@ -331,6 +399,11 @@ async function main() {
       intent: { type: 'string' },
       'target-agent': { type: 'string' },
       'dry-run': { type: 'boolean' },
+      apply: { type: 'boolean' },
+      target: { type: 'string' },
+      mode: { type: 'string' },
+      'keep-days': { type: 'string' },
+      'max-keep': { type: 'string' },
       json: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -380,6 +453,11 @@ async function main() {
       case 'control-surface':
       case 'control_surface':
         await cmdControlSurface(values, serverUrl);
+        break;
+      case 'prune-logs':
+      case 'prune_logs':
+      case 'prune':
+        await cmdPruneLogs(values, serverUrl);
         break;
       default:
         console.error(`Unknown command: ${cmd}`);

@@ -1,5 +1,5 @@
 import type { PerAgentStat } from "../types";
-import { fmtMs, roleForRow } from "./RunHistory";
+import { fmtMs, roleForRow } from "./runHistory";
 
 /** Canonical per-agent stats row — one shape for transcript, sidebar, metrics, history. */
 export interface AgentStatsRow {

@@ -9,23 +9,27 @@ import type {
 import type { RunConfig, RunnerOpts } from "./SwarmRunner.js";
 import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 
-import { promptWithRetry } from "./promptWithRetry.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { formatChatReceipt } from "./chatReceipt.js";
 import { writeDeliverableAndEmit, runQualityPasses } from "./deliverable.js";
-// T197 (2026-05-04): cross-cluster discovery via import graph.
-import {
-  buildImportGraph,
-  relatedFilesViaImports,
-  type ImportGraph,
-} from "./importGraph.js";
+import type { ImportGraph } from "./importGraph.js";
 import { detectExplorationGaps, formatExplorationGapsMarkdown } from "./stigmergyExplorationGap.js";
 
-import { buildSeedSummary } from "./runSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
+import { buildStigmergySeedMessage } from "./stigmergySeed.js";
+import {
+  applyAnnotation as applyAnnotationExtracted,
+  spreadCrossClusterPheromones as spreadCrossClusterPheromonesExtracted,
+  type StigmergyPheromoneHost,
+} from "./stigmergyPheromones.js";
+import {
+  type StigmergyTurnsHost,
+  runTerritoryPlanPass as runTerritoryPlanPassExtracted,
+  runReportOutPass as runReportOutPassExtracted,
+  runExplorerTurn as runExplorerTurnExtracted,
+} from "./stigmergyTurns.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
-import { checkBudgetGuards } from "./loopGuards.js";
 import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
@@ -34,15 +38,6 @@ import {
   type AnnotationState,
   type ParsedAnnotation,
   SKIP_ENTRIES,
-  PHEROMONE_DECAY_PER_ROUND,
-  PHEROMONE_KINDS,
-  type PheromoneKind,
-  rankingScore,
-  stripAnnotationEnvelope,
-  parseAnnotation,
-  buildExplorerPrompt,
-  buildTerritoryPlanPrompt,
-  parseTerritoryPlan,
   computeRankingSignature,
   buildHotFilesChainSection,
   formatAnnotations,
@@ -132,14 +127,40 @@ export class StigmergyRunner extends DiscussionRunnerBase {
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
     const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
-    const seed = [
-      `Project clone: ${clonePath}`,
-      `Repo: ${cfg.repoUrl}`,
-      `Top-level entries: ${tree.join(", ") || "(empty)"}`,
-      "",
-      "Pattern: Stigmergy (pheromone trails). Agents pick which file to read each turn based on a shared annotation table. Untouched files attract; high-interest low-confidence files attract; well-covered files repel. The exploration is self-organizing — no central planner.",
-    ].join("\n");
-    this.appendSystem(seed, buildSeedSummary(cfg.repoUrl, clonePath, tree));
+    const { text, summary } = buildStigmergySeedMessage({ clonePath, cfg, tree });
+    this.appendSystem(text, summary);
+  }
+
+  private pheromoneHost(): StigmergyPheromoneHost {
+    return {
+      annotations: this.annotations,
+      round: this.round,
+      active: this.active,
+      importGraphCache: this.importGraphCache,
+      setImportGraphCache: (g) => { this.importGraphCache = g; },
+      emit: (e) => this.opts.emit(e),
+      appendSystem: (t) => this.appendSystem(t),
+      listRepoFiles: (p, o) => this.opts.repos.listRepoFiles(p, o),
+    };
+  }
+
+  private stigmergyTurnsHost(): StigmergyTurnsHost {
+    return {
+      manager: this.opts.manager,
+      emit: (e) => this.opts.emit(e),
+      logDiag: this.opts.logDiag,
+      transcript: this.transcript,
+      annotations: this.annotations,
+      territoryAssignments: this.territoryAssignments,
+      round: this.round,
+      active: this.active,
+      stats: this.stats,
+      getStopping: () => this.stopping,
+      appendSystem: (t, s) => this.appendSystem(t, s as any),
+      emitAgentState: (s) => this.emitAgentState(s),
+      runAgent: (a, p, o) => this.runAgent(a, p, o),
+      applyAnnotation: (ann) => this.applyAnnotation(ann),
+    };
   }
 
   private async loop(cfg: RunConfig, clonePath: string): Promise<void> {
@@ -368,192 +389,11 @@ export class StigmergyRunner extends DiscussionRunnerBase {
     agents: readonly Agent[],
     candidatePaths: readonly string[],
   ): Promise<void> {
-    const lead = agents.find((a) => a.index === 1);
-    if (!lead) return;
-    if (this.stopping) return;
-    const prompt = buildTerritoryPlanPrompt({
-      directive: cfg.userDirective ?? "",
-      candidatePaths,
-      explorerCount: agents.length,
-    });
-    this.appendSystem(`[improvement #2] Lead agent (${lead.id}) drafting per-explorer territory assignments…`);
-    const controller = new AbortController();
-    let raw = "";
-    try {
-      // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
-      const res = (await promptWithFailoverAuto(lead, prompt, {
-        signal: controller.signal,
-        manager: this.opts.manager,
-        agentName: "swarm-read",
-        promptAddendum: getAgentAddendum(this.active?.topology, lead.index),
-        describeError: describeSdkError,
-      })) as { data: { parts: Array<{ type: "text"; text: string }> } };
-      raw = (res?.data?.parts?.find((p) => p.type === "text")?.text ?? "").trim();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`[improvement #2] Lead's territory-plan prompt failed (${msg}); explorers will wander.`);
-      return;
-    }
-    const parsed = parseTerritoryPlan(raw);
-    if (!parsed) {
-      this.appendSystem(`[improvement #2] Could not parse lead's territory plan; explorers will wander. Raw: ${raw.slice(0, 200)}`);
-      return;
-    }
-    let assignedCount = 0;
-    for (const [agentIndex, territory] of parsed.entries()) {
-      if (territory && territory.trim().length > 0) {
-        this.territoryAssignments.set(agentIndex, territory.trim());
-        assignedCount += 1;
-      }
-    }
-    this.appendSystem(`[improvement #2] Territory plan accepted: ${assignedCount}/${agents.length} explorers assigned a starting territory.`);
+    return runTerritoryPlanPassExtracted(this.stigmergyTurnsHost(), cfg, agents, candidatePaths);
   }
 
   private async runReportOutPass(): Promise<void> {
-    const agents = this.opts.manager.list();
-    const lead = agents.find((a) => a.index === 1);
-    if (!lead) return;
-    this.opts.manager.markStatus(lead.id, "thinking");
-    this.emitAgentState({
-      id: lead.id,
-      index: lead.index,
-      port: lead.port,
-      sessionId: lead.sessionId,
-      status: "thinking",
-      thinkingSince: Date.now(),
-    });
-    this.stats.countTurn(lead.id);
-    this.appendSystem(`Synthesizing stigmergy findings (agent-${lead.index})…`);
-
-    // Server-side ranking — annotations sorted by rankingScore (visits ×
-    // avgInterest × confidence × decay). Pre-2026-05-02 the formula
-    // was just visits × avgInterest, which ignored confidence + treated
-    // stale annotations as fresh. Top 10 surfaces the highest-signal
-    // files; cap prevents prompt bloat on big repos.
-    const ranked = [...this.annotations.entries()]
-      .map(([file, a]) => ({ file, ...a, score: rankingScore(a, this.round) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 10);
-    const tableText = ranked
-      .map((r, i) => `${i + 1}. ${r.file} — visits=${r.visits}, interest=${r.avgInterest.toFixed(1)}, confidence=${r.avgConfidence.toFixed(1)}, score=${r.score.toFixed(1)}, note="${r.latestNote}"`)
-      .join("\n");
-    const prompt = [
-      "You are Agent 1, the stigmergy synthesis lead. The swarm just finished exploring a repo with self-organizing file picks driven by a shared annotation table.",
-      "Your job NOW is to produce a human-readable REPORT-OUT summarizing what the swarm found.",
-      "",
-      "STRUCTURE your response as:",
-      "1. **Top findings** — 3-5 bullets naming the most interesting files and WHY (cite the agents' notes).",
-      "2. **Coverage** — what was explored well, what was missed (any obvious gaps in the pheromone table?).",
-      "3. **Recommended next action** — ONE concrete next step a developer should take based on what the swarm surfaced.",
-      "",
-      "Keep it under ~400 words. Be specific. Reference file paths. Don't just restate the table — interpret it.",
-      "",
-      "=== TOP 10 FILES BY (visits × interest) ===",
-      tableText,
-      "=== END TABLE ===",
-      "",
-      "Produce your report-out now.",
-    ].join("\n");
-
-    // 2026-04-27: SSE-aware watchdog (see startSseAwareTurnWatchdog).
-    const controller = new AbortController();
-    const watchdog = startSseAwareTurnWatchdog({
-      manager: this.opts.manager,
-      sessionId: lead.sessionId,
-      controller,
-      abortSession: async () => {},
-    });
-    try {
-      // W19 (2026-05-04): swapped to promptWithFailoverAuto for R1 chain.
-      const res = await promptWithFailoverAuto(lead, prompt, {
-        signal: controller.signal,
-        manager: this.opts.manager,
-        onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
-        agentName: "swarm-read",
-        // Phase 5b of #243: per-agent addendum from the topology row.
-        promptAddendum: getAgentAddendum(this.active?.topology, lead.index),
-        describeError: describeSdkError,
-        onTiming: ({ attempt, elapsedMs, success }) => {
-          this.stats.onTiming(lead.id, success, elapsedMs);
-          this.opts.manager.recordPromptComplete(lead.id, { attempt, elapsedMs, success });
-          this.opts.emit({
-            type: "agent_latency_sample",
-            agentId: lead.id,
-            agentIndex: lead.index,
-            attempt,
-            elapsedMs,
-            success,
-            ts: Date.now(),
-          });
-        },
-        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
-          this.stats.onRetry(lead.id);
-          this.appendSystem(
-            `[${lead.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
-          );
-        },
-      });
-      const diagCtx = {
-        runner: "stigmergy",
-        agentId: lead.id,
-        agentIndex: lead.index,
-        logDiag: this.opts.logDiag,
-        manager: this.opts.manager,
-        signal: controller.signal,
-        runId: this.active?.runId,
-      };
-      const extracted = extractTextWithDiag(res, diagCtx);
-      let text = extracted.text;
-      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
-        const retryText = await retryEmptyResponse(lead, prompt, "swarm-read", diagCtx);
-        if (retryText !== null) text = retryText;
-      }
-      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
-      trackPostRetryJunk(text, {
-        agentId: lead.id,
-        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
-        appendSystem: (msg) => this.appendSystem(msg),
-      });
-      // Task #108: defensive guard — see CouncilRunner.runSynthesisPass.
-      const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
-      // #230: strip <think> + XML pseudo-tool-call markers first.
-      const stripped = stripAgentText(text);
-      const entry: TranscriptEntry = {
-        id: randomUUID(),
-        role: "agent",
-        agentId: lead.id,
-        agentIndex: lead.index,
-        text: stripped.finalText || "(empty response)",
-        ts: Date.now(),
-        summary: isJunkSynthesis
-          ? undefined
-          : { kind: "stigmergy_report", filesRanked: ranked.length },
-        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
-        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
-      };
-      this.transcript.push(entry);
-      this.opts.emit({ type: "transcript_append", entry });
-      if (isJunkSynthesis) {
-        this.appendSystem(
-          `[${lead.id}] stigmergy report-out text is degenerate (${text.length} chars) — kept in transcript but NOT tagged as canonical report.`,
-        );
-      }
-    } catch (err) {
-      this.appendSystem(
-        `[${lead.id}] report-out failed (${err instanceof Error ? err.message : String(err)}); skipping synthesis.`,
-      );
-    } finally {
-      watchdog.cancel();
-      this.opts.manager.markStatus(lead.id, "ready");
-      this.emitAgentState({
-        id: lead.id,
-        index: lead.index,
-        port: lead.port,
-        sessionId: lead.sessionId,
-        status: "ready",
-        lastMessageAt: Date.now(),
-      });
-    }
+    return runReportOutPassExtracted(this.stigmergyTurnsHost());
   }
 
   private async runExplorerTurn(
@@ -562,172 +402,32 @@ export class StigmergyRunner extends DiscussionRunnerBase {
     totalRounds: number,
     candidatePaths: readonly string[],
   ): Promise<void> {
-    // 2026-05-02 (improvement #1): compute recently-active files from
-    // the last 1-2 rounds for the per-agent prompt. Surfaces the
-    // dynamic peer-activity signal above the cumulative table.
-    const recentlyActive: { file: string; round: number; note: string }[] = [];
-    if (round > 1) {
-      for (const [file, state] of this.annotations) {
-        if (state.lastVisitedRound !== undefined && state.lastVisitedRound >= round - 2 && state.lastVisitedRound < round) {
-          recentlyActive.push({
-            file,
-            round: state.lastVisitedRound,
-            note: state.latestNote,
-          });
-        }
-      }
-      // Cap at top 5 by visits to keep the prompt focused
-      recentlyActive.sort((a, b) => {
-        const stateA = this.annotations.get(a.file);
-        const stateB = this.annotations.get(b.file);
-        return (stateB?.visits ?? 0) - (stateA?.visits ?? 0);
-      });
-      recentlyActive.length = Math.min(recentlyActive.length, 5);
-    }
-    const prompt = buildExplorerPrompt({
-      agentIndex: agent.index,
+    return runExplorerTurnExtracted(
+      this.stigmergyTurnsHost(),
+      agent,
       round,
       totalRounds,
       candidatePaths,
-      annotations: this.annotations,
-      // 2026-05-02 (improvement #2): thread territory assignment from
-      // the lead's pre-round-1 plan. Empty when plan failed.
-      ...(this.territoryAssignments.has(agent.index)
-        ? { territory: this.territoryAssignments.get(agent.index) }
-        : {}),
-      ...(recentlyActive.length > 0 ? { recentlyActive } : {}),
-    });
-    // #303: parse the annotation INSIDE the runAgent transform so
-    // the JSON envelope gets stripped from visible bubble text + the
-    // entry carries a structured stigmergy_annotation summary the UI
-    // bubble can render as a card. Capture the parsed annotation here
-    // for the applyAnnotation call below.
-    let parsedAnn: ParsedAnnotation | null = null;
-    const text = await this.runAgent(agent, prompt, {
-      transformEntry: (entryText) => {
-        parsedAnn = parseAnnotation(entryText);
-        if (!parsedAnn) return { text: entryText };
-        const cleanText = stripAnnotationEnvelope(entryText);
-        return {
-          text: cleanText.length > 0 ? cleanText : entryText,
-          summary: {
-            kind: "stigmergy_annotation",
-            file: parsedAnn.file,
-            interest: parsedAnn.interest,
-            confidence: parsedAnn.confidence,
-            note: parsedAnn.note,
-          },
-        };
-      },
-    });
-    if (this.stopping || !text) return;
-    if (parsedAnn) {
-      const ann = parsedAnn as ParsedAnnotation;
-      this.applyAnnotation(ann);
-      pheromoneHeatmap.updateFromAnnotations(this.annotations, this.round);
-      this.appendSystem(
-        `Annotation update — ${ann.file}: interest=${ann.interest}, confidence=${ann.confidence}, total visits=${this.annotations.get(ann.file)?.visits ?? 0}`,
-      );
-    } else {
-      this.appendSystem(
-        `[${agent.id}] no parseable annotation in response — agent's text kept in transcript but the pheromone table did not update for this turn.`,
-      );
-    }
+    );
   }
 
   private applyAnnotation(ann: ParsedAnnotation): void {
-    const existing = this.annotations.get(ann.file);
-    let next: AnnotationState;
-    if (!existing) {
-      next = {
-        visits: 1,
-        avgInterest: ann.interest,
-        avgConfidence: ann.confidence,
-        latestNote: ann.note,
-        // 2026-05-02 (improvement #5): track round for decay scoring.
-        lastVisitedRound: this.round,
-      };
-    } else {
-      // Running average — equal weight per visit. Cheap, good enough for v1.
-      const n = existing.visits + 1;
-      next = {
-        visits: n,
-        avgInterest: (existing.avgInterest * existing.visits + ann.interest) / n,
-        avgConfidence: (existing.avgConfidence * existing.visits + ann.confidence) / n,
-        latestNote: ann.note,
-        // 2026-05-02 (improvement #5): bump last-visited to current round.
-        lastVisitedRound: this.round,
-      };
-    }
-    this.annotations.set(ann.file, next);
-    // Phase 2a: live WS update so the PheromonePanel reflects new
-    // annotations immediately instead of waiting for catch-up. Single-
-    // row updates (not the full table) keep the event small even when
-    // the annotation set grows.
-    this.opts.emit({
-      type: "pheromone_updated",
-      file: ann.file,
-      state: { ...next },
+    applyAnnotationExtracted(this.pheromoneHost(), ann, {
+      onHighInterest: (file, interest) => {
+        void this.spreadCrossClusterPheromones(file, interest);
+      },
     });
-    // T197 (2026-05-04): cross-cluster discovery — spread pheromones
-    // to related files via import graph when this annotation has
-    // high interest (>= 7). Fire-and-forget so applyAnnotation stays
-    // sync; Promise rejection swallowed.
-    if (this.active?.crossClusterDiscovery && ann.interest >= 7) {
-      void this.spreadCrossClusterPheromones(ann.file, ann.interest);
-    }
   }
 
-  // T197 (2026-05-04): plant soft pheromone bumps on files related to
-  // the seedFile via the import graph. Bump = synthetic visit with
-  // half the seed's interest + low confidence (signaling "peer found
-  // something interesting in a related file"). Lazy-loads the import
-  // graph on first call. Best-effort: build failure / no edges →
-  // no-op.
   private async spreadCrossClusterPheromones(
     seedFile: string,
     seedInterest: number,
   ): Promise<void> {
-    try {
-      if (this.importGraphCache === null) {
-        const clonePath = this.active?.localPath;
-        if (!clonePath) return;
-        const allFiles = await this.opts.repos.listRepoFiles(clonePath, {
-          maxFiles: 500,
-        });
-        const tsJsFiles = allFiles.filter((f) =>
-          /\.(ts|tsx|js|jsx|mjs|cjs)$/.test(f),
-        );
-        if (tsJsFiles.length === 0) {
-          this.importGraphCache = new Map();
-          return;
-        }
-        this.importGraphCache = await buildImportGraph(clonePath, tsJsFiles);
-      }
-      const related = relatedFilesViaImports(seedFile, this.importGraphCache, 5);
-      if (related.length === 0) return;
-      // Plant soft bumps — half-interest + low confidence so the
-      // related file shows up as "worth a look" without overwhelming
-      // a real annotation from a peer agent.
-      const bumpInterest = Math.max(1, Math.round(seedInterest / 2));
-      const bumpConfidence = 2;
-      for (const relFile of related) {
-        // Only bump files NOT already annotated — don't overwrite
-        // peer annotations with synthetic bumps.
-        if (this.annotations.has(relFile)) continue;
-        this.applyAnnotation({
-          file: relFile,
-          interest: bumpInterest,
-          confidence: bumpConfidence,
-          note: `[cross-cluster bump from ${seedFile}] related via import graph`,
-        });
-      }
-      this.appendSystem(
-        `[T197 cross-cluster] seed ${seedFile} (interest=${seedInterest}) spread soft bumps to ${related.length} related file(s) via import graph.`,
-      );
-    } catch {
-      // best-effort — graph-build failure shouldn't block the run
-    }
+    await spreadCrossClusterPheromonesExtracted(
+      this.pheromoneHost(),
+      seedFile,
+      seedInterest,
+    );
   }
 
   /** #303: optional transform applied to the post-strip text BEFORE

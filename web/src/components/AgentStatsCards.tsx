@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { PerAgentStat } from "../types";
-import { fmtMs } from "./RunHistory";
+import { fmtMs } from "./runHistory";
 import { rowsFromPerAgentStats, type AgentStatsRow } from "./AgentStatsTable";
 
 /** Narrow sidebar layout — one card per agent, only stats that have values. */

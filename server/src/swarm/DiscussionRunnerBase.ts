@@ -20,51 +20,30 @@ import type {
   TranscriptEntrySummary,
 } from "../types.js";
 import type { RunConfig, RunnerOpts } from "./SwarmRunner.js";
-import { buildAgentsReadySummary } from "./agentsReadySummary.js";
 import { formatChatReceipt } from "./chatReceipt.js";
-import { formatCloneMessage } from "./cloneMessage.js";
 import { formatPortReleaseLine } from "./runSummary.js";
-import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
-import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
-import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
-import { retryEmptyResponse } from "./promptAndExtract.js";
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
-import { getAgentAddendum } from "@ollama-swarm/shared/topology";
-import { resolveRunSpawnModel } from "./resolveRunSpawnModel.js";
-import { describeSdkError } from "./sdkError.js";
-import { buildCheckpoint, writeCheckpoint } from "./checkpoint.js";
 import { discussionWriteSummary } from "./discussionWriteSummary.js";
 import { AgentStatsCollector } from "./agentStatsCollector.js";
 import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
 import type { RunAgentOpts } from "./postRoundCritiqueTypes.js";
-import { discussionReaderProfile } from "./discussionToolProfile.js";
-import {
-  makeBufferedToolHandler,
-  takePendingToolTrace,
-  type ToolTraceEntry,
-} from "./toolCallTranscript.js";
+import { type ToolTraceEntry } from "./toolCallTranscript.js";
 import { tokenTracker, snapshotLifetimeTokens } from "../services/ollamaProxy.js";
-import { checkBudgetGuards } from "./loopGuards.js";
-import { runDiscussionCloseOut } from "./runFinallyHooks.js";
 import type { SwarmControlAdviceRecord } from "@ollama-swarm/shared/swarmControl/controlAdvice";
 import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import type { ToolResultHook } from "../tools/ToolDispatcher.js";
-export interface CloneSpawnResult {
-  destPath: string;
-  ready: Agent[];
-}
+import { runDiscussionAgentCore } from "./discussionRunAgent.js";
+import {
+  initCloneAndSpawn as initCloneAndSpawnExtracted,
+  type CloneSpawnOpts,
+  type CloneSpawnResult,
+} from "./discussionInitClone.js";
+import {
+  runDiscussionLoop as runDiscussionLoopExtracted,
+  checkRoundBudget as checkRoundBudgetExtracted,
+  type DiscussionLoopCloseOutHooks,
+} from "./discussionLoop.js";
 
-export interface CloneSpawnOpts {
-  /** Preset name for the agentsReady summary */
-  preset: string;
-  /** If provided, override the minimum agent count check (default: 1) */
-  minAgents?: number;
-  /** Role label resolver for each agent */
-  roleResolver: (agent: Agent) => string;
-  /** Extra line appended to the "N agents ready" message (preset-specific context) */
-  extraReadyMessage?: string;
-}
-
+export type { CloneSpawnOpts, CloneSpawnResult } from "./discussionInitClone.js";
 export { type RunAgentOpts } from "./postRoundCritiqueTypes.js";
 
 export abstract class DiscussionRunnerBase {
@@ -310,378 +289,99 @@ export abstract class DiscussionRunnerBase {
     });
   }
 
-  /**
-   * Clone the repo, exclude artifacts, spawn agents, validate + register.
-   * Returns `{ destPath, ready }` for the subclass to continue setup.
-   *
-   * Replaces ~35 duplicated lines per runner.
-   */
+  /** Clone + spawn — extracted to discussionInitClone.ts. */
   protected async initCloneAndSpawn(
     cfg: RunConfig,
     spawnOpts: CloneSpawnOpts,
   ): Promise<CloneSpawnResult> {
-    // Skip "cloning" phase for direct local paths (no git clone will occur).
-    const isRemoteClone = !!(cfg.repoUrl && (cfg.repoUrl.startsWith("http://") || cfg.repoUrl.startsWith("https://")));
-    if (isRemoteClone) {
-      this.setPhase("cloning");
-    }
-    let cloneResult: import("../services/RepoService.js").CloneResult;
-    // Local folder path — skip clone, use the directory directly.
-    if (!cfg.repoUrl.startsWith("http://") && !cfg.repoUrl.startsWith("https://")) {
-      cloneResult = { destPath: cfg.localPath, alreadyPresent: true, priorCommits: 0, priorChangedFiles: 0, priorUntrackedFiles: 0 };
-    } else {
-      cloneResult = await this.opts.repos.clone({ url: cfg.repoUrl, destPath: cfg.localPath });
-    }
-    const { destPath } = cloneResult;
-    const gitInit = await this.opts.repos.ensureGitRepo(destPath);
-    if (gitInit.initialized) {
-      this.appendSystem("[clone] Initialized git repository in local workspace.");
-    }
-    this.opts.emit({
-      type: "clone_state",
-      alreadyPresent: cloneResult.alreadyPresent,
-      clonePath: destPath,
-      priorCommits: cloneResult.priorCommits ?? 0,
-      priorChangedFiles: cloneResult.priorChangedFiles ?? 0,
-      priorUntrackedFiles: cloneResult.priorUntrackedFiles ?? 0,
-    });
-    await this.opts.repos.excludeRunnerArtifacts(destPath);
-    this.appendSystem(formatCloneMessage(cfg.repoUrl, destPath, cloneResult));
-
-    this.setPhase("spawning");
-    const spawnStart = Date.now();
-    const spawnTasks: Promise<Agent>[] = [];
-    for (let i = 1; i <= cfg.agentCount; i++) {
-      const model = resolveRunSpawnModel(cfg, i);
-      spawnTasks.push(this.opts.manager.spawnAgentNoOpencode({ cwd: destPath, index: i, model }));
-    }
-    const results = await Promise.allSettled(spawnTasks);
-    const ready = results
-      .filter((r): r is PromiseFulfilledResult<Agent> => r.status === "fulfilled")
-      .map((r) => r.value);
-
-    const minAgents = spawnOpts.minAgents ?? 1;
-    if (ready.length < minAgents) {
-      if (minAgents === 1) {
-        throw new Error("No agents started successfully");
-      }
-      throw new Error(
-        `${spawnOpts.preset} requires at least ${minAgents} agents, but only ${ready.length} started.`,
-      );
-    }
-
-    const modelList = ready.map((a) => a.model).join(", ");
-    const extra = spawnOpts.extraReadyMessage ? ` ${spawnOpts.extraReadyMessage}` : "";
-    this.appendSystem(
-      `${ready.length}/${cfg.agentCount} agents ready — models: ${modelList}.${extra}`,
-      buildAgentsReadySummary({
+    return initCloneAndSpawnExtracted(
+      {
+        repos: this.opts.repos,
         manager: this.opts.manager,
-        preset: spawnOpts.preset,
-        ready,
-        requestedCount: cfg.agentCount,
-        spawnElapsedMs: Date.now() - spawnStart,
-        roleResolver: spawnOpts.roleResolver,
-      }),
+        emit: (e) => this.opts.emit(e),
+        setPhase: (p) => this.setPhase(p),
+        appendSystem: (t, s) => this.appendSystem(t, s),
+      },
+      cfg,
+      spawnOpts,
     );
-
-    return { destPath, ready };
   }
 
-  /**
-   * Core agent-prompt-execute-record pipeline shared by all discussion runners.
-   *
-   * Handles the full lifecycle of prompting an agent and recording its response:
-   *   1. markStatus("thinking") + emitAgentState
-   *   2. SSE-aware watchdog setup
-   *   3. promptWithFailoverAuto with onTokens/onTiming/onRetry wiring
-   *   4. extractText → junk retry → trackPostRetryJunk → stripAgentText
-   *   5. TranscriptEntry construction + push + emit
-   *   6. markStatus("ready"/"failed") + emitAgentState
-   *   7. watchdog.cancel() in finally
-   *
-   * Returns the extracted text string on success, or "" on error.
-   * MoA's simpler runOne also delegates here.
-   */
+  /** Core agent pipeline — extracted to discussionRunAgent.ts. */
   protected async runDiscussionAgent(
     agent: Agent,
     prompt: string,
     opts: RunAgentOpts,
   ): Promise<string> {
-    const agentName = opts.agentName ?? discussionReaderProfile(this.active);
-    this.opts.manager.markStatus(agent.id, "thinking", {
-      ...(opts.activity?.kind ? { activityKind: opts.activity.kind } : {}),
-      ...(opts.activity?.label ? { activityLabel: opts.activity.label } : {}),
-      thinkingSince: Date.now(),
-    });
-    this.emitAgentState({
-      id: agent.id,
-      index: agent.index,
-
-      sessionId: agent.sessionId,
-      status: "thinking",
-      thinkingSince: Date.now(),
-    });
-    opts.stats.countTurn(agent.id);
-
-    const controller = new AbortController();
-    const watchdog = startSseAwareTurnWatchdog({
-      manager: this.opts.manager,
-      sessionId: agent.sessionId,
-      controller,
-      abortSession: async () => {},
-    });
-
-    try {
-      const res = await promptWithFailoverAuto(agent, prompt, {
-        onTokens: ({ promptTokens, responseTokens }) => opts.stats.recordTokens(agent.id, promptTokens, responseTokens),
-        signal: controller.signal,
+    return runDiscussionAgentCore(
+      {
         manager: this.opts.manager,
-        agentName,
-        ...(opts.activity ? { activity: opts.activity } : {}),
-        webToolsConfig: this.active,
-        mcpServers: this.active?.mcpServers,
-        onTool: makeBufferedToolHandler(this.pendingToolTraceByAgent, agent.id),
-        onToolResultHook: this.buildDiscussionToolCoachHook(agent),
-        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
+        emit: (e) => this.opts.emit(e),
         logDiag: this.opts.logDiag,
-        runId: this.active?.runId,
-        describeError: describeSdkError,
-        ...(opts.modelOverride && opts.modelOverride !== agent.model
-          ? { modelOverride: opts.modelOverride }
-          : {}),
-        onTiming: ({ attempt, elapsedMs, success }) => {
-          opts.stats.onTiming(agent.id, success, elapsedMs);
-          this.opts.logDiag?.({
-            type: "_prompt_timing",
-            preset: this.active?.preset,
-            agentId: agent.id,
-            agentIndex: agent.index,
-            attempt,
-            elapsedMs,
-            success,
-          });
-          this.opts.manager.recordPromptComplete(agent.id, { attempt, elapsedMs, success });
-          this.opts.emit({
-            type: "agent_latency_sample",
-            agentId: agent.id,
-            agentIndex: agent.index,
-            attempt,
-            elapsedMs,
-            success,
-            ts: Date.now(),
-          });
-        },
-        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
-          opts.stats.onRetry(agent.id);
-          this.appendSystem(
-            `[${agent.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
-          );
-          this.opts.manager.markStatus(agent.id, "retrying", {
-            retryAttempt: attempt,
-            retryMax: max,
-            retryReason: reasonShort,
-          });
-          this.emitAgentState({
-            id: agent.id,
-            index: agent.index,
-      
-            sessionId: agent.sessionId,
-            status: "retrying",
-            retryAttempt: attempt,
-            retryMax: max,
-            retryReason: reasonShort,
-          });
-        },
-      });
-
-      const diagCtx = {
-        runner: opts.runnerName,
-        agentId: agent.id,
-        agentIndex: agent.index,
-        logDiag: this.opts.logDiag,
-        manager: this.opts.manager,
-        signal: controller.signal,
-        webToolsConfig: this.active,
-        mcpServers: this.active?.mcpServers,
-        onTool: makeBufferedToolHandler(this.pendingToolTraceByAgent, agent.id),
-        promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
-        ...(opts.modelOverride && opts.modelOverride !== agent.model
-          ? { modelOverride: opts.modelOverride }
-          : {}),
-        runId: this.active?.runId,
-      };
-      const extracted = extractTextWithDiag(res, diagCtx);
-      let text = extracted.text;
-      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
-        const retryText = await retryEmptyResponse(agent, prompt, agentName, diagCtx);
-        if (retryText !== null) text = retryText;
-      }
-      trackPostRetryJunk(text, {
-        agentId: agent.id,
-        recordJunkPostRetry: (id, j) => opts.stats.recordJunkPostRetry(id, j),
-        appendSystem: (msg) => this.appendSystem(msg),
-      });
-      const stripped = stripAgentText(text);
-
-      // Compute summary: either from enrichSummary callback, static value, or undefined
-      const summary: TranscriptEntrySummary | undefined =
-        typeof opts.enrichSummary === "function"
-          ? opts.enrichSummary(stripped.finalText)
-          : opts.enrichSummary;
-
-      const toolTrace = takePendingToolTrace(this.pendingToolTraceByAgent, agent.id);
-      const entry: TranscriptEntry = {
-        id: randomUUID(),
-        role: "agent",
-        agentId: agent.id,
-        agentIndex: agent.index,
-        text: stripped.finalText || "(empty response)",
-        ts: Date.now(),
-        ...(summary ? { summary } : {}),
-        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
-        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
-        ...(toolTrace ? { toolTrace } : {}),
-      };
-
-      // Hook for multiWriter collection or other post-entry logic
-      opts.onEntryPushed?.(entry, stripped.finalText);
-
-      this.transcript.push(entry);
-      this.opts.emit({ type: "transcript_append", entry });
-      // streaming_end is owned by promptWithRetry → markStreamingDone; a second
-      // emit here raced ahead of agent_state ready and recreated dock bubbles.
-      this.opts.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
-      this.emitAgentState({
-        id: agent.id,
-        index: agent.index,
-  
-        sessionId: agent.sessionId,
-        status: "ready",
-        lastMessageAt: entry.ts,
-      });
-
-      // Direction 6: checkpoint after each agent turn (when configured)
-      if (this.active?.runId && this.active?.checkpointing) {
-        const ckpt = buildCheckpoint(
-          this.active.runId,
-          this.phase,
-          this.round,
-          agent.index,
-          this.transcript,
-          this.opts.manager.toStates(),
-          this.active,
-        );
-        writeCheckpoint(this.active.localPath, ckpt).catch(() => {});
-      }
-
-      return text;
-    } catch (err) {
-      const msg = watchdog.getAbortReason() ?? describeSdkError(err);
-      this.appendSystem(`[${agent.id}] error: ${msg}`);
-      this.opts.manager.markStreamingDone(agent.id);
-      this.opts.manager.markStatus(agent.id, "failed", { error: msg });
-      this.emitAgentState({
-        id: agent.id,
-        index: agent.index,
-  
-        sessionId: agent.sessionId,
-        status: "failed",
-        error: msg,
-      });
-      return "";
-    } finally {
-      watchdog.cancel();
-    }
+        transcript: this.transcript,
+        phase: this.phase,
+        round: this.round,
+        active: this.active,
+        pendingToolTraceByAgent: this.pendingToolTraceByAgent,
+        getStopping: () => this.stopping,
+        appendSystem: (t, s) => this.appendSystem(t, s),
+        emitAgentState: (s) => this.emitAgentState(s),
+        buildDiscussionToolCoachHook: (a) => this.buildDiscussionToolCoachHook(a),
+      },
+      agent,
+      prompt,
+      opts,
+    );
   }
 
-  /** Subclass must return its preset name (e.g. "Council", "Round-robin").
-   *  Used by system messages and the closeOut path.
-   *  Replaces magic strings scattered across each runner. */
+  /** Subclass must return its preset name (e.g. "Council", "Round-robin"). */
   protected abstract getPresetName(): string;
 
-  /**
-   * Shared discussion loop skeleton. Handles try/catch error capture
-   * and finally closeOut. The inner function receives (cfg) and runs
-   * the preset-specific rounds loop. Saves ~48 lines across 8 runners.
-   */
+  private discussionLoopHost() {
+    return {
+      manager: this.opts.manager,
+      emit: (e: import("../types.js").SwarmEvent) => this.opts.emit(e),
+      getStopping: () => this.stopping,
+      getEarlyStopDetail: () => this.earlyStopDetail,
+      setEarlyStopDetail: (d: string | undefined) => { this.earlyStopDetail = d; },
+      getRound: () => this.round,
+      setRound: (r: number) => { this.round = r; },
+      getPhase: () => this.phase,
+      setPhase: (p: import("../types.js").SwarmPhase) => this.setPhase(p),
+      appendSystem: (text: string) => this.appendSystem(text),
+      writeSummary: (cfg: RunConfig, crashMessage?: string) => this.writeSummary(cfg, crashMessage),
+    };
+  }
+
+  /** Shared discussion loop skeleton — extracted to discussionLoop.ts. */
   protected async runDiscussionLoop(
     cfg: RunConfig,
     presetName: string,
     runRounds: (cfg: RunConfig) => Promise<void>,
-    closeOutHooks?: import("./runFinallyHooks.js").CloseOutHooks & {
-      transcript?: Array<{ text: string; role: string }>;
-      deliverableText?: string;
-      wallClockMs?: number;
-      emitOutcome?: (outcome: import("./outcomeScorer.js").RunOutcome) => void;
-    },
+    closeOutHooks?: DiscussionLoopCloseOutHooks,
   ): Promise<void> {
-    let crashMessage: string | undefined;
-    try {
-      await runRounds(cfg);
-    } catch (err) {
-      crashMessage = err instanceof Error ? err.message : String(err);
-      this.opts.emit({ type: "error", message: crashMessage });
-    } finally {
-      await runDiscussionCloseOut({
-        cfg,
-        crashMessage,
-        stopping: this.stopping,
-        earlyStopDetail: this.earlyStopDetail,
-        round: this.round,
-        currentPhase: this.phase,
-        manager: this.opts.manager,
-        appendSystem: (text: string) => this.appendSystem(text),
-        setPhase: (p) => this.setPhase(p),
-        writeSummary: () => this.writeSummary(cfg, crashMessage),
-        hooks: closeOutHooks?.pickReflectionAgent
-          ? {
-              pickReflectionAgent: closeOutHooks.pickReflectionAgent,
-              buildReflectionContext: closeOutHooks.buildReflectionContext,
-              shouldSetCompleted: closeOutHooks.shouldSetCompleted,
-            }
-          : {
-              onIdleAgentDetection: (idleReport: string) => {
-                this.appendSystem(idleReport);
-              },
-            } as unknown as import("./runFinallyHooks.js").CloseOutHooks,
-        transcript: closeOutHooks?.transcript as any,
-        deliverableText: closeOutHooks?.deliverableText,
-        wallClockMs: closeOutHooks?.wallClockMs,
-        emitOutcome: closeOutHooks?.emitOutcome,
-      });
-    }
+    return runDiscussionLoopExtracted(
+      this.discussionLoopHost(),
+      cfg,
+      presetName,
+      runRounds,
+      closeOutHooks,
+    );
   }
 
-  /**
-   * Budget guard + round-state update + emit. Call at the top of each
-   * round iteration. Returns true if the round should proceed.
-   */
+  /** Budget guard + round-state update — extracted to discussionLoop.ts. */
   protected checkRoundBudget(
     cfg: RunConfig,
     presetName: string,
     r: number,
     tokenBaseline: ReturnType<typeof snapshotLifetimeTokens>,
   ): boolean {
-    if (this.stopping) return false;
-    const guard = checkBudgetGuards({
+    return checkRoundBudgetExtracted(
+      this.discussionLoopHost(),
+      cfg,
+      presetName,
+      r,
       tokenBaseline,
-      tokenBudget: cfg.tokenBudget,
-      round: r,
-      totalRounds: cfg.rounds,
-      runId: cfg.runId,
-      unit: (
-        presetName.toLowerCase().includes("map") ||
-        presetName.toLowerCase().includes("orchestrator") ||
-        presetName.toLowerCase().includes("blackboard")
-      ) ? "cycle" : "round",
-    });
-    if (guard.halt) {
-      this.earlyStopDetail = guard.earlyStopDetail;
-      this.appendSystem(guard.message ?? "");
-      return false;
-    }
-    this.round = r;
-    this.opts.emit({ type: "swarm_state", phase: "discussing", round: r });
-    return true;
+    );
   }
 }

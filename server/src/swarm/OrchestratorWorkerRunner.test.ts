@@ -270,27 +270,30 @@ import { fileURLToPath as _fileURLToPath } from "node:url";
 
 const _here = _dirname(_fileURLToPath(import.meta.url));
 const OW_SRC = _read(_join(_here, "OrchestratorWorkerRunner.ts"), "utf8");
+const OW_LOOP_SRC = _read(_join(_here, "orchestratorWorkerLoop.ts"), "utf8");
 const OW_PROMPT_SRC = _read(_join(_here, "orchestratorWorkerPromptHelpers.ts"), "utf8");
-const OW_ALL = [OW_SRC, OW_PROMPT_SRC].join("\n\n");
+const OW_SEED_SRC = _read(_join(_here, "orchestratorWorkerSeed.ts"), "utf8");
+const OW_ALL = [OW_SRC, OW_LOOP_SRC, OW_PROMPT_SRC, OW_SEED_SRC].join("\n\n");
 
 describe("OrchestratorWorkerRunner — directive plumbing (structural, post Phase A)", () => {
   it("seed uses readDirective + buildDirectiveBlock helpers", () => {
-    assert.match(OW_SRC, /readDirective\(cfg\)/);
-    assert.match(OW_SRC, /buildDirectiveBlock\(/);
+    assert.match(OW_SRC, /buildOrchestratorWorkerSeedMessage/);
+    assert.match(OW_SEED_SRC, /readDirective\(cfg\)/);
+    assert.match(OW_SEED_SRC, /buildDirectiveBlock\(/);
   });
 
   it("loop threads cfg.userDirective into buildLeadPlanPrompt + runWorkerTurn + buildLeadSynthesisPrompt", () => {
     assert.match(
       OW_ALL,
-      /buildLeadPlanPrompt\(r, cfg\.rounds, workers\.map\(\(w\) => w\.index\), \[\.\.\.this\.transcript\], cfg\.userDirective\)/,
-    );
-    assert.match(
-      OW_SRC,
-      /this\.runWorkerTurn\(\s*w,\s*r,\s*cfg\.rounds,\s*a\.subtask,\s*seedSnapshot,\s*cfg\.userDirective,\s*a\.successCriteria,?\s*\)/,
+      /buildLeadPlanPrompt\(r, cfg\.rounds, workers\.map\(\(w\) => w\.index\), \[\.\.\.(?:this|host)\.transcript\], cfg\.userDirective\)/,
     );
     assert.match(
       OW_ALL,
-      /buildLeadSynthesisPrompt\(r, cfg\.rounds, \[\.\.\.this\.transcript\], cfg\.userDirective\)/,
+      /(?:this|host)\.runWorkerTurn\(\s*w,\s*r,\s*cfg\.rounds,\s*a\.subtask,\s*seedSnapshot,\s*cfg\.userDirective,\s*a\.successCriteria,?\s*\)/,
+    );
+    assert.match(
+      OW_ALL,
+      /buildLeadSynthesisPrompt\(r, cfg\.rounds, \[\.\.\.(?:this|host)\.transcript\], cfg\.userDirective\)/,
     );
   });
 

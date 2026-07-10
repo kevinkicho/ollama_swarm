@@ -8,17 +8,26 @@ import { StreamingTranscriptCard } from "./transcript/StreamingTranscriptCard";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
 import { prepareTranscriptForDisplay } from "../state/transcriptDisplayFilter";
 import { apiFetch } from "../lib/apiFetch";
-
-/** Virtualization disabled — estimate drift caused hidden rows and wide gaps on stop. */
-const ENABLE_TRANSCRIPT_VIRTUALIZATION = false;
-const VIRTUALIZE_MIN_COUNT = 500;
-const VIRTUAL_OVERSCAN = 40;
-const VIRTUAL_OVERSCAN_HISTORY = 200;
-const VIRTUAL_RANGE_EXTRA = 80;
-const VIRTUAL_RANGE_EXTRA_HISTORY = 200;
-const VIRTUAL_RANGE_SCROLL_PAD = 80;
-const VIRTUAL_RANGE_SCROLL_PAD_HISTORY = 150;
-const VIRTUAL_TOP_MEASURE_COUNT = 12;
+import {
+  ENABLE_TRANSCRIPT_VIRTUALIZATION,
+  VIRTUALIZE_MIN_COUNT,
+  VIRTUAL_OVERSCAN,
+  VIRTUAL_OVERSCAN_HISTORY,
+  VIRTUAL_RANGE_EXTRA,
+  VIRTUAL_RANGE_EXTRA_HISTORY,
+  VIRTUAL_RANGE_SCROLL_PAD,
+  VIRTUAL_RANGE_SCROLL_PAD_HISTORY,
+  TRANSCRIPT_ITEM_GAP_PX,
+  STREAMING_TIMEOUT_MS,
+} from "./transcript/transcriptVirtual";
+import {
+  filterTranscriptEntries,
+  type TranscriptFilterId,
+} from "./transcript/transcriptFilter";
+import { estimateTranscriptEntrySize } from "./transcript/transcriptEstimateSize";
+import { extractTranscriptVirtualRange } from "./transcript/transcriptRangeExtractor";
+import { useTranscriptScroll } from "./transcript/useTranscriptScroll";
+import { TranscriptFilterBar } from "./transcript/TranscriptFilterBar";
 
 export const Transcript = memo(function Transcript() {
   // Ultra-narrow selectors where possible (perf: avoid re-renders on unrelated store changes).
@@ -40,17 +49,10 @@ export const Transcript = memo(function Transcript() {
   const prevLenRef = useRef(0);
   const prevStreamingCountRef = useRef(0);
   const prevStreamingTextLenRef = useRef(0);
-  const [stickyBottom, setStickyBottom] = useState(false);
-  // Phase 10 + transcript normal view: default to "all" so the transcript shows the full unfiltered log
-  // (planning + execution content, system messages, agent output, brain activity, etc.) like a normal chat.
-  // "key" is still available via the bar for users who want high-signal only (avoids bombardment).
-  // No more default "key" guard that hid most activity on live runs (including planning chatter).
-  const [filter, setFilter] = useState<"all" | "key" | "system" | "agents" | "audit" | "issues">("all");
+  // Phase 10 + transcript normal view: default to "all" so the transcript shows the full unfiltered log.
+  const [filter, setFilter] = useState<TranscriptFilterId>("all");
 
-  // Single source for inter-item gap (used only in virtual wrapper for stability).
-  // All child components must not introduce their own outer vertical margins.
-  // Small consistent 6px gap for comfortable readability without feeling cramped or "massive".
-  const ITEM_GAP_PX = 6;
+  const ITEM_GAP_PX = TRANSCRIPT_ITEM_GAP_PX;
 
   const streamingCount = useSwarm((s) => Object.keys(s.streaming).length);
   const streamingMeta = useSwarm((s) => s.streamingMeta);
@@ -61,7 +63,6 @@ export const Transcript = memo(function Transcript() {
 
   // Per-agent streaming timeout
   const clearStreaming = useSwarm((s) => s.clearStreaming);
-  const STREAMING_TIMEOUT_MS = 90_000;
   useEffect(() => {
     const stuck = Object.entries(streamingMeta).filter(
       ([, m]) => {
@@ -77,6 +78,38 @@ export const Transcript = memo(function Transcript() {
   // Live vs historical for scroll behavior guards. We keep a ref for closures (RO, RAFs).
   const isLiveActivity = streamingCount > 0 || isActiveSwarmPhase(phase);
   const isTerminalPhase = isTerminalSwarmPhase(phase);
+  const isLiveRef = useRef(true);
+  const prevFirstEntryIdRef = useRef<string | undefined>(undefined);
+  const scrollHeightBeforePrependRef = useRef(0);
+  const shouldVirtualizeRef = useRef(true);
+  const filteredTranscriptRef = useRef<typeof transcript>([]);
+  // Key by entry id (not index) so prepend/reorder at run start doesn't map
+  // stale DOM nodes to wrong virtual positions.
+  const mountedItemsRef = useRef(new Map<string, HTMLElement>());
+
+  const {
+    stickyBottom,
+    setStickyBottom,
+    jumpLockRef,
+    isAtBottomRef,
+    userScrollingRef,
+    initialSizeSettledRef,
+    lastMeasureRef,
+    scheduleMeasure,
+    scrollContainerToBottom,
+    scheduleScrollToEnd,
+    onScroll,
+    jumpToLatest,
+  } = useTranscriptScroll({
+    scrollRef,
+    virtualizerRef,
+    shouldVirtualizeRef,
+    filteredTranscriptRef,
+    mountedItemsRef,
+    isLiveRef,
+    prevLenRef,
+  });
+
   // Latch in store (survives remounts / Strict Mode) before paint when live.
   useLayoutEffect(() => {
     if (isLiveActivity) {
@@ -89,157 +122,7 @@ export const Transcript = memo(function Transcript() {
     if (isLiveActivity) {
       initialSizeSettledRef.current = false;
     }
-  }, [isLiveActivity]);
-
-  // Track scroll position to flip sticky-bottom on/off.
-  // jumpLock prevents onScroll from overriding stickyBottom right after
-  // jumpToLatest() — even with instant 'auto' scroll, some events may fire;
-  // the lock avoids incorrectly flipping sticky off during the jump.
-  const jumpLockRef = useRef(false);
-  // Start false: for historical/finished /runs/:id views we land at top and want free manual scroll.
-  // onScroll will set correctly; live views will follow on new content when appropriate.
-  const isAtBottomRef = useRef(false);
-  const scrollEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevTotalSizeRef = useRef(0);
-  const userScrollingRef = useRef(false);
-  const userScrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isLiveRef = useRef(true);
-  const initialSizeSettledRef = useRef(false);
-  const lastMeasureRef = useRef(0);
-  const measureRafRef = useRef<number | null>(null);
-  const scrollRafRef = useRef<number | null>(null);
-  const lastScrollAtRef = useRef(0);
-  const prevFirstEntryIdRef = useRef<string | undefined>(undefined);
-  const scrollHeightBeforePrependRef = useRef(0);
-  const shouldVirtualizeRef = useRef(true);
-  const filteredTranscriptRef = useRef<typeof transcript>([]);
-  // Key by entry id (not index) so prepend/reorder at run start doesn't map
-  // stale DOM nodes to wrong virtual positions.
-  const mountedItemsRef = useRef(new Map<string, HTMLElement>());
-
-  const scheduleMeasure = useCallback(() => {
-    if (!shouldVirtualizeRef.current) return;
-    if (measureRafRef.current != null) return;
-    measureRafRef.current = requestAnimationFrame(() => {
-      measureRafRef.current = null;
-      const v = virtualizerRef.current;
-      if (!v) return;
-      const oldTotal = prevTotalSizeRef.current;
-      mountedItemsRef.current.forEach((el) => {
-        if (el.isConnected) {
-          try { v.measureElement(el); } catch {}
-        }
-      });
-      // Re-measure leading items so RUN-START / early pipeline lines don't drift
-      // cumulative starts and push later items out of the rendered virtual range.
-      const list = filteredTranscriptRef.current;
-      const topN = Math.min(VIRTUAL_TOP_MEASURE_COUNT, list.length);
-      for (let i = 0; i < topN; i++) {
-        const entryId = list[i]?.id ?? `idx-${i}`;
-        const el = mountedItemsRef.current.get(entryId);
-        if (el?.isConnected) {
-          try { v.measureElement(el); } catch {}
-        }
-      }
-      v.measure();
-      const newTotal = v.getTotalSize();
-      const el = scrollRef.current;
-      if (
-        el && isLiveRef.current && !isAtBottomRef.current &&
-        !userScrollingRef.current && oldTotal > 0 && newTotal < oldTotal
-      ) {
-        el.scrollTop = Math.max(0, el.scrollTop - (oldTotal - newTotal));
-      }
-      prevTotalSizeRef.current = newTotal;
-      if (!isLiveRef.current && prevLenRef.current > 0) {
-        initialSizeSettledRef.current = true;
-      }
-    });
-  }, []);
-
-  const scrollContainerToBottom = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight);
-  }, []);
-
-  const scheduleScrollToEnd = useCallback(() => {
-    const now = Date.now();
-    if (now - lastScrollAtRef.current < 80) return;
-    if (scrollRafRef.current != null) return;
-    scrollRafRef.current = requestAnimationFrame(() => {
-      scrollRafRef.current = null;
-      lastScrollAtRef.current = Date.now();
-      scrollContainerToBottom();
-    });
-  }, [scrollContainerToBottom]);
-
-  // compensateOrReanchor removed: all scroll compensation now inlined with live guards only.
-  // For finished/historical transcripts we avoid ANY programmatic scrollTop changes or scrollIntoView
-  // except explicit user "Latest" click. This eliminates autonomous upward push.
-
-  const onScroll = () => {
-    if (jumpLockRef.current) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const v = virtualizerRef.current;
-    const virtualH = v ? v.getTotalSize() : el.scrollHeight;
-    // Robust: at end of messages (virtualH) or full bottom.
-    const atMessagesBottom = el.scrollTop + el.clientHeight >= virtualH - 30;
-    const atBottom = distanceFromBottom < 80 || atMessagesBottom;
-    isAtBottomRef.current = atBottom;
-
-    // Track active user scrolling to skip compensation during gesture.
-    userScrollingRef.current = true;
-    if (userScrollTimeoutRef.current) clearTimeout(userScrollTimeoutRef.current);
-    userScrollTimeoutRef.current = setTimeout(() => {
-      userScrollingRef.current = false;
-    }, 200);
-
-    // Once the user starts interacting with scroll on a historical transcript, freeze sizes
-    // forever for this view (prevents any stray measure from later bubbling up and pushing).
-    if (!isLiveRef.current) {
-      initialSizeSettledRef.current = true;
-    }
-
-    // Debounce the stickyBottom state update (used only for the "Latest" button)
-    // Higher debounce on historical to reduce re-renders while user is dragging/wheeling.
-    if (atBottom !== stickyBottom) {
-      if (scrollEndTimerRef.current) clearTimeout(scrollEndTimerRef.current);
-      const delay = isLiveRef.current ? 120 : 220;
-      scrollEndTimerRef.current = setTimeout(() => {
-        setStickyBottom(atBottom);
-      }, delay);
-    }
-
-    // No measure() here — let measureElement + targeted measures handle sizing.
-  };
-
-  const jumpToLatest = () => {
-    jumpLockRef.current = true;
-    isAtBottomRef.current = true;
-    setStickyBottom(true);
-    scrollContainerToBottom();
-    // Two RAF passes: streaming dock + plain-list bubbles may grow after first paint.
-    requestAnimationFrame(() => {
-      scrollContainerToBottom();
-      requestAnimationFrame(() => {
-        scrollContainerToBottom();
-        isAtBottomRef.current = true;
-        setStickyBottom(true);
-        jumpLockRef.current = false;
-      });
-    });
-
-    if (!isLiveRef.current) {
-      userScrollingRef.current = true;
-      initialSizeSettledRef.current = true;
-      setTimeout(() => {
-        userScrollingRef.current = false;
-      }, 350);
-    }
-  };
+  }, [isLiveActivity, initialSizeSettledRef]);
 
   // Filter transcript entries (client-side only; all data is in the store).
   // "all" is the normal full view. "key" etc are optional to cut noise.
@@ -248,45 +131,10 @@ export const Transcript = memo(function Transcript() {
     [transcript],
   );
 
-  const filteredTranscript = useMemo(() => displayTranscript.filter((e) => {
-    if (filter === "all") return true;
-    if (filter === "system") return e.role === "system";
-    if (filter === "agents") {
-      // Transcript UI fix: hide "Worker skip" noise from the Agents view.
-      // Skips are low-signal (usually "already present / no change") and were
-      // flooding the transcript. They can still be seen under "All".
-      if (e.summary?.kind === "worker_skip") return false;
-      return e.role === "agent" || e.role === "agent-stream";
-    }
-    if (filter === "audit") {
-      const text = e.text || "";
-      return text.includes("audit") || text.includes("Audit") || text.includes("Gate");
-    }
-    if (filter === "issues") {
-      const text = e.text || "";
-      return text.includes("CONTRADICTION") || text.includes("PARTIAL") || text.includes("error") || text.includes("failed");
-    }
-    if (filter === "key") {
-      // High-signal only (optional): synthesis, verdicts, run events, hunks, web results, major board actions.
-      const k = e.summary?.kind;
-      if (k === "worker_skip") return false;
-      const text = (e.text || "").toLowerCase();
-      const isKey = ["council_synthesis", "mapreduce_synthesis", "role_diff_synthesis", "stigmergy_report", "debate_verdict", "run_finished", "deliverable", "stretch_goals", "worker_hunks", "contract", "goals", "seed_announce", "agents_ready", "run_start"].includes(k || "") ||
-        text.includes("synthesis") || text.includes("verdict") || text.includes("web_search") || text.includes("web_fetch") ||
-        text.includes("findings") || text.includes("deliverable") || (k === "verifier_verdict");
-      if (isKey) return true;
-      // For "key" (optional reduced view): system messages with certain keywords + long streams + known key kinds.
-      if (e.role === "system") {
-        return text.includes("resuming") || text.includes("ready") || text.includes("seed") || text.includes("goal-generation") ||
-          text.includes("contract") || text.includes("planner") || text.includes("memory") || text.includes("design memory") ||
-          text.includes("directive") || text.includes("halted") || text.includes("failed") || text.includes("finished") ||
-          text.includes("pipeline") || text.includes("council") || text.includes("blackboard") || text.includes("agents ready");
-      }
-      if (e.role === "agent-stream" && (e.text || "").length > 80) return true;
-      return false;
-    }
-    return true;
-  }), [displayTranscript, filter]);
+  const filteredTranscript = useMemo(
+    () => filterTranscriptEntries(displayTranscript, filter),
+    [displayTranscript, filter],
+  );
 
   filteredTranscriptRef.current = filteredTranscript;
   const shouldVirtualize =
@@ -361,77 +209,10 @@ export const Transcript = memo(function Transcript() {
 
   const getScrollElement = useCallback(() => scrollRef.current, []);
   const getItemKey = useCallback((index: number) => filteredTranscript[index]?.id ?? index, [filteredTranscript]);
-  const estimateSize = useCallback((index: number) => {
-    const e = filteredTranscript[index];
-    if (!e) return 80;
-    // Over-estimate more aggressively to avoid initial under-placement that causes
-    // overlap/stagger (items placed too high, stacking on previous). Measure will tighten.
-    // This reduces "completely stacked" and subsequent jitter from fixes.
-    // Gaps appear "massive" if under; over + measure keeps tight after settle.
-    if (e.role === "agent-stream") {
-      const tlen = (e.text || '').length;
-      const lines = Math.max(4, Math.ceil(tlen / 24));
-      return 100 + lines * 18 + (tlen > 1000 ? 500 : 0) + (tlen > 3000 ? 800 : 0) + (tlen > 6000 ? 1100 : 0);
-    }
-    const kind = e.summary?.kind || '';
-    if (e.text && e.text.startsWith('▸▸RUN-START▸▸')) {
-      // The rich divider renders multiple lines (New run + meta row + models + repo).
-      // Over-estimate a bit so following items don't get shifted into wrong virtual range (wide gaps).
-      return 140;
-    }
-    if (kind === "agents_ready") {
-      // Agents ready can be small (closed) or tall (details table open). Over-estimate to avoid hiding/stagger.
-      const n = (e.summary as any)?.agents?.length ?? 5;
-      return 120 + n * 30;
-    }
-    if (kind === "worker_hunks") {
-      // Hunks can be very tall when diffs shown; over-estimate to prevent overlap.
-      const numHunks = (e.summary as any)?.hunks?.length ?? 3;
-      return 400 + numHunks * 220;
-    }
-    if (kind.includes("synthesis") || kind === "stretch_goals") return 350;
-    if (kind === "deliverable") return 280;
-    if (kind === "run_finished") {
-      const n = (e.summary as any)?.agents?.length ?? 4;
-      const hasExtra = !!(e.summary as any)?.totalPromptTokens || !!(e.summary as any)?.totalResponseTokens;
-      return 850 + n * 45 + (hasExtra ? 100 : 0);
-    }
-    if (kind === "seed_announce") {
-      const count = (e.summary as any)?.topLevel?.length ?? 12;
-      return 320 + Math.min(count, 12) * 32;
-    }
-    if (kind === ("run_start" as any)) return 220;
-
-    const textLen = (e.text || '').length;
-    if (textLen > 0) {
-      // Special tight estimate for system messages (the ones the user sees "hiding" in blanks:
-      // "5/5 agents ready...", "deriving tier 1 contract from directive...", pipeline details, etc.).
-      // These use very compact styling: border-l + py-0.5 + text-[11px] mono + small header.
-      // A long line typically renders as 2-4 lines tall (~30-60px).
-      // Using full or high estimate causes cumulative start positions to be wrong for following items,
-      // pushing them out of the rendered virtual range (they never get into the DOM = "hiding" / blanks).
-      // Resize triggers re-calc + measure, revealing them temporarily.
-      // Conservative small estimate here + immediate measure() keeps positions accurate and items drawn.
-      if (e.role === 'system') {
-        // Slightly more generous for system to avoid under-estimate causing stagger/overlap on long wrapped lines.
-        // RUN-START divider and short [Pipeline] lines are ~1-3 lines; give headroom so following items' positions
-        // don't start too low (source of "wide gaps" where content exists but virtual items are placed off-range).
-        const approxLines = Math.min(6, Math.max(1, Math.ceil(textLen / 38)));
-        return 36 + approxLines * 15;
-      }
-      const lines = Math.max(2, Math.ceil(textLen / 22));
-      const base = 55;
-      let size = base + lines * 18;
-      if (e.thoughts && e.thoughts.length > 0) size += 24;
-      if (e.streamSnapshot) size += 24;
-      if (e.toolCalls && e.toolCalls.length > 0) size += 40;
-      if (textLen > 800) size += 200;
-      if (textLen > 2500) size += 400;
-      if (textLen > 5000) size += 700;
-      return size;
-    }
-    return 70;
-  }, [filteredTranscript]);
+  const estimateSize = useCallback(
+    (index: number) => estimateTranscriptEntrySize(filteredTranscript[index]),
+    [filteredTranscript],
+  );
 
   const virtualizer = useVirtualizer({
     count: filteredTranscript.length,
@@ -440,33 +221,13 @@ export const Transcript = memo(function Transcript() {
     estimateSize,
     overscan: virtualOverscan,
     // Wider range on historical views prevents "hidden until resize" when estimates drift.
-    // Live runs use the plain list (shouldVirtualize=false) so these values rarely apply live.
-    rangeExtractor: (range) => {
-      let start = Math.max(0, range.startIndex - virtualRangeExtra);
-      let end = Math.min(filteredTranscript.length - 1, range.endIndex + virtualRangeExtra);
-
-      const sc = scrollRef.current;
-      const avg = 42;
-      if (sc) {
-        const approxStart = Math.max(0, Math.floor(sc.scrollTop / avg) - virtualRangeScrollPad);
-        const approxEnd = Math.min(
-          filteredTranscript.length - 1,
-          Math.floor((sc.scrollTop + sc.clientHeight) / avg) + virtualRangeScrollPad,
-        );
-        start = Math.min(start, approxStart);
-        end = Math.max(end, approxEnd);
-      }
-
-      if (sc && sc.scrollTop < 400) {
-        start = 0;
-      }
-
-      const tail = Math.max(0, filteredTranscript.length - virtualRangeExtra);
-      start = Math.min(start, tail);
-      end = Math.max(end, filteredTranscript.length - 1);
-
-      return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-    },
+    rangeExtractor: (range) =>
+      extractTranscriptVirtualRange(range, {
+        listLength: filteredTranscript.length,
+        scrollEl: scrollRef.current,
+        virtualRangeExtra,
+        virtualRangeScrollPad,
+      }),
   });
   virtualizerRef.current = virtualizer;
 
@@ -644,58 +405,37 @@ export const Transcript = memo(function Transcript() {
     };
   }, [scheduleMeasure]);
 
+  const onSuggest = useCallback(async () => {
+    setSuggesting(true);
+    try {
+      await apiFetch("/api/swarm/brain/suggest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runId,
+          title: "Quick suggestion from transcript",
+          text: "Review the current todos/board state and recent transcript. Suggest an amend or next focus area if needed.",
+          category: "recommendation",
+        }),
+      });
+      setTimeout(() => setSuggesting(false), 1200);
+    } catch {
+      setSuggesting(false);
+    }
+  }, [runId]);
+
   return (
     <div className="h-full flex flex-col relative">
-      {/* Filter bar — fixed, never scrolls */}
-      <div className="flex items-center gap-2 px-4 py-2 bg-ink-800/50 border-b border-ink-700/50 shrink-0">
-        <span className="text-[10px] text-ink-500">Filter:</span>
-        {(["all", "key", "system", "agents", "audit", "issues"] as const).map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-2 py-0.5 text-[10px] rounded ${
-              filter === f
-                ? "bg-ink-600 text-ink-200"
-                : "text-ink-400 hover:text-ink-200 hover:bg-ink-700"
-            }`}
-            title={f === "key" ? "Optional: high-signal items only" : undefined}
-          >
-            {f === "key" ? "Key" : f.charAt(0).toUpperCase() + f.slice(1)}
-          </button>
-        ))}
-        <span className="text-[10px] text-ink-500 ml-auto">
-          {filteredTranscript.length} / {transcript.length} entries
-        </span>
-        {runId && phase !== "completed" && phase !== "stopped" && phase !== "failed" && (
-          <button
-            onClick={async () => {
-              setSuggesting(true);
-              try {
-                const res = await apiFetch("/api/swarm/brain/suggest", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    runId,
-                    title: "Quick suggestion from transcript",
-                    text: "Review the current todos/board state and recent transcript. Suggest an amend or next focus area if needed.",
-                    category: "recommendation",
-                  }),
-                });
-                // Success is indicated by the injected transcript entry appearing (via WS)
-                // We just reset after a short delay for UX.
-                setTimeout(() => setSuggesting(false), 1200);
-              } catch {
-                setSuggesting(false);
-              }
-            }}
-            disabled={suggesting}
-            className="ml-2 px-1.5 py-px text-[9px] rounded bg-amber-800/50 hover:bg-amber-700/70 text-amber-200 border border-amber-800/60 disabled:opacity-50"
-            title="Ask Brain for a proactive suggestion (injects a special 🧠 Brain suggestion entry into the live transcript)"
-          >
-            {suggesting ? "💡 suggesting…" : "💡 suggest"}
-          </button>
-        )}
-      </div>
+      <TranscriptFilterBar
+        filter={filter}
+        onFilterChange={setFilter}
+        filteredCount={filteredTranscript.length}
+        totalCount={transcript.length}
+        runId={runId}
+        phase={phase}
+        suggesting={suggesting}
+        onSuggest={onSuggest}
+      />
 
       <div
         ref={scrollRef}

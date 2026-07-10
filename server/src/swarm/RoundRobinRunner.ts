@@ -1,10 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { createOutcomeEmitter, type OutcomeScoredEvent } from "./outcomeTypes.js";
 import type { Agent } from "../services/AgentManager.js";
 
-import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import type {
-  AgentState,
   SwarmEvent,
   SwarmPhase,
   SwarmStatus,
@@ -15,23 +12,14 @@ import type { RunConfig, RunnerOpts } from "./SwarmRunner.js";
 import { DiscussionRunnerBase } from "./DiscussionRunnerBase.js";
 
 import { roleForAgent, type SwarmRole } from "./roles.js";
-import { promptWithRetry } from "./promptWithRetry.js";
-import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { formatChatReceipt } from "./chatReceipt.js";
-import { detectSemanticConvergence } from "./semanticConvergence.js";
-import { detectConvergence as detectJaccardConvergence } from "./moaConsensus.js";
 
-import { buildSeedSummary } from "./runSummary.js";
 import { runDiscussionCloseOut } from "./runFinallyHooks.js";
-import { extractResponseBreakdown, extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
+import { buildRoundRobinSeedMessage } from "./roundRobinSeed.js";
 import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { checkBudgetGuards } from "./loopGuards.js";
 // runEndReflection moved into runFinallyHooks (Phase D).
-import { retryEmptyResponse } from "./promptAndExtract.js";
 
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
-import { getAgentAddendum } from "@ollama-swarm/shared/topology";
-import { describeSdkError } from "./sdkError.js";
 import { writeDeliverableAndEmit } from "./deliverable.js";
 import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { maybeRunPostRoundCritique } from "./postRoundCritique.js";
@@ -40,19 +28,12 @@ import { deriveDynamicRoleCatalog } from "./dynamicRoleCatalog.js";
 import { buildRoleDiffDeliverableSections } from "./roleDiffDeliverable.js";
 import {
   readDirective,
-  buildDirectiveBlock,
   pickDeliverableTitle,
   pickDeliverableSubtitle,
 } from "./directivePromptHelpers.js";
 
 import {
-  parseConvergenceSignal,
-  parseConvergenceSignalLoose,
-} from "./convergenceSignal.js";
-import {
   pickNextDisposition,
-  buildStructuredSynthesisPrompt,
-  buildRoleDiffSynthesisPrompt,
   buildRoundRobinDeliverableSections,
   buildRoundRobinTurnPrompt,
 } from "./roundRobinPromptHelpers.js";
@@ -60,6 +41,12 @@ import {
   MultiWriterState,
   DEFAULT_CONFLICT_POLICIES,
 } from "./multiWriterState.js";
+import {
+  type RoundRobinSynthesisHost,
+  checkStructuredConvergence as checkStructuredConvergenceExtracted,
+  runStructuredSynthesisPass as runStructuredSynthesisPassExtracted,
+  runRoleDiffSynthesisPass as runRoleDiffSynthesisPassExtracted,
+} from "./roundRobinSynthesis.js";
 
 export interface RoundRobinOptions {
   // Unit 8: when set, every agent gets a per-index role prepended to its
@@ -179,26 +166,8 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
 
   private async seed(clonePath: string, cfg: RunConfig): Promise<void> {
     const tree = (await this.opts.repos.listTopLevel(clonePath)).slice(0, 200);
-    // 2026-05-02 (improvement #5): user directive is now honored. When
-    // present, surfaced at the TOP of the seed so every agent sees it
-    // before any tool call. Round-robin moves out of "analysis-only"
-    // status — the deliberation now drives toward a stated objective,
-    // not just open-ended commentary on the repo.
-    // 2026-05-03 (Phase A): directive block extracted to shared helper.
-    const dirCtx = readDirective(cfg);
-    const lines = [
-      `Project clone: ${clonePath}`,
-      `Repo: ${cfg.repoUrl}`,
-      `Top-level entries: ${tree.join(", ") || "(empty)"}`,
-      "",
-      ...buildDirectiveBlock(dirCtx, {
-        framingLines: [
-          "The deliberation should converge on a concrete plan / answer for the directive above. Treat it as the question every disposition is helping resolve.",
-        ],
-      }),
-      "Use your file-read / grep / find tools to actually inspect this repo — start with README.md if present.",
-    ];
-    this.appendSystem(lines.join("\n"), buildSeedSummary(cfg.repoUrl, clonePath, tree));
+    const { text, summary } = buildRoundRobinSeedMessage({ clonePath, cfg, tree });
+    this.appendSystem(text, summary);
   }
 
   private async loop(cfg: RunConfig): Promise<void> {
@@ -507,257 +476,43 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
     });
   }
 
-  // 2026-05-02 (round-robin improvement #3): semantic convergence
-  // check. Compares the LAST agent's turn this round to the SAME
-  // agent's turn last round. When >0.85 cosine similar (or 0.7 Jaccard
-  // when embedding unavailable), the discussion has settled. Pure
-  // server-side check — no LLM call required (just an embed call when
-  // semantic path fires). Best-effort: returns false on any failure
-  // so the loop continues.
+  private synthesisHost(): RoundRobinSynthesisHost {
+    return {
+      manager: this.opts.manager,
+      transcript: this.transcript,
+      ollamaBaseUrl: this.opts.ollamaBaseUrl,
+      getStopping: () => this.stopping,
+      getRoles: () => this.roles,
+      getTopology: () => this.active?.topology,
+      getProviderFailover: () => this.active?.providerFailover,
+      getRunId: () => this.active?.runId,
+      logDiag: this.opts.logDiag,
+      stats: this.stats,
+      appendSystem: (t) => this.appendSystem(t),
+      emit: (e) => this.opts.emit(e),
+      emitAgentState: (s) => this.emitAgentState(s),
+    };
+  }
+
+  // 2026-05-02 (round-robin improvement #3): semantic convergence check.
+  // Implementation extracted to roundRobinSynthesis.ts.
   private async checkStructuredConvergence(): Promise<boolean> {
-    const agents = this.opts.manager.list();
-    if (agents.length === 0) return false;
-    // The last agent's turn this round vs last round.
-    const agentEntries = this.transcript.filter(
-      (e) => e.role === "agent" && e.agentIndex === agents[agents.length - 1].index,
-    );
-    if (agentEntries.length < 2) return false;
-    const current = agentEntries[agentEntries.length - 1].text;
-    const prior = agentEntries[agentEntries.length - 2].text;
-    if (!current || !prior) return false;
-    const ollamaBaseUrl = this.opts.ollamaBaseUrl;
-    if (ollamaBaseUrl) {
-      const semantic = await detectSemanticConvergence({
-        prior,
-        current,
-        ollamaBaseUrl,
-        threshold: 0.85,
-      });
-      if (semantic !== null) {
-        this.appendSystem(
-          `[improvement #3] Convergence check: embedding cosine=${semantic.similarity.toFixed(3)} (threshold ${semantic.threshold.toFixed(3)})`,
-        );
-        return semantic.converged;
-      }
-    }
-    // Fallback: Jaccard when embedding model unavailable
-    const verdict = detectJaccardConvergence(prior, current, 0.7);
-    this.appendSystem(
-      `[improvement #3] Convergence check (Jaccard fallback): jaccard=${verdict.similarity.toFixed(3)} (threshold ${verdict.threshold})`,
-    );
-    return verdict.converged;
+    return checkStructuredConvergenceExtracted(this.synthesisHost());
   }
 
   // 2026-05-02 (round-robin improvement #4): final synthesis pass for
-  // the no-roles structured-deliberation case. Mirrors the role-diff
-  // version but uses buildStructuredSynthesisPrompt + tags as
-  // role_diff_synthesis (existing summary kind — UI rendering applies
-  // identically; could add a dedicated kind in a follow-up).
+  // the no-roles structured-deliberation case. Extracted to roundRobinSynthesis.ts.
   private async runStructuredSynthesisPass(
     cfg: RunConfig,
   ): Promise<"high" | "medium" | "low" | null> {
-    const agents = this.opts.manager.list();
-    const lead = agents.find((a) => a.index === 1);
-    if (!lead) return null;
-    if (this.stopping) return null;
-    this.opts.manager.markStatus(lead.id, "thinking");
-    this.emitAgentState({
-      id: lead.id,
-      index: lead.index,
-      port: lead.port,
-      sessionId: lead.sessionId,
-      status: "thinking",
-      thinkingSince: Date.now(),
-    });
-    this.stats.countTurn(lead.id);
-    this.appendSystem(`[improvement #4] Synthesizing structured deliberation (agent-${lead.index})…`);
-    const prompt = buildStructuredSynthesisPrompt(cfg.rounds, this.transcript, cfg.userDirective);
-    const controller = new AbortController();
-    const watchdog = startSseAwareTurnWatchdog({
-      manager: this.opts.manager,
-      sessionId: lead.sessionId,
-      controller,
-      abortSession: async () => {},
-    });
-    try {
-      const res = (await promptWithFailoverAuto(lead, prompt, {
-        signal: controller.signal,
-        manager: this.opts.manager,
-        onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
-        agentName: "swarm-read",
-        promptAddendum: getAgentAddendum(this.active?.topology, lead.index),
-        describeError: (e) => describeSdkError(e),
-      }, this.active?.providerFailover)) as { data: { parts: Array<{ type: "text"; text: string }> } };
-      const text = (res?.data?.parts?.find((p) => p.type === "text")?.text ?? "").trim();
-      if (text.length === 0) {
-        this.appendSystem(`[improvement #4] Synthesis returned empty response; skipping.`);
-        return null;
-      }
-      const stripped = stripAgentText(text);
-      const entry: TranscriptEntry = {
-        id: randomUUID(),
-        role: "agent",
-        agentId: lead.id,
-        agentIndex: lead.index,
-        text: stripped.finalText || "(empty response)",
-        ts: Date.now(),
-        // Tag with the existing role_diff_synthesis kind so the UI
-        // renders distinctively. role_diff_synthesis was the natural
-        // home; the disposition rotation is the structured-deliberation
-        // analog of role-diff's specialized roles. Could add a
-        // dedicated kind later.
-        summary: { kind: "role_diff_synthesis", rounds: cfg.rounds, roles: 0 },
-        ...(stripped.thoughts.length > 0 ? { thoughts: stripped.thoughts } : {}),
-        ...(stripped.toolCalls.length > 0 ? { toolCalls: stripped.toolCalls } : {}),
-      };
-      this.transcript.push(entry);
-      this.opts.emit({ type: "transcript_append", entry });
-      // 2026-05-03 (Phase A): convergence parser unified to shared module.
-      // The synthesis-pass path historically used a looser scanner (anywhere
-      // in text, not just trailing lines) so we keep that behavior here via
-      // parseConvergenceSignalLoose. The role-diff path below uses the strict
-      // trailing-3-lines parser via parseConvergenceSignal.
-      return parseConvergenceSignalLoose(text);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.appendSystem(`[improvement #4] Synthesis prompt failed (${msg})`);
-      return null;
-    } finally {
-      watchdog.cancel();
-      this.opts.manager.markStatus(lead.id, "ready");
-      this.emitAgentState({
-        id: lead.id,
-        index: lead.index,
-        port: lead.port,
-        sessionId: lead.sessionId,
-        status: "ready",
-      });
-    }
+    return runStructuredSynthesisPassExtracted(this.synthesisHost(), cfg);
   }
 
-  // detector). Tagged "role_diff_synthesis" so the modal can render
-  // it distinctively.
+  // Role-diff synthesis. Tagged "role_diff_synthesis". Extracted to roundRobinSynthesis.ts.
   private async runRoleDiffSynthesisPass(
     cfg: RunConfig,
   ): Promise<"high" | "medium" | "low" | null> {
-    if (!this.roles) return null;
-    const agents = this.opts.manager.list();
-    const lead = agents.find((a) => a.index === 1);
-    if (!lead) return null;
-    this.opts.manager.markStatus(lead.id, "thinking");
-    this.emitAgentState({
-      id: lead.id,
-      index: lead.index,
-      port: lead.port,
-      sessionId: lead.sessionId,
-      status: "thinking",
-      thinkingSince: Date.now(),
-    });
-    this.stats.countTurn(lead.id);
-    this.appendSystem(`Synthesizing role-diff findings (agent-${lead.index})…`);
-
-    const prompt = buildRoleDiffSynthesisPrompt(this.roles, this.transcript);
-    // 2026-04-27: SSE-aware watchdog (see startSseAwareTurnWatchdog).
-    const controller = new AbortController();
-    const watchdog = startSseAwareTurnWatchdog({
-      manager: this.opts.manager,
-      sessionId: lead.sessionId,
-      controller,
-      abortSession: async () => {},
-    });
-    try {
-      const res = await promptWithFailoverAuto(lead, prompt, {
-        signal: controller.signal,
-        manager: this.opts.manager,
-        onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(lead.id, promptTokens, responseTokens),
-        agentName: "swarm-read",
-        // Phase 5b of #243: per-agent addendum from the topology row.
-        promptAddendum: getAgentAddendum(this.active?.topology, lead.index),
-        describeError: (e) => describeSdkError(e),
-        onTiming: ({ attempt, elapsedMs, success }) => {
-          this.stats.onTiming(lead.id, success, elapsedMs);
-          this.opts.manager.recordPromptComplete(lead.id, { attempt, elapsedMs, success });
-          this.opts.emit({
-            type: "agent_latency_sample",
-            agentId: lead.id,
-            agentIndex: lead.index,
-            attempt,
-            elapsedMs,
-            success,
-            ts: Date.now(),
-          });
-        },
-        onRetry: ({ attempt, max, reasonShort, delayMs }) => {
-          this.stats.onRetry(lead.id);
-          this.appendSystem(
-            `[${lead.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
-          );
-        },
-      }, this.active?.providerFailover);
-      const diagCtx = {
-        runner: "role-diff",
-        agentId: lead.id,
-        agentIndex: lead.index,
-        logDiag: this.opts.logDiag,
-        manager: this.opts.manager,
-        signal: controller.signal,
-        runId: this.active?.runId,
-      };
-      const extracted = extractTextWithDiag(res, diagCtx);
-      let text = extracted.text;
-      if ((extracted.isEmpty || looksLikeJunk(text)) && !this.stopping) {
-        const retryText = await retryEmptyResponse(lead, prompt, "swarm-read", diagCtx);
-        if (retryText !== null) text = retryText;
-      }
-      // Task #115: track Pattern 8 stuck-loop, warn on threshold.
-      trackPostRetryJunk(text, {
-        agentId: lead.id,
-        recordJunkPostRetry: (id, j) => this.stats.recordJunkPostRetry(id, j),
-        appendSystem: (msg) => this.appendSystem(msg),
-      });
-      // Task #108: defensive guard — see CouncilRunner.runSynthesisPass.
-      const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
-      // #230: strip <think> + XML pseudo-tool-call markers first.
-      const strippedSyn = stripAgentText(text);
-      const entry: TranscriptEntry = {
-        id: randomUUID(),
-        role: "agent",
-        agentId: lead.id,
-        agentIndex: lead.index,
-        text: strippedSyn.finalText || "(empty response)",
-        ts: Date.now(),
-        summary: isJunkSynthesis
-          ? undefined
-          : { kind: "role_diff_synthesis", rounds: cfg.rounds, roles: this.roles.length },
-        ...(strippedSyn.thoughts.length > 0 ? { thoughts: strippedSyn.thoughts } : {}),
-        ...(strippedSyn.toolCalls.length > 0 ? { toolCalls: strippedSyn.toolCalls } : {}),
-      };
-      this.transcript.push(entry);
-      this.opts.emit({ type: "transcript_append", entry });
-      if (isJunkSynthesis) {
-        this.appendSystem(
-          `[${lead.id}] role-diff synthesis text is degenerate (${text.length} chars) — kept in transcript but NOT tagged as canonical synthesis.`,
-        );
-        return null;
-      }
-      return parseConvergenceSignal(text);
-    } catch (err) {
-      this.appendSystem(
-        `[${lead.id}] role-diff synthesis failed (${err instanceof Error ? err.message : String(err)}); skipping consolidation.`,
-      );
-      return null;
-    } finally {
-      watchdog.cancel();
-      this.opts.manager.markStatus(lead.id, "ready");
-      this.emitAgentState({
-        id: lead.id,
-        index: lead.index,
-        port: lead.port,
-        sessionId: lead.sessionId,
-        status: "ready",
-        lastMessageAt: Date.now(),
-      });
-    }
+    return runRoleDiffSynthesisPassExtracted(this.synthesisHost(), cfg);
   }
 
   private buildPrompt(agent: Agent, round: number, totalRounds: number): string {

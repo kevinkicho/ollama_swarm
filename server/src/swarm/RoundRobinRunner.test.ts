@@ -292,13 +292,19 @@ test("RoundRobinRunner.loop — final synthesis fires for no-roles when not earl
 test("(#5 + Phase A) seed uses readDirective + buildDirectiveBlock helpers", () => {
   assert.match(
     RUNNER_SRC,
+    /buildRoundRobinSeedMessage/,
+    "seed must call buildRoundRobinSeedMessage",
+  );
+  const seedSrc = readFileSync(join(__dirname, "roundRobinSeed.ts"), "utf8");
+  assert.match(
+    seedSrc,
     /readDirective\(cfg\)/,
-    "seed must call readDirective(cfg) via shared helper",
+    "seed module must call readDirective(cfg) via shared helper",
   );
   assert.match(
-    RUNNER_SRC,
+    seedSrc,
     /buildDirectiveBlock\(/,
-    "seed must call buildDirectiveBlock via shared helper",
+    "seed module must call buildDirectiveBlock via shared helper",
   );
 });
 
@@ -334,9 +340,10 @@ test("(#5) buildPrompt swaps generic goals for directive-driven goals when direc
 });
 
 test("(#5) runStructuredSynthesisPass passes cfg.userDirective into prompt builder", () => {
+  const synthSrc = readFileSync(join(__dirname, "roundRobinSynthesis.ts"), "utf8");
   assert.match(
-    RUNNER_SRC,
-    /buildStructuredSynthesisPrompt\(cfg\.rounds, this\.transcript, cfg\.userDirective\)/,
+    synthSrc,
+    /buildStructuredSynthesisPrompt\(cfg\.rounds, (?:this|host)\.transcript, cfg\.userDirective\)/,
     "synthesis must thread the directive into the builder",
   );
 });
