@@ -35,6 +35,7 @@ function makeMockOpts(): {
     killAgent: async () => {},
     toStates: () => [...agentStates.values()],
     getPartialStreams: () => ({}),
+    getActivitySnapshot: () => ({}),
     recordAgentState: (s: any) => { agentStates.set(s.id, s); },
     markStatus: (id: string, status: string, meta?: any) => {
       const existing = agentStates.get(id);
@@ -205,10 +206,12 @@ describe("BlackboardRunner — lifecycle state transitions", () => {
       assert.equal((runner as any).lifecycleState, "draining");
     });
 
-    it("escalates to stop immediately when drain is not eligible (planning)", async () => {
+    it("escalates to stop immediately when drain is not eligible (idle)", async () => {
+      // Soft-drain is eligible during planning/discussing/executing; only
+      // terminal/idle phases escalate to hard stop immediately.
       const { opts } = makeMockOpts();
       const runner = new BlackboardRunner(opts);
-      (runner as any).phase = "planning";
+      (runner as any).phase = "idle";
       (runner as any).lifecycleState = "running";
       (runner as any).active = MINIMAL_CFG;
       (runner as any).boardCounts = () => ({ open: 0, claimed: 0, committed: 0, stale: 0, skipped: 0 });

@@ -206,8 +206,9 @@ describe("parseWorkerResponse — rejections (v2 hunks)", () => {
   });
 
   it("rejects an unknown op", () => {
+    // delete is a valid op; use a nonsense op for the rejection path.
     const raw = JSON.stringify({
-      hunks: [{ op: "delete", file: "a.ts" }],
+      hunks: [{ op: "explode", file: "a.ts" }],
     });
     const r = parseWorkerResponse(raw, ["a.ts"]);
     expectErr(r, /op/);
