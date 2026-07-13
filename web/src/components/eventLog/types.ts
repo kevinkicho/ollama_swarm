@@ -15,6 +15,11 @@ export interface EventLogResponse {
   malformed: number;
   sources: string[];
   totalRecords: number;
+  /** Total runs before server limit/offset (when paginated). */
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
   logDir?: string;
   eventLogPath?: string;
   archivesTotal?: number;

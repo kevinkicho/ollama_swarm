@@ -53,7 +53,18 @@ export function RunListView({
           <span className="text-ink-700">·</span>
           <span className="text-ink-400">
             {display.length} segment{display.length === 1 ? "" : "s"}
+            {typeof data.total === "number" && data.total > display.length
+              ? ` (of ${data.total})`
+              : ""}
           </span>
+          {data.hasMore ? (
+            <>
+              <span className="text-ink-700">·</span>
+              <span className="text-amber-400/90" title="Server returned a limited page; refresh loads the latest window">
+                more on server
+              </span>
+            </>
+          ) : null}
           {data.malformed > 0 ? (
             <>
               <span className="text-ink-700">·</span>

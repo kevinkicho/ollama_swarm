@@ -58,6 +58,9 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | Debug Log list O(bytes) | Scanning every debug.jsonl | **Done:** `debug.meta.json` sidecar + optional `?limit=&offset=` |
 | Brain RECONFIG after stop | Button hidden on terminal phase | **Done:** soft-terminal + 90s grace; deferred sessionStorage on 404 |
 | conflictPolicy unused in UI | multi only | **Done:** SetupForm conflict policy when writeMode=multi |
+| Deferred RECONFIG not applied | sessionStorage only on 404 | **Done:** next Start merges cap/rounds/token from deferred patch |
+| Rotated debug ignored | List/replay only current debug.jsonl | **Done:** merge debug-*.jsonl.gz into replay + index |
+| Debug Log first paint | Full list always | **Done:** client fetches `?limit=40` |
 
 ## P2 — product / security / polish
 

@@ -34,6 +34,10 @@ export const PER_RUN_INDEX_HEAD_BYTES = 256 * 1024;
 export const PER_RUN_INDEX_TAIL_BYTES = 768 * 1024;
 /** In-memory cache TTL for buildEventLogRunList (ms). */
 export const EVENT_LOG_LIST_CACHE_TTL_MS = 45_000;
+/** Max total bytes when merging rotated debug segments for replay. */
+export const PER_RUN_REPLAY_MAX_BYTES = 12 * 1024 * 1024;
+/** Max rotated debug archives to merge (oldest first, newest last). */
+export const PER_RUN_ROTATED_ARCHIVE_LIMIT = 20;
 
 const EVENT_TYPE_RE = /"type"\s*:\s*"([^"\\]+)"/;
 
@@ -394,16 +398,49 @@ async function indexLargePerRunDebugLog(
   return { lineCount: metrics.lineCount, derived };
 }
 
+/** List rotated debug segments for a run dir (debug-*.jsonl / .gz), oldest first. */
+export async function listRotatedDebugSegments(
+  runDir: string,
+): Promise<Array<{ name: string; path: string; size: number; mtimeMs: number }>> {
+  let names: string[] = [];
+  try {
+    names = await fs.readdir(runDir);
+  } catch {
+    return [];
+  }
+  const segs: Array<{ name: string; path: string; size: number; mtimeMs: number }> = [];
+  for (const name of names) {
+    if (!/^debug-.+\.jsonl(\.gz)?$/i.test(name)) continue;
+    const p = path.join(runDir, name);
+    try {
+      const st = await fs.stat(p);
+      if (!st.isFile()) continue;
+      segs.push({ name, path: p, size: st.size, mtimeMs: st.mtimeMs });
+    } catch {
+      /* skip */
+    }
+  }
+  segs.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  return segs.slice(-PER_RUN_ROTATED_ARCHIVE_LIMIT);
+}
+
 async function indexOnePerRunDebugLog(
   logDir: string,
   runId: string,
 ): Promise<PerRunDebugIndexEntry | null> {
-  const debugPath = path.join(logDir, runId, "debug.jsonl");
+  const runDir = path.join(logDir, runId);
+  const debugPath = path.join(runDir, "debug.jsonl");
   try {
     const st = await fs.stat(debugPath);
+    const rotated = await listRotatedDebugSegments(runDir);
+    const rotatedBytes = rotated.reduce((s, r) => s + r.size, 0);
+    const totalBytes = st.size + rotatedBytes;
+
     // PR1: prefer sidecar when fresh (avoids scanning multi-MB debug.jsonl).
-    const fromMeta = await tryReadDebugMetaSidecar(logDir, runId, st.mtimeMs, st.size);
-    if (fromMeta && fromMeta.lineCount > 0) return fromMeta;
+    const fromMeta = await tryReadDebugMetaSidecar(logDir, runId, st.mtimeMs, totalBytes);
+    if (fromMeta && fromMeta.lineCount > 0) {
+      return { ...fromMeta, bytes: Math.max(fromMeta.bytes, totalBytes) };
+    }
 
     let lineCount = 0;
     let derived: DerivedRunState | null = null;
@@ -420,12 +457,31 @@ async function indexOnePerRunDebugLog(
         lineCount = large.lineCount;
         derived = large.derived;
       }
+      // PR4: account for rotated archives in lineCount (estimate by streaming metrics
+      // would be expensive; add gzip/jsonl line counts for small archives only).
+      for (const seg of rotated) {
+        if (seg.size > PER_RUN_INDEX_FULL_READ_MAX_BYTES) {
+          // Cheap estimate: ~200 bytes/line average for JSONL events
+          lineCount += Math.max(1, Math.floor(seg.size / 200));
+          continue;
+        }
+        try {
+          const buf = await fs.readFile(seg.path);
+          const text = seg.name.endsWith(".gz")
+            ? zlib.gunzipSync(buf).toString("utf8")
+            : buf.toString("utf8");
+          const n = text.split("\n").filter((l) => l.trim().length > 0).length;
+          lineCount += n;
+        } catch {
+          lineCount += Math.max(1, Math.floor(seg.size / 200));
+        }
+      }
     } catch {
       lineCount = 0;
     }
     const entry: PerRunDebugIndexEntry = {
       runId,
-      bytes: st.size,
+      bytes: totalBytes,
       mtimeMs: st.mtimeMs,
       lineCount,
       derived,
@@ -436,7 +492,46 @@ async function indexOnePerRunDebugLog(
     }
     return entry;
   } catch {
-    return null;
+    // No current debug.jsonl — try rotated-only (run fully archived).
+    try {
+      const rotated = await listRotatedDebugSegments(runDir);
+      if (rotated.length === 0) return null;
+      const last = rotated[rotated.length - 1]!;
+      return {
+        runId,
+        bytes: rotated.reduce((s, r) => s + r.size, 0),
+        mtimeMs: last.mtimeMs,
+        lineCount: Math.max(1, Math.floor(rotated.reduce((s, r) => s + r.size, 0) / 200)),
+        derived: {
+          runId,
+          errors: [],
+          transcriptCount: 0,
+          agentStateUpdates: 0,
+          agentActivityEvents: 0,
+          activityTimeline: [],
+          hasSummary: false,
+          phaseTimeline: [],
+          eventTypeCounts: {},
+          modelShiftCount: 0,
+          brainFallbackCount: 0,
+          todoClaimed: 0,
+          todoFailed: 0,
+          todoReplanned: 0,
+          todoSkipped: 0,
+          streamingEventCount: 0,
+          streamingEndCount: 0,
+          amendmentCount: 0,
+          conformanceSampleCount: 0,
+          driftSampleCount: 0,
+          coldStartCount: 0,
+          streamAnomalies: [],
+          anomalyFlags: ["rotated-only"],
+          finalPhase: "archived",
+        },
+      };
+    } catch {
+      return null;
+    }
   }
 }
 
@@ -457,14 +552,55 @@ export async function readPerRunDebugLog(
   logDir: string,
   runId: string,
 ): Promise<{ records: LoggedRecord[]; malformed: ReadAllEventLogsResult["malformed"]; path: string } | null> {
-  const debugPath = path.join(logDir, runId, "debug.jsonl");
+  const runDir = path.join(logDir, runId);
+  const debugPath = path.join(runDir, "debug.jsonl");
+  const rotated = await listRotatedDebugSegments(runDir);
+
+  // PR4: merge oldest rotated → newest, then current debug.jsonl, with byte budget
+  // (prefer the end of the run for timeline usefulness).
+  const parts: Array<{ path: string; size: number }> = [
+    ...rotated.map((r) => ({ path: r.path, size: r.size })),
+  ];
   try {
-    const raw = await fs.readFile(debugPath, "utf8");
-    const { records, malformed } = parseEventLog(raw);
-    return { records, malformed, path: debugPath };
+    const st = await fs.stat(debugPath);
+    parts.push({ path: debugPath, size: st.size });
   } catch {
-    return null;
+    /* current may be missing after full rotation */
   }
+  if (parts.length === 0) return null;
+
+  let budget = PER_RUN_REPLAY_MAX_BYTES;
+  const selected: Array<{ path: string; size: number }> = [];
+  // Walk newest → oldest so we keep the tail under budget.
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]!;
+    if (budget <= 0) break;
+    if (p.size > budget && selected.length > 0) break;
+    selected.unshift(p);
+    budget -= p.size;
+  }
+
+  const allRecords: LoggedRecord[] = [];
+  const allMalformed: ReadAllEventLogsResult["malformed"] = [];
+  for (const part of selected) {
+    try {
+      const buf = await fs.readFile(part.path);
+      const text = part.path.endsWith(".gz")
+        ? zlib.gunzipSync(buf, { maxOutputLength: PER_RUN_REPLAY_MAX_BYTES }).toString("utf8")
+        : buf.toString("utf8");
+      const { records, malformed } = parseEventLog(text);
+      allRecords.push(...records);
+      allMalformed.push(...malformed);
+    } catch {
+      /* skip bad segment */
+    }
+  }
+  if (allRecords.length === 0) return null;
+  return {
+    records: allRecords,
+    malformed: allMalformed,
+    path: selected.map((s) => s.path).join("|"),
+  };
 }
 
 export interface MergedRunEntry {

@@ -8,6 +8,11 @@ import type { Topology } from "../../../shared/src/topology";
 import { detectProvider, type Provider } from "../../../shared/src/providers";
 import { loadRecentRuns, saveRecentRun, type RecentRun } from "../components/setup/RecentRuns";
 import { apiFetch } from "../lib/apiFetch";
+import {
+  applyDeferredReconfigToStartFields,
+  clearDeferredReconfig,
+  readDeferredReconfig,
+} from "../lib/deferredReconfig";
 
 // Minimal surface to keep the thin SetupForm working.
 // Full logic can be expanded here later.
@@ -228,13 +233,36 @@ export function useSetupForm(navigate: (path: string) => void) {
         maturity === "experimental"
         || maturity === "research"
         || writeMode === "multi";
+
+      // Brain RECONFIG deferred after a finished run — fold into start fields.
+      let startRounds = roundsInput;
+      let startWallMin = wallClockCapMin;
+      let startTokenBudget: number | undefined;
+      const deferred = readDeferredReconfig();
+      if (deferred?.patch) {
+        const merged = applyDeferredReconfigToStartFields({
+          rounds: startRounds,
+          wallClockCapMin: startWallMin,
+          patch: deferred.patch,
+        });
+        startRounds = merged.rounds;
+        startWallMin = merged.wallClockCapMin;
+        startTokenBudget = merged.tokenBudget;
+        if (merged.applied.length > 0) {
+          // Reflect in form so the user sees what will be used.
+          setRoundsInput(startRounds);
+          setWallClockCapMin(startWallMin);
+        }
+        clearDeferredReconfig();
+      }
+
       const payload = {
         repoUrl,
         parentPath,
         preset: preset.id,
         model,
         agentCount,
-        rounds: roundsInput,
+        rounds: startRounds,
         // Server fail-closed for experimental/research unless acknowledged.
         ...(needsExperimentalAck ? { allowExperimental: true } : {}),
         ...(writeMode && writeMode !== "none" ? { writeMode } : {}),
@@ -259,9 +287,12 @@ export function useSetupForm(navigate: (path: string) => void) {
         workerModel: workerModel || undefined,
         auditorModel: auditorModel || undefined,
         // Convert UI strings to server-expected units (ms for cap, number for tiers)
-        wallClockCapMs: wallClockCapMin && Number(wallClockCapMin) > 0
-          ? Number(wallClockCapMin) * 60 * 1000
+        wallClockCapMs: startWallMin && Number(startWallMin) > 0
+          ? Number(startWallMin) * 60 * 1000
           : undefined,
+        ...(startTokenBudget && startTokenBudget > 0
+          ? { tokenBudget: startTokenBudget }
+          : {}),
         ambitionTiers: ambitionTiers ? Number(ambitionTiers) : undefined,
       };
       const res = await apiFetch("/api/swarm/start", {

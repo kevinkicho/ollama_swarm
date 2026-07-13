@@ -33,7 +33,9 @@ export const EventLogPanel = memo(function EventLogPanel() {
     const ctrl = new AbortController();
     setLoading(true);
     setError(null);
-    apiFetch("/api/v2/event-log/runs", { signal: ctrl.signal })
+    // Server-side limit keeps first paint fast on fleets with 100+ run dirs;
+    // client RunListView still pages 5/page for UX.
+    apiFetch("/api/v2/event-log/runs?limit=40&offset=0", { signal: ctrl.signal })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return (await r.json()) as EventLogResponse;

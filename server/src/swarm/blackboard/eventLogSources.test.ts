@@ -13,7 +13,10 @@ import {
   writeDebugMetaSidecar,
   tryReadDebugMetaSidecar,
   indexPerRunDebugLogs,
+  listRotatedDebugSegments,
+  readPerRunDebugLog,
 } from "./eventLogSources.js";
+import zlib from "node:zlib";
 
 describe("readAllEventLogs", () => {
   it("reads rotated .jsonl.gz archives before current.jsonl", async () => {
@@ -187,6 +190,49 @@ describe("buildEventLogRunList", () => {
       assert.equal(archived!.derived.durationMs, 8_000);
       assert.equal(archived!.derived.transcriptCount, fillerCount);
       assert.equal(archived!.recordCount, fillerCount + 2);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("rotated debug merge (PR4)", () => {
+  it("lists rotated segments and merges them into replay", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "evt-rot-"));
+    try {
+      const runId = "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff";
+      const runDir = path.join(dir, runId);
+      await fs.mkdir(runDir, { recursive: true });
+      const oldLine =
+        JSON.stringify({
+          ts: 1_000,
+          event: { type: "run_started", runId, preset: "blackboard" },
+        }) + "\n";
+      const midLine =
+        JSON.stringify({
+          ts: 2_000,
+          event: { type: "transcript_append", role: "system", text: "mid" },
+        }) + "\n";
+      const curLine =
+        JSON.stringify({
+          ts: 3_000,
+          event: { type: "run_summary", summary: { stopReason: "completed" } },
+        }) + "\n";
+      await fs.writeFile(
+        path.join(runDir, "debug-2026-01-01T00-00-00-000Z.jsonl.gz"),
+        zlib.gzipSync(Buffer.from(oldLine + midLine, "utf8")),
+      );
+      await fs.writeFile(path.join(runDir, "debug.jsonl"), curLine, "utf8");
+
+      const segs = await listRotatedDebugSegments(runDir);
+      assert.equal(segs.length, 1);
+
+      const replay = await readPerRunDebugLog(dir, runId);
+      assert.ok(replay);
+      assert.ok(replay!.records.length >= 2);
+      const types = replay!.records.map((r) => (r.event as { type?: string }).type);
+      assert.ok(types.includes("run_started"));
+      assert.ok(types.includes("run_summary"));
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

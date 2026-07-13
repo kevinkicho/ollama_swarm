@@ -8,6 +8,7 @@ import {
   formatReconfigLabel,
 } from "../brainChat/chatHelpers";
 import type { RunReconfigPatch } from "../brainChat/types";
+import { writeDeferredReconfig } from "../../lib/deferredReconfig";
 
 /** How long after a hard terminal phase we still offer Apply (ms). */
 const TERMINAL_RECONFIG_GRACE_MS = 90_000;
@@ -85,16 +86,9 @@ export function BrainSuggestionBubble({
         const msg = (data as { error?: string }).error ?? res.statusText;
         // Persist for next start when the run already finished.
         if (res.status === 404 || /no active run/i.test(msg)) {
-          try {
-            sessionStorage.setItem(
-              "swarm:deferredReconfig",
-              JSON.stringify({ runId, patch: reconfig, at: Date.now() }),
-            );
-          } catch {
-            /* ignore */
-          }
+          writeDeferredReconfig({ runId, patch: reconfig, at: Date.now() });
           throw new Error(
-            "Run already finished — saved patch for next start (see setup refill).",
+            "Run already finished — saved for next Start (wall-clock/rounds/token).",
           );
         }
         throw new Error(msg);

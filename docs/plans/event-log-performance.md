@@ -107,22 +107,11 @@ Maintain `logs/event-log-index.json` (or `.jsonl`) rebuilt incrementally:
 
 ---
 
-### PR4 — Rotated debug segment merge
+### PR4 — Rotated debug segment merge — **Done**
 
-**Goal:** Correct list + replay when a single run rotates `debug.jsonl`.
-
-`createDebugSink` already rotates at `DEBUG_MAX_BYTES` (25 MB default) to
-`debug-<iso>.jsonl.gz`, but list/replay today only read active `debug.jsonl`.
-
-- **Index:** sum line counts across `debug.jsonl` + `debug-*.jsonl.gz`
-- **Replay:** merge segments tail-to-head with a byte budget (mirror archive replay)
-
-**Touchpoints:**
-
-- `server/src/services/RunEventHub.ts`
-- `eventLogSources.ts` (`findRunReplay`, `readPerRunDebugLog`)
-
-**Effort:** ~1–2 PRs · **Impact:** long autonomous runs; correctness.
+`listRotatedDebugSegments` + `readPerRunDebugLog` merge
+`debug-*.jsonl(.gz)` then current `debug.jsonl` under a 12 MB budget.
+Index includes rotated byte/line estimates in per-run list rows.
 
 ---
 
