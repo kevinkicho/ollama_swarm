@@ -22,6 +22,7 @@ export const EventLogPanel = memo(function EventLogPanel() {
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
   const [detail, setDetail] = useState<RunDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailLoadingOlder, setDetailLoadingOlder] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<"all" | EventCategory>("all");
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -68,8 +69,9 @@ export const EventLogPanel = memo(function EventLogPanel() {
     const ctrl = new AbortController();
     setDetailLoading(true);
     setDetailError(null);
+    // PR5: first page = newest 400 events (server default).
     const url = detailTarget.runId
-      ? `/api/v2/event-log/runs/${encodeURIComponent(detailTarget.runId)}`
+      ? `/api/v2/event-log/runs/${encodeURIComponent(detailTarget.runId)}?limit=400`
       : `/api/v2/event-log/slices/${detailTarget.sliceIndex}`;
     apiFetch(url, { signal: ctrl.signal })
       .then(async (r) => {
@@ -93,6 +95,47 @@ export const EventLogPanel = memo(function EventLogPanel() {
       });
     return () => ctrl.abort();
   }, [open, detailTarget, refreshNonce]);
+
+  const loadOlderDetail = useCallback(async () => {
+    if (!detailTarget?.runId || !detail?.oldestTs || detailLoadingOlder) return;
+    setDetailLoadingOlder(true);
+    setDetailError(null);
+    try {
+      const url =
+        `/api/v2/event-log/runs/${encodeURIComponent(detailTarget.runId)}`
+        + `?limit=400&beforeTs=${detail.oldestTs}`;
+      const r = await apiFetch(url);
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `HTTP ${r.status}`);
+      }
+      const j = (await r.json()) as RunDetailResponse;
+      setDetail((prev) => {
+        if (!prev) {
+          return { ...j, derived: normalizeDerived(j.derived) };
+        }
+        const seen = new Set(prev.records.map((x) => `${x.ts}:${x.event.type}`));
+        const merged = [
+          ...j.records.filter((x) => !seen.has(`${x.ts}:${x.event.type}`)),
+          ...prev.records,
+        ];
+        merged.sort((a, b) => a.ts - b.ts);
+        return {
+          ...prev,
+          ...j,
+          derived: normalizeDerived(j.derived),
+          records: merged,
+          hasMoreOlder: j.hasMoreOlder,
+          oldestTs: j.oldestTs ?? prev.oldestTs,
+          newestTs: prev.newestTs ?? j.newestTs,
+        };
+      });
+    } catch (e) {
+      setDetailError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDetailLoadingOlder(false);
+    }
+  }, [detail, detailLoadingOlder, detailTarget]);
 
   const closeDetail = useCallback(() => {
     setDetailTarget(null);
@@ -149,11 +192,17 @@ export const EventLogPanel = memo(function EventLogPanel() {
               <RunDetailView
                 detail={detail}
                 loading={detailLoading}
+                loadingOlder={detailLoadingOlder}
                 error={detailError}
                 categoryFilter={categoryFilter}
                 onCategoryFilter={setCategoryFilter}
                 logDir={detail?.logDir ?? data?.logDir}
                 onViewRun={openRunInMainView}
+                onLoadOlder={
+                  detail?.hasMoreOlder && detailTarget?.runId
+                    ? () => void loadOlderDetail()
+                    : undefined
+                }
               />
             ) : loading ? (
               <div className="text-ink-400 text-sm italic">Loading…</div>

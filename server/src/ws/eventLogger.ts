@@ -49,6 +49,9 @@ function maybeRotate(logPath: string): string | null {
     fs.renameSync(logPath, archived);
     // Compress rotated file (.jsonl.gz) to save space (one of the log/prune recommendations)
     const gzPath = `${archived}.gz`;
+    const archiveBase = path.basename(gzPath);
+    // PR6: index run_started from the plain jsonl before gzip (cheap head scan).
+    void indexRotatedArchiveForRuns(dir, archived, archiveBase).catch(() => {});
     pipeline(fs.createReadStream(archived), createGzip(), fs.createWriteStream(gzPath))
       .then(() => { try { fs.unlinkSync(archived); } catch {} })
       .catch((e) => rootLogger.warn('log-gz-compress-failed', { archived, error: e?.message }));
@@ -57,6 +60,58 @@ function maybeRotate(logPath: string): string | null {
   } catch {
     // ENOENT (no log yet) or other → first run, no rotation needed.
     return null;
+  }
+}
+
+/** Scan rotated plain jsonl head for run_started → archives-index.jsonl. */
+async function indexRotatedArchiveForRuns(
+  logDir: string,
+  plainArchivePath: string,
+  archiveName: string,
+): Promise<void> {
+  try {
+    const { createReadStream: crs } = await import("node:fs");
+    const readline = await import("node:readline");
+    const { appendArchiveIndexHits } = await import(
+      "../swarm/blackboard/eventLogIndex.js"
+    );
+    const hits: Array<{
+      archive: string;
+      runId: string;
+      startedAt: number;
+      preset?: string;
+    }> = [];
+    const rl = readline.createInterface({
+      input: crs(plainArchivePath, { encoding: "utf8" }),
+      crlfDelay: Infinity,
+    });
+    let bytes = 0;
+    const maxBytes = 512 * 1024;
+    for await (const line of rl) {
+      bytes += line.length + 1;
+      if (bytes > maxBytes) break;
+      if (!line.includes('"run_started"')) continue;
+      try {
+        const parsed = JSON.parse(line) as {
+          ts: number;
+          event: { type: string; runId?: string; preset?: string };
+        };
+        if (parsed.event?.type === "run_started" && parsed.event.runId) {
+          hits.push({
+            archive: archiveName,
+            runId: parsed.event.runId,
+            startedAt: parsed.ts,
+            preset: parsed.event.preset,
+          });
+        }
+      } catch {
+        /* skip */
+      }
+    }
+    rl.close();
+    if (hits.length > 0) await appendArchiveIndexHits(logDir, hits);
+  } catch {
+    /* best effort */
   }
 }
 

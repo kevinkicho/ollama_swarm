@@ -61,6 +61,9 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | Deferred RECONFIG not applied | sessionStorage only on 404 | **Done:** next Start merges cap/rounds/token from deferred patch |
 | Rotated debug ignored | List/replay only current debug.jsonl | **Done:** merge debug-*.jsonl.gz into replay + index |
 | Debug Log first paint | Full list always | **Done:** client fetches `?limit=40` |
+| Event log cold rescan | 45s cache only | **Done:** `event-log-index.json` mtime cache |
+| Archive gunzip every open | 40 gz heads | **Done:** `archives-index.jsonl` on rotation |
+| Drill-down OOM | Full run load | **Done:** `?limit=&beforeTs=` + load older UI |
 
 ## P2 — product / security / polish
 

@@ -544,7 +544,54 @@ export async function indexPerRunDebugLogs(logDir: string): Promise<PerRunDebugI
   }
 
   const runIds = entries.filter((e) => e.isDirectory() && UUID_DIR.test(e.name)).map((e) => e.name);
-  const indexed = await Promise.all(runIds.map((id) => indexOnePerRunDebugLog(logDir, id)));
+
+  // PR3: persistent event-log-index.json — skip rescan when mtime matches.
+  const {
+    loadEventLogIndex,
+    saveEventLogIndex,
+    entryFromIndex,
+    upsertIndexEntry,
+  } = await import("./eventLogIndex.js");
+  const diskIndex = await loadEventLogIndex(logDir);
+  let indexDirty = false;
+
+  const indexed = await Promise.all(
+    runIds.map(async (id) => {
+      const debugPath = path.join(logDir, id, "debug.jsonl");
+      try {
+        const st = await fs.stat(debugPath);
+        const cached = diskIndex.perRun[id];
+        if (cached && Math.abs(cached.mtimeMs - st.mtimeMs) < 2_000 && cached.lineCount > 0) {
+          return entryFromIndex(cached);
+        }
+      } catch {
+        /* fall through to full index */
+      }
+      const entry = await indexOnePerRunDebugLog(logDir, id);
+      if (entry) {
+        upsertIndexEntry(diskIndex, entry);
+        indexDirty = true;
+      }
+      return entry;
+    }),
+  );
+
+  // Drop index rows for deleted run dirs
+  const live = new Set(runIds);
+  for (const id of Object.keys(diskIndex.perRun)) {
+    if (!live.has(id)) {
+      delete diskIndex.perRun[id];
+      indexDirty = true;
+    }
+  }
+  if (indexDirty) {
+    try {
+      await saveEventLogIndex(logDir, diskIndex);
+    } catch {
+      /* best effort */
+    }
+  }
+
   return indexed.filter((e): e is PerRunDebugIndexEntry => e != null).sort((a, b) => b.mtimeMs - a.mtimeMs);
 }
 
@@ -716,7 +763,54 @@ async function buildEventLogRunListUncached(
     });
   }
 
-  const indexArchives = archives.slice(-ARCHIVE_INDEX_LIMIT);
+  // PR6: prefer archives-index.jsonl; only gunzip heads for unindexed archives.
+  const { loadArchiveIndexHits, appendArchiveIndexHits } = await import("./eventLogIndex.js");
+  const archiveIndex = await loadArchiveIndexHits(logDir);
+  for (const hit of archiveIndex.values()) {
+    if (seen.has(hit.runId)) continue;
+    seen.add(hit.runId);
+    runs.push({
+      sliceIndex: sliceIndex++,
+      derived: {
+        errors: [],
+        transcriptCount: 0,
+        agentStateUpdates: 0,
+        agentActivityEvents: 0,
+        activityTimeline: [],
+        hasSummary: false,
+        phaseTimeline: [],
+        eventTypeCounts: { run_started: 1 },
+        modelShiftCount: 0,
+        brainFallbackCount: 0,
+        todoClaimed: 0,
+        todoFailed: 0,
+        todoReplanned: 0,
+        todoSkipped: 0,
+        streamingEventCount: 0,
+        streamingEndCount: 0,
+        amendmentCount: 0,
+        conformanceSampleCount: 0,
+        driftSampleCount: 0,
+        coldStartCount: 0,
+        streamAnomalies: [],
+        anomalyFlags: [],
+        runId: hit.runId,
+        preset: hit.preset,
+        startedAt: hit.startedAt,
+        finalPhase: "archived",
+      } satisfies DerivedRunState,
+      recordCount: 1,
+      isSessionBoundary: false,
+      source: "archive-index",
+    });
+  }
+
+  const indexedArchiveNames = new Set(
+    [...archiveIndex.values()].map((h) => h.archive),
+  );
+  const indexArchives = archives
+    .slice(-ARCHIVE_INDEX_LIMIT)
+    .filter((name) => !indexedArchiveNames.has(name));
   const archiveHits = await Promise.all(
     indexArchives.map(async (name) => {
       const filePath = path.join(logDir, name);
@@ -732,7 +826,19 @@ async function buildEventLogRunListUncached(
         } else {
           text = buf.toString("utf8");
         }
-        return parseArchiveRunStartedLines(text);
+        const hits = parseArchiveRunStartedLines(text);
+        if (hits.length > 0) {
+          void appendArchiveIndexHits(
+            logDir,
+            hits.map((h) => ({
+              archive: name,
+              runId: h.runId,
+              startedAt: h.startedAt,
+              preset: h.preset,
+            })),
+          ).catch(() => {});
+        }
+        return hits;
       } catch {
         return [];
       }
@@ -772,7 +878,7 @@ async function buildEventLogRunListUncached(
           startedAt: hit.startedAt,
           finalPhase: "archived",
         },
-        recordCount: 0,
+        recordCount: 1,
         isSessionBoundary: false,
         source: "archive-index",
       });
@@ -791,7 +897,7 @@ async function buildEventLogRunListUncached(
   return {
     runs,
     archivesTotal: archives.length,
-    archivesIndexed: indexArchives.length,
+    archivesIndexed: indexedArchiveNames.size + indexArchives.length,
     perRunDebugCount: perRunDirs.length,
     tailRecordCount: tailRecords.length,
   };

@@ -93,17 +93,11 @@ Client still pages 5/page for UX; server limit/offset available for heavy fleets
 
 ---
 
-### PR3 — Persistent on-disk index
+### PR3 — Persistent on-disk index — **Done**
 
-**Goal:** Cold start after server restart stays fast.
-
-Maintain `logs/event-log-index.json` (or `.jsonl`) rebuilt incrementally:
-
-- On server boot: load index if fresh; background reconcile stale entries
-- After each run ends: upsert one row
-- In-memory cache becomes read-through of the index file
-
-**Effort:** ~2 PRs · **Impact:** no full rescan after every 45s cache expiry.
+`logs/event-log-index.json` stores per-run list rows keyed by `debug.jsonl`
+mtime. `indexPerRunDebugLogs` reuses rows when mtime matches (±2s), rescans
+and upserts otherwise.
 
 ---
 
@@ -115,35 +109,22 @@ Index includes rotated byte/line estimates in per-run list rows.
 
 ---
 
-### PR5 — Drill-down record pagination
-
-**Goal:** Opening a 50 MB run timeline does not load entire file into memory.
+### PR5 — Drill-down record pagination — **Done**
 
 ```
-GET /api/v2/event-log/runs/:runId?fromTs=&limit=500
+GET /api/v2/event-log/runs/:runId?limit=400&beforeTs=
+→ { records, totalRecords, hasMoreOlder, oldestTs, newestTs, … }
 ```
 
-Or SSE stream for scrubber UI. Load first page immediately; “load more” on scroll.
-
-**Touchpoints:**
-
-- `server/src/routes/v2.ts`
-- `web/src/components/EventLogPanel.tsx` (`RunDetailView`)
-
-**Effort:** ~2 PRs · **Impact:** server memory + UI responsiveness on drill-down.
+UI: first paint loads newest 400; **load older** prepends the previous page.
 
 ---
 
-### PR6 — Persistent archive index
+### PR6 — Persistent archive index — **Done**
 
-**Goal:** Drop ~3–4s archive head scans on environments with thousands of `events-*.jsonl.gz`.
-
-Append-only `logs/archives-index.jsonl` on each rotation:
-`{ archive, runId, startedAt, preset }`.
-
-List builder reads index instead of scanning last 40 gzips.
-
-**Effort:** ~1 PR · **Impact:** long-lived dev logs dirs.
+`logs/archives-index.jsonl` appended on global log rotation (`eventLogger`)
+and when list scans an unindexed archive. List prefers index hits; only
+unindexed archives are gunzip-head scanned.
 
 ---
 

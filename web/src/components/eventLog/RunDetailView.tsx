@@ -13,19 +13,23 @@ import { CATEGORY_TABS, type RunDetailResponse } from "./types";
 export function RunDetailView({
   detail,
   loading,
+  loadingOlder,
   error,
   categoryFilter,
   onCategoryFilter,
   logDir,
   onViewRun,
+  onLoadOlder,
 }: {
   detail: RunDetailResponse | null;
   loading: boolean;
+  loadingOlder?: boolean;
   error: string | null;
   categoryFilter: "all" | EventCategory;
   onCategoryFilter: (c: "all" | EventCategory) => void;
   logDir?: string;
   onViewRun?: (runId: string) => void;
+  onLoadOlder?: () => void;
 }) {
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -229,9 +233,24 @@ export function RunDetailView({
             </button>
           ))}
         </div>
-        <div className="text-[10px] text-ink-500 mb-1">
-          {filteredRecords.length} events
-          {categoryFilter !== "all" ? ` (${categoryFilter})` : ""}
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-ink-500 mb-1">
+          <span>
+            {filteredRecords.length} events
+            {typeof detail.totalRecords === "number" && detail.totalRecords > detail.records.length
+              ? ` (loaded ${detail.records.length} of ${detail.totalRecords})`
+              : ""}
+            {categoryFilter !== "all" ? ` (${categoryFilter})` : ""}
+          </span>
+          {onLoadOlder ? (
+            <button
+              type="button"
+              disabled={loadingOlder}
+              onClick={onLoadOlder}
+              className="text-[9px] px-1.5 py-0.5 rounded border border-ink-600 bg-ink-800 text-sky-300/90 hover:text-sky-200 disabled:opacity-50"
+            >
+              {loadingOlder ? "loading…" : "load older"}
+            </button>
+          ) : null}
         </div>
         <ol className="space-y-0.5 max-h-[280px] overflow-y-auto font-mono text-[10px] border border-ink-800 rounded p-1.5 bg-ink-950/50">
           {filteredRecords.length === 0 ? (

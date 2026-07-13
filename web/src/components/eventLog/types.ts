@@ -37,6 +37,13 @@ export interface RunDetailResponse {
   sliceIndex?: number;
   derived: DerivedRunState;
   records: LoggedRecord[];
+  /** Full record count before pagination. */
+  totalRecords?: number;
+  hasMoreOlder?: boolean;
+  hasMoreNewer?: boolean;
+  oldestTs?: number;
+  newestTs?: number;
+  limit?: number;
   isSessionBoundary: boolean;
   malformed: number;
   sources: string[];

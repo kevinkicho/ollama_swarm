@@ -116,7 +116,7 @@ describe("debug.meta.json sidecar", () => {
       assert.equal(row!.fromMeta, true);
       assert.equal(row!.lineCount, 42);
     } finally {
-      await fs.rm(dir, { recursive: true, force: true });
+      await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
     }
   });
 });

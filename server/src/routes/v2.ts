@@ -151,10 +151,32 @@ export function v2Router(deps: V2RouterDeps): Router {
       const debugLog = await perRunDebugLog(logDir, wantId);
       const globalMeta =
         replay.source === "global" ? await readAllEventLogs(deps.eventLogPath) : null;
+
+      // PR5: optional record pagination (default last 400 events for first paint).
+      const q = (req.query ?? {}) as Record<string, unknown>;
+      const limitRaw = Number(q.limit);
+      const beforeTsRaw = Number(q.beforeTs);
+      const limit =
+        Number.isFinite(limitRaw) && limitRaw > 0
+          ? Math.min(2000, Math.floor(limitRaw))
+          : 400;
+      const beforeTs =
+        Number.isFinite(beforeTsRaw) && beforeTsRaw > 0 ? beforeTsRaw : undefined;
+      const { paginateLoggedRecords } = await import(
+        "../swarm/blackboard/eventLogIndex.js"
+      );
+      const page = paginateLoggedRecords(replay.slice.records, { limit, beforeTs });
+
       res.json({
         runId: wantId,
         derived,
-        records: replay.slice.records,
+        records: page.records,
+        totalRecords: page.total,
+        hasMoreOlder: page.hasMoreOlder,
+        hasMoreNewer: page.hasMoreNewer,
+        oldestTs: page.oldestTs,
+        newestTs: page.newestTs,
+        limit,
         isSessionBoundary: replay.slice.isSessionBoundary,
         source: replay.source,
         malformed: globalMeta?.malformed.length ?? 0,
