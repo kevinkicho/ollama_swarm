@@ -43,18 +43,18 @@ See **`docs/plans/run-start-stability.md`** for full PR breakdown.
 
 ---
 
-## Queued: Event log / Debug Log performance (P2)
+## Done: Event log / Debug Log performance (P2) ✅
 
 See **`docs/plans/event-log-performance.md`** for full PR breakdown.
 
 - [x] List fast-path: per-run head/tail + stream scan, bounded archive gunzip, 45s cache
 - [x] Topbar dropdown portals (tokens, runs, debug log)
-- [ ] **PR1** — `debug.meta.json` sidecar on run end
-- [ ] **PR2** — Paginated list API + wire `EventLogPanel`
-- [ ] **PR3** — Persistent on-disk `event-log-index.json`
-- [ ] **PR4** — Rotated `debug-*.jsonl.gz` segment merge
-- [ ] **PR5** — Drill-down record pagination
-- [ ] **PR6** — Persistent archive index
+- [x] **PR1** — `debug.meta.json` sidecar on run end
+- [x] **PR2** — Paginated list API + `EventLogPanel` load-more
+- [x] **PR3** — Persistent on-disk `event-log-index.json`
+- [x] **PR4** — Rotated `debug-*.jsonl.gz` segment merge
+- [x] **PR5** — Drill-down record pagination
+- [x] **PR6** — Persistent archive index
 
 ---
 

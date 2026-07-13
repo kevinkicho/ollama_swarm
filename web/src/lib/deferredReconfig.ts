@@ -6,13 +6,23 @@
 import type { RunReconfigPatch } from "../components/brainChat/types";
 
 export const DEFERRED_RECONFIG_KEY = "swarm:deferredReconfig";
+/** One-shot notice after a deferred patch was folded into Start. */
+export const DEFERRED_RECONFIG_APPLIED_KEY = "swarm:deferredReconfigApplied";
 /** Ignore deferred patches older than this (ms). */
 export const DEFERRED_RECONFIG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** Applied notices older than this are ignored (ms). */
+export const DEFERRED_RECONFIG_APPLIED_MAX_AGE_MS = 5 * 60 * 1000;
 
 export type DeferredReconfigRecord = {
   runId?: string;
   patch: RunReconfigPatch;
   at: number;
+};
+
+export type DeferredReconfigAppliedNotice = {
+  applied: string[];
+  at: number;
+  sourceRunId?: string;
 };
 
 export function readDeferredReconfig(
@@ -51,6 +61,44 @@ export function writeDeferredReconfig(
     sessionStorage.setItem(DEFERRED_RECONFIG_KEY, JSON.stringify(record));
   } catch {
     /* ignore */
+  }
+}
+
+/** Persist a short-lived banner after Start folded a deferred RECONFIG. */
+export function writeDeferredAppliedNotice(
+  notice: DeferredReconfigAppliedNotice,
+): void {
+  if (typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.setItem(
+      DEFERRED_RECONFIG_APPLIED_KEY,
+      JSON.stringify(notice),
+    );
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Read and clear the post-start applied notice (one-shot). */
+export function consumeDeferredAppliedNotice(
+  now = Date.now(),
+): DeferredReconfigAppliedNotice | null {
+  if (typeof sessionStorage === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(DEFERRED_RECONFIG_APPLIED_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(DEFERRED_RECONFIG_APPLIED_KEY);
+    const parsed = JSON.parse(raw) as DeferredReconfigAppliedNotice;
+    if (!parsed?.applied?.length || typeof parsed.at !== "number") return null;
+    if (now - parsed.at > DEFERRED_RECONFIG_APPLIED_MAX_AGE_MS) return null;
+    return parsed;
+  } catch {
+    try {
+      sessionStorage.removeItem(DEFERRED_RECONFIG_APPLIED_KEY);
+    } catch {
+      /* ignore */
+    }
+    return null;
   }
 }
 

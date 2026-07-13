@@ -21,9 +21,17 @@ const RUN_LIST_PAGE_SIZE = 5;
 export function RunListView({
   data,
   onOpenDetail,
+  onLoadMore,
+  loadingMore,
+  listEpoch = 0,
 }: {
   data: EventLogResponse;
   onOpenDetail: (target: DetailTarget) => void;
+  /** Fetch next server page (offset = current runs.length). */
+  onLoadMore?: () => void;
+  loadingMore?: boolean;
+  /** Changes only on full list replace — resets client page without jump on append. */
+  listEpoch?: number;
 }) {
   const [page, setPage] = useState(0);
   const hiddenInfra = data.runs.filter(isInfraOnlySlice).length;
@@ -39,7 +47,7 @@ export function RunListView({
 
   useEffect(() => {
     setPage(0);
-  }, [display.length, data.totalRecords]);
+  }, [listEpoch]);
 
   useEffect(() => {
     if (page > totalPages - 1) setPage(Math.max(0, totalPages - 1));
@@ -57,12 +65,27 @@ export function RunListView({
               ? ` (of ${data.total})`
               : ""}
           </span>
-          {data.hasMore ? (
+          {data.hasMore || onLoadMore ? (
             <>
               <span className="text-ink-700">·</span>
-              <span className="text-amber-400/90" title="Server returned a limited page; refresh loads the latest window">
-                more on server
-              </span>
+              {onLoadMore ? (
+                <button
+                  type="button"
+                  disabled={loadingMore}
+                  onClick={onLoadMore}
+                  className="text-sky-400 hover:text-sky-300 underline underline-offset-2 decoration-sky-500/50 hover:decoration-sky-300 disabled:opacity-50 disabled:no-underline"
+                  title="Fetch the next page of runs from the server"
+                >
+                  {loadingMore ? "loading…" : "load more"}
+                </button>
+              ) : (
+                <span
+                  className="text-amber-400/90"
+                  title="Server returned a limited page; refresh loads the latest window"
+                >
+                  more on server
+                </span>
+              )}
             </>
           ) : null}
           {data.malformed > 0 ? (
@@ -132,8 +155,8 @@ export function RunListView({
               />
             ))}
           </ul>
-          {display.length > RUN_LIST_PAGE_SIZE ? (
-            <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-ink-800/80 text-[10px] text-ink-500">
+          {display.length > RUN_LIST_PAGE_SIZE || onLoadMore ? (
+            <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-ink-800/80 text-[10px] text-ink-500 gap-2">
               <button
                 type="button"
                 disabled={safePage === 0}
@@ -142,18 +165,34 @@ export function RunListView({
               >
                 ← prev
               </button>
-              <span className="tabular-nums">
-                {pageStart + 1}–{Math.min(pageStart + RUN_LIST_PAGE_SIZE, display.length)} of{" "}
-                {display.length}
+              <span className="tabular-nums shrink-0">
+                {display.length === 0
+                  ? "0"
+                  : `${pageStart + 1}–${Math.min(pageStart + RUN_LIST_PAGE_SIZE, display.length)} of ${display.length}`}
+                {typeof data.total === "number" && data.total > display.length
+                  ? ` · ${data.total} total`
+                  : ""}
               </span>
-              <button
-                type="button"
-                disabled={safePage >= totalPages - 1}
-                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                className="px-1.5 py-0.5 rounded border border-ink-700 bg-ink-800 text-ink-400 hover:text-ink-200 disabled:opacity-40"
-              >
-                next →
-              </button>
+              <div className="flex items-center gap-1.5">
+                {onLoadMore ? (
+                  <button
+                    type="button"
+                    disabled={loadingMore}
+                    onClick={onLoadMore}
+                    className="px-1.5 py-0.5 rounded border border-sky-800/80 bg-sky-950/40 text-sky-300 hover:text-sky-200 disabled:opacity-40"
+                  >
+                    {loadingMore ? "…" : "load more"}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={safePage >= totalPages - 1}
+                  onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                  className="px-1.5 py-0.5 rounded border border-ink-700 bg-ink-800 text-ink-400 hover:text-ink-200 disabled:opacity-40"
+                >
+                  next →
+                </button>
+              </div>
             </div>
           ) : null}
         </>

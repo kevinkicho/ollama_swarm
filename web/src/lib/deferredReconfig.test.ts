@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import {
   applyDeferredReconfigToStartFields,
   DEFERRED_RECONFIG_MAX_AGE_MS,
+  DEFERRED_RECONFIG_APPLIED_MAX_AGE_MS,
   readDeferredReconfig,
   clearDeferredReconfig,
   writeDeferredReconfig,
+  writeDeferredAppliedNotice,
+  consumeDeferredAppliedNotice,
 } from "./deferredReconfig.js";
 
 describe("applyDeferredReconfigToStartFields", () => {
@@ -51,5 +54,25 @@ describe("readDeferredReconfig age gate", () => {
     });
     assert.equal(readDeferredReconfig(), null);
     clearDeferredReconfig();
+  });
+});
+
+describe("deferred applied notice", () => {
+  it("consume is one-shot and age-gated", () => {
+    if (typeof sessionStorage === "undefined") return;
+    writeDeferredAppliedNotice({
+      applied: ["rounds→8", "cap→120m"],
+      at: Date.now(),
+    });
+    const first = consumeDeferredAppliedNotice();
+    assert.ok(first);
+    assert.deepEqual(first!.applied, ["rounds→8", "cap→120m"]);
+    assert.equal(consumeDeferredAppliedNotice(), null);
+
+    writeDeferredAppliedNotice({
+      applied: ["cap→30m"],
+      at: Date.now() - DEFERRED_RECONFIG_APPLIED_MAX_AGE_MS - 1,
+    });
+    assert.equal(consumeDeferredAppliedNotice(), null);
   });
 });

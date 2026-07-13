@@ -12,13 +12,33 @@ import { RunDetailView } from "./RunDetailView";
 import { RunListView } from "./RunListView";
 import type { DetailTarget, EventLogResponse, RunDetailResponse } from "./types";
 
+const LIST_PAGE_SIZE = 40;
+
+function normalizeRunList(j: EventLogResponse): EventLogResponse {
+  return {
+    ...j,
+    runs: j.runs.map((r, i) => ({
+      ...r,
+      sliceIndex: r.sliceIndex ?? i,
+      derived: normalizeDerived(r.derived),
+    })),
+  };
+}
+
+function runListKey(r: { sliceIndex: number; derived: { runId?: string | null } }): string {
+  return `${r.derived.runId ?? "x"}:${r.sliceIndex}`;
+}
+
 export const EventLogPanel = memo(function EventLogPanel() {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<EventLogResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  /** Bumps only on full list replace (open/refresh) so client page doesn't jump on load-more. */
+  const [listEpoch, setListEpoch] = useState(0);
   const [detailTarget, setDetailTarget] = useState<DetailTarget | null>(null);
   const [detail, setDetail] = useState<RunDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -33,23 +53,18 @@ export const EventLogPanel = memo(function EventLogPanel() {
     if (!open) return;
     const ctrl = new AbortController();
     setLoading(true);
+    setLoadingMore(false);
     setError(null);
     // Server-side limit keeps first paint fast on fleets with 100+ run dirs;
-    // client RunListView still pages 5/page for UX.
-    apiFetch("/api/v2/event-log/runs?limit=40&offset=0", { signal: ctrl.signal })
+    // client RunListView still pages 5/page for UX; load-more fetches next offset.
+    apiFetch(`/api/v2/event-log/runs?limit=${LIST_PAGE_SIZE}&offset=0`, { signal: ctrl.signal })
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return (await r.json()) as EventLogResponse;
       })
       .then((j) => {
-        setData({
-          ...j,
-          runs: j.runs.map((r, i) => ({
-            ...r,
-            sliceIndex: r.sliceIndex ?? i,
-            derived: normalizeDerived(r.derived),
-          })),
-        });
+        setData(normalizeRunList(j));
+        setListEpoch((n) => n + 1);
       })
       .catch((e) => {
         if (!ctrl.signal.aborted) setError(e instanceof Error ? e.message : String(e));
@@ -59,6 +74,37 @@ export const EventLogPanel = memo(function EventLogPanel() {
       });
     return () => ctrl.abort();
   }, [open, refreshNonce]);
+
+  const loadMoreRuns = useCallback(async () => {
+    if (!data?.hasMore || loadingMore || loading) return;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const offset = data.runs.length;
+      const r = await apiFetch(
+        `/api/v2/event-log/runs?limit=${LIST_PAGE_SIZE}&offset=${offset}`,
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = normalizeRunList((await r.json()) as EventLogResponse);
+      setData((prev) => {
+        if (!prev) return j;
+        const seen = new Set(prev.runs.map(runListKey));
+        const appended = j.runs.filter((x) => !seen.has(runListKey(x)));
+        return {
+          ...prev,
+          ...j,
+          runs: [...prev.runs, ...appended],
+          // Prefer server hasMore; if empty page, stop.
+          hasMore: appended.length === 0 ? false : Boolean(j.hasMore),
+          offset,
+        };
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [data, loading, loadingMore]);
 
   useEffect(() => {
     if (!open || !detailTarget) {
@@ -213,6 +259,9 @@ export const EventLogPanel = memo(function EventLogPanel() {
             ) : data ? (
               <RunListView
                 data={data}
+                listEpoch={listEpoch}
+                loadingMore={loadingMore}
+                onLoadMore={data.hasMore ? () => void loadMoreRuns() : undefined}
                 onOpenDetail={(target) => setDetailTarget(target)}
               />
             ) : null}

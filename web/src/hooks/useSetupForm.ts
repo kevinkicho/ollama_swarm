@@ -12,7 +12,10 @@ import {
   applyDeferredReconfigToStartFields,
   clearDeferredReconfig,
   readDeferredReconfig,
+  writeDeferredAppliedNotice,
+  type DeferredReconfigRecord,
 } from "../lib/deferredReconfig";
+import { formatReconfigLabel } from "../components/brainChat/chatHelpers";
 
 // Minimal surface to keep the thin SetupForm working.
 // Full logic can be expanded here later.
@@ -106,6 +109,15 @@ export function useSetupForm(navigate: (path: string) => void) {
     "merge" | "sequential" | "vote" | "judge" | "pick"
   >("vote");
   const [busy, setBusy] = useState(false);
+  /** Brain RECONFIG saved after a finished run — shown on setup until Start or dismiss. */
+  const [deferredPending, setDeferredPending] = useState<DeferredReconfigRecord | null>(
+    () => readDeferredReconfig(),
+  );
+
+  const dismissDeferredPending = useCallback(() => {
+    clearDeferredReconfig();
+    setDeferredPending(null);
+  }, []);
 
   // Keep the autocomplete provider in sync with the main model choice.
   // This ensures per-agent model overrides in the Topology grid (and
@@ -235,9 +247,12 @@ export function useSetupForm(navigate: (path: string) => void) {
         || writeMode === "multi";
 
       // Brain RECONFIG deferred after a finished run — fold into start fields.
+      // Only clear sessionStorage after a successful start so failed starts can retry.
       let startRounds = roundsInput;
       let startWallMin = wallClockCapMin;
       let startTokenBudget: number | undefined;
+      let deferredApplied: string[] = [];
+      let deferredSourceRunId: string | undefined;
       const deferred = readDeferredReconfig();
       if (deferred?.patch) {
         const merged = applyDeferredReconfigToStartFields({
@@ -248,12 +263,13 @@ export function useSetupForm(navigate: (path: string) => void) {
         startRounds = merged.rounds;
         startWallMin = merged.wallClockCapMin;
         startTokenBudget = merged.tokenBudget;
+        deferredApplied = merged.applied;
+        deferredSourceRunId = deferred.runId;
         if (merged.applied.length > 0) {
           // Reflect in form so the user sees what will be used.
           setRoundsInput(startRounds);
           setWallClockCapMin(startWallMin);
         }
-        clearDeferredReconfig();
       }
 
       const payload = {
@@ -307,6 +323,18 @@ export function useSetupForm(navigate: (path: string) => void) {
         setError(msg);
         return;
       }
+      // Start succeeded — consume deferred RECONFIG and surface a one-shot notice.
+      if (deferred?.patch) {
+        clearDeferredReconfig();
+        setDeferredPending(null);
+        if (deferredApplied.length > 0) {
+          writeDeferredAppliedNotice({
+            applied: deferredApplied,
+            at: Date.now(),
+            sourceRunId: deferredSourceRunId,
+          });
+        }
+      }
       if (body.runId) {
         console.log('[DEBUG-START] got runId, navigating', body.runId);
         // persist including caps/tiers for refill
@@ -315,7 +343,7 @@ export function useSetupForm(navigate: (path: string) => void) {
           parentPath,
           presetId: preset.id,
           directive: directiveTrimmed,
-          wallClockCapMin: wallClockCapMin || undefined,
+          wallClockCapMin: startWallMin || undefined,
           ambitionTiers: ambitionTiers || undefined,
           runId: body.runId,
         });
@@ -344,6 +372,10 @@ export function useSetupForm(navigate: (path: string) => void) {
     }
   }, [parentPath, busy, performStart]);
 
+  const deferredPendingLabel = deferredPending?.patch
+    ? formatReconfigLabel(deferredPending.patch)
+    : null;
+
   return {
     repoUrl, setRepoUrl,
     parentPath, setParentPath,
@@ -366,6 +398,9 @@ export function useSetupForm(navigate: (path: string) => void) {
     writeMode, setWriteMode,
     conflictPolicy, setConflictPolicy,
     busy, setBusy,
+    deferredPending,
+    deferredPendingLabel,
+    dismissDeferredPending,
     preset,
     isActive,
     preflight,

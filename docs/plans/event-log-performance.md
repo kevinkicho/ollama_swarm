@@ -4,9 +4,9 @@
 > `debug.jsonl` files grow. List view should open in &lt;1s; drill-down can be
 > heavier but must not freeze the server.
 
-**Status:** List fast-path + `debug.meta.json` sidecar + list pagination query (2026-07)  
+**Status:** Complete (PR1–6) — list/drill pagination, indexes, meta sidecar, rotated merge, client load-more (2026-07)  
 **Priority:** P2 — dev UX; worsens over long sessions with many runs  
-**Primary code:** `server/src/swarm/blackboard/eventLogSources.ts`, `web/src/components/EventLogPanel.tsx`
+**Primary code:** `server/src/swarm/blackboard/eventLogSources.ts`, `web/src/components/eventLog/EventLogPanel.tsx`
 
 ---
 
@@ -82,14 +82,15 @@ mtime; fall back to head/tail/stream path if missing or stale.
 
 ---
 
-### PR2 — Paginated list API — **Done (server)**
+### PR2 — Paginated list API — **Done (server + client load-more)**
 
 ```
 GET /api/v2/event-log/runs?limit=10&offset=0
 → { runs, total, hasMore, offset, limit, … }
 ```
 
-Client still pages 5/page for UX; server limit/offset available for heavy fleets.
+Client first paint uses `limit=40&offset=0`; **load more** fetches the next
+offset and merges. Local list still pages 5/page for UX.
 
 ---
 

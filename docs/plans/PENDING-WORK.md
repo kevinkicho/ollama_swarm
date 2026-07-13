@@ -22,12 +22,7 @@ This file contains longer-term or lower-priority items that are not currently in
 
 ## Observability / Debug Log
 
-- See **`docs/plans/event-log-performance.md`** for the full breakdown.
-- [ ] `debug.meta.json` sidecar per run (fast list without scanning `debug.jsonl`)
-- [ ] Paginated `GET /api/v2/event-log/runs`
-- [ ] Persistent `event-log-index.json` + archive index
-- [ ] Rotated `debug-*.jsonl.gz` merge for list + replay
-- [ ] Drill-down record pagination for large timelines
+- See **`docs/plans/event-log-performance.md`** — PR1–6 **done** (meta sidecar, list/drill pagination, indexes, rotated merge, client load-more).
 
 ## Presets & Patterns
 

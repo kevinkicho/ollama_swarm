@@ -138,6 +138,32 @@ export function SetupForm() {
           onStartNow={(cfg: BrainConfigPatch) => form.startSwarmDirectlyFromBrain(cfg)}
         />
 
+        {form.deferredPending && form.deferredPendingLabel ? (
+          <div
+            className="rounded-lg border border-sky-700/50 bg-sky-950/40 px-4 py-2.5 text-xs text-sky-100 flex items-start gap-3"
+            role="status"
+          >
+            <div className="flex-1 min-w-0 space-y-0.5">
+              <div className="font-semibold text-sky-200">
+                Brain RECONFIG queued for next Start
+              </div>
+              <div className="text-sky-100/90 font-mono text-[11px] truncate" title={form.deferredPendingLabel}>
+                {form.deferredPendingLabel}
+              </div>
+              <div className="text-sky-300/70 text-[10px]">
+                Applied when you Start (rounds / wall-clock / token budget). Failed starts keep the queue.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => form.dismissDeferredPending()}
+              className="shrink-0 text-[10px] uppercase tracking-wide px-2 py-1 rounded border border-sky-700/60 bg-sky-900/40 hover:bg-sky-800/50 text-sky-200"
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
         {form.recentRuns.length > 0 && (
           <Section title="Recent runs">
             <div className="flex flex-wrap gap-2">

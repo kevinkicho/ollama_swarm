@@ -18,6 +18,10 @@ import { notificationService } from "./services/notificationService";
 import { SystemWrapper } from "./components/SystemWrapper";
 import { ProjectGrowthPage } from "./features/projectGrowth/ProjectGrowthPage";
 import { apiFetch } from "./lib/apiFetch";
+import {
+  consumeDeferredAppliedNotice,
+  type DeferredReconfigAppliedNotice,
+} from "./lib/deferredReconfig";
 
 // Task #65 (2026-04-24): URL-based review mode. When the user opens a
 // past run from the history modal we set ?review=<runId>&path=<encoded>.
@@ -174,6 +178,13 @@ function AppMain() {
     };
   }, []);
 
+  // One-shot: Brain RECONFIG deferred from a finished run was folded into Start.
+  const [deferredApplied, setDeferredApplied] = useState<DeferredReconfigAppliedNotice | null>(null);
+  useEffect(() => {
+    const notice = consumeDeferredAppliedNotice();
+    if (notice) setDeferredApplied(notice);
+  }, [routeRunId, storeRunId]);
+
   // Task #163: when in review mode, poll /api/swarm/status to detect
   // whether the run being reviewed is ALSO the currently-live run. If
   // yes, surface "View Live" + "Stop" buttons next to the REVIEW MODE
@@ -214,6 +225,26 @@ function AppMain() {
 
         {/* Error banner */}
         {error ? <ErrorBanner error={error} /> : null}
+
+        {deferredApplied ? (
+          <div
+            className="px-4 py-1.5 bg-sky-950/50 border-b border-sky-700/40 text-xs text-sky-100 flex items-center gap-2"
+            role="status"
+          >
+            <span className="font-semibold text-sky-200 shrink-0">RECONFIG applied on Start</span>
+            <span className="font-mono text-sky-100/90 truncate" title={deferredApplied.applied.join(", ")}>
+              {deferredApplied.applied.join(" · ")}
+            </span>
+            <button
+              type="button"
+              onClick={() => setDeferredApplied(null)}
+              className="ml-auto shrink-0 text-sky-300 hover:text-white text-lg leading-none px-1"
+              aria-label="Dismiss RECONFIG notice"
+            >
+              ×
+            </button>
+          </div>
+        ) : null}
 
         <AuditorGateBanner />
 

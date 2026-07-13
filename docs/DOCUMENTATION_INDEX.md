@@ -75,7 +75,7 @@ This is the structured index of all relevant, tracked documentation for the olla
   Study notes: streaming vs sidebar status, missing activity protocol (recall before signaling refactor).
 
 - **docs/plans/event-log-performance.md**  
-  Debug Log list/replay performance: shipped fast-path (Jul 2026) and queued PRs (meta sidecar, pagination, indexes).
+  Debug Log list/replay performance: fast-path + PR1–6 done (meta sidecar, list/drill pagination, indexes, rotated debug merge, client load-more).
 
 - **docs/plans/project-growth-knowledge-graph.md**  
   Swarm-evolution graph (user UX), per-clone project knowledge graph (user + in-run agents), conformance grounding, and digression recovery — phased PR plan (Jul 2026).
