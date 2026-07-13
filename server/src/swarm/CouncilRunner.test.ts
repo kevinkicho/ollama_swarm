@@ -315,6 +315,11 @@ test("CouncilRunner — summary is written after loop settles on drain/stop", ()
   assert.match(ALL_COUNCIL_SRC, /closingRequested/, "must gate audit on drain/stop");
   assert.match(ALL_COUNCIL_SRC, /awaitLoopThenCloseOut/, "must await loop before close-out summary");
   assert.match(ALL_COUNCIL_SRC, /workerDrainPromise/, "stop must wait for execution workers");
+  assert.match(
+    ALL_COUNCIL_SRC,
+    /HARD_STOP_WORKER_WAIT_MS|forcing abort before killAll/,
+    "hard stop must force abort when worker wait times out",
+  );
   // Audit cycle host uses closingRequested() after extract from the facade.
   assert.match(
     AUDIT_CYCLE_SRC,

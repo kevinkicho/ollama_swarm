@@ -11,8 +11,44 @@ export const AUTONOMOUS_ROUNDS_PRESETS: ReadonlySet<PresetId> = new Set([
   "council",
 ]);
 
+/**
+ * Soft default wall-clock when autonomous/continuous starts with no resource
+ * cap. Fail-closed: unbounded runs without a stop signal burn tokens forever.
+ * Operators can raise via setup (wallClockCapMin) or mid-run RECONFIG.
+ */
+export const DEFAULT_AUTONOMOUS_WALL_CLOCK_MS = 8 * 60 * 60 * 1000; // 8 hours
+
 export function supportsAutonomousRounds(preset: PresetId): boolean {
   return AUTONOMOUS_ROUNDS_PRESETS.has(preset);
+}
+
+/**
+ * If this is an open-ended run with no token/wall/cost cap, apply a default
+ * wall-clock. Returns the cap to inject (or null if already bounded).
+ */
+export function ensureAutonomousResourceCap(input: {
+  preset: PresetId;
+  rounds: number;
+  tokenBudget?: number;
+  wallClockCapMs?: number;
+  maxCostUsd?: number;
+}): { wallClockCapMs: number; appliedDefault: true } | { wallClockCapMs?: number; appliedDefault: false } {
+  const openEnded =
+    supportsAutonomousRounds(input.preset)
+    && (input.rounds === 0 || input.rounds >= 1_000_000);
+  if (!openEnded) {
+    return { wallClockCapMs: input.wallClockCapMs, appliedDefault: false };
+  }
+  const hasToken = (input.tokenBudget ?? 0) > 0;
+  const hasWall = (input.wallClockCapMs ?? 0) > 0;
+  const hasCost = (input.maxCostUsd ?? 0) > 0;
+  if (hasToken || hasWall || hasCost) {
+    return { wallClockCapMs: input.wallClockCapMs, appliedDefault: false };
+  }
+  return {
+    wallClockCapMs: DEFAULT_AUTONOMOUS_WALL_CLOCK_MS,
+    appliedDefault: true,
+  };
 }
 
 /**

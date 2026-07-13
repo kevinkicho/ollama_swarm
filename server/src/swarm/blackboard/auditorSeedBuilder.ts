@@ -116,6 +116,8 @@ async function captureUiSnapshot(
     const response = await chatOnce(uiAgent, {
       agentName: "swarm-ui",
       promptText,
+      manager: uiManager,
+      activity: { kind: "audit", label: "ui snapshot" },
     });
     const any = response as {
       data?: {

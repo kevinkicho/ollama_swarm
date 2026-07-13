@@ -393,8 +393,22 @@ export class CouncilRunner extends DiscussionRunnerBase {
 
     await this.runDiscussionLoop(cfg, "Council", async (cfg) => {
       if (isAutonomous) {
+        const wallMin =
+          cfg.wallClockCapMs && cfg.wallClockCapMs > 0
+            ? Math.round(cfg.wallClockCapMs / 60_000)
+            : null;
+        const tok =
+          cfg.tokenBudget && cfg.tokenBudget > 0
+            ? cfg.tokenBudget.toLocaleString()
+            : null;
         this.appendSystem(
-          `[council] Autonomous mode (rounds=${cfg.rounds === 0 ? 0 : "continuous"}) — ambition ratchet continues until Stop or a hard stop reason.`,
+          `[council] Autonomous mode (rounds=${cfg.rounds === 0 ? 0 : "continuous"}) — continues until Stop or a hard stop`
+          + (wallMin != null ? ` · wall-clock cap ${wallMin}m` : "")
+          + (tok != null ? ` · token budget ${tok}` : "")
+          + (wallMin == null && tok == null
+            ? " · WARNING: no resource cap configured"
+            : "")
+          + ".",
         );
       } else if (this.maxTiers > 1 && Number.isFinite(this.maxTiers)) {
         this.appendSystem(

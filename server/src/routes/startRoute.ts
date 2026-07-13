@@ -253,6 +253,26 @@ export function registerStartRoute(
         return;
       }
       const effectiveRounds = roundsResolved.rounds;
+      // Fail-closed: autonomous/continuous without any resource cap gets a
+      // default 8h wall-clock so the swarm has a stop signal (operator can
+      // raise via RECONFIG or setup). Continuous already requires a cap for
+      // non-blackboard; rounds=0 was previously open-ended with no guard.
+      const { ensureAutonomousResourceCap } = await import("../swarm/autonomousPresets.js");
+      const autoCap = ensureAutonomousResourceCap({
+        preset: parsed.data.preset,
+        rounds: effectiveRounds,
+        tokenBudget: parsed.data.tokenBudget,
+        wallClockCapMs: parsed.data.wallClockCapMs,
+        maxCostUsd: parsed.data.maxCostUsd,
+      });
+      if (autoCap.appliedDefault) {
+        parsed.data.wallClockCapMs = autoCap.wallClockCapMs;
+        startLog.info("autonomous-default-wall-clock", {
+          wallClockCapMs: autoCap.wallClockCapMs,
+          preset: parsed.data.preset,
+          rounds: effectiveRounds,
+        });
+      }
       // R4 wiring (2026-05-04): pre-flight cost projector. When the
       // user has set maxCostUsd AND the projected spend already
       // exceeds it on Day 1, refuse rather than start a run that's

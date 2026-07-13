@@ -155,6 +155,7 @@ export async function runDiscussionCloseOut(opts: CloseOutOpts): Promise<void> {
           wallClockMs: opts.wallClockMs ?? 0,
           totalPromptTokens: opts.totalPromptTokens ?? 0,
           totalResponseTokens: opts.totalResponseTokens ?? 0,
+          manager: opts.manager,
           log: (msg) => opts.appendSystem(msg),
         }).catch(() => null);
 

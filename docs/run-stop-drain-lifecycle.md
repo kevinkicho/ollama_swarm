@@ -45,8 +45,9 @@ When the user presses **Stop** during any phase (including execution):
 
 2. awaitLoopThenCloseOut({ immediate: true })
    ├─ IF workerDrainPromise is set (execution in flight):
-   │     wait up to 45s for runCouncilWorkers to exit after abort
-   └─ wait up to 10s for main loop to observe stopping
+   │     wait up to HARD_STOP_WORKER_WAIT_MS (45s) for workers after abort
+   │     on timeout: system line + beginRunShutdown() again (force abort)
+   └─ wait up to HARD_STOP_LOOP_WAIT_MS (10s) for main loop; timeout re-aborts
 
 3. closeOutStopped()
    ├─ phase → "stopping"

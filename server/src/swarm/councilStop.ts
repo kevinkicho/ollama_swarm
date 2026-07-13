@@ -150,22 +150,61 @@ async function finishCouncilDrainInBackground(
   await p.catch(() => {});
 }
 
+/** Hard-stop wait for in-flight execution workers before killAll. */
+export const HARD_STOP_WORKER_WAIT_MS = 45_000;
+/** Hard-stop wait for main discussion loop to observe stopping. */
+export const HARD_STOP_LOOP_WAIT_MS = 10_000;
+
 export async function awaitLoopThenCloseOut(
   host: CouncilStopHost,
   opts: { immediate: boolean },
 ): Promise<void> {
   if (opts.immediate && host.getWorkerDrainPromise()) {
-    await Promise.race([
-      host.getWorkerDrainPromise()!.catch(() => {}),
-      new Promise<void>((r) => setTimeout(r, 45_000)),
+    const workerDone = await Promise.race([
+      host.getWorkerDrainPromise()!.then(() => "done" as const).catch(() => "done" as const),
+      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), HARD_STOP_WORKER_WAIT_MS)),
     ]);
+    if (workerDone === "timeout") {
+      // Workers hung past grace — force session abort again, then killAll in closeOut.
+      try {
+        host.appendSystem(
+          `[stop] Execution workers did not exit within ${Math.round(HARD_STOP_WORKER_WAIT_MS / 1000)}s — forcing abort before killAll.`,
+        );
+      } catch {
+        /* transcript may already be frozen */
+      }
+      try {
+        host.manager.beginRunShutdown();
+      } catch {
+        // best-effort
+      }
+      try {
+        host.getStopAbortController()?.abort(new Error("hard-stop worker wait exceeded"));
+      } catch {
+        // best-effort
+      }
+    }
   }
   if (host.getLoopPromise()) {
-    const loopCapMs = opts.immediate ? 10_000 : 120_000;
-    await Promise.race([
-      host.getLoopPromise()!.catch(() => {}),
-      new Promise<void>((r) => setTimeout(r, loopCapMs)),
+    const loopCapMs = opts.immediate ? HARD_STOP_LOOP_WAIT_MS : 120_000;
+    const loopDone = await Promise.race([
+      host.getLoopPromise()!.then(() => "done" as const).catch(() => "done" as const),
+      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), loopCapMs)),
     ]);
+    if (opts.immediate && loopDone === "timeout") {
+      try {
+        host.appendSystem(
+          `[stop] Main loop did not settle within ${Math.round(loopCapMs / 1000)}s — proceeding to force killAll.`,
+        );
+      } catch {
+        /* frozen transcript */
+      }
+      try {
+        host.manager.beginRunShutdown();
+      } catch {
+        // best-effort
+      }
+    }
   }
   await closeOutStopped(host, opts);
 }

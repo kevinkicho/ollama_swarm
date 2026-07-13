@@ -24,7 +24,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import type { Agent } from "../services/AgentManager.js";
+import type { Agent, AgentManager } from "../services/AgentManager.js";
 import type { PresetId, RunConfig } from "./SwarmRunner.js";
 import { chatOnce } from "./chatOnce.js";
 import { extractText } from "./extractText.js";
@@ -83,6 +83,8 @@ export interface OutcomeScorerContext {
   totalPromptTokens: number;
   totalResponseTokens: number;
   log?: (msg: string) => void;
+  /** When set, sidebar shows outcome-scoring activity on the judge agent. */
+  manager?: AgentManager;
 }
 
 function costFromTokens(prompt: number, completion: number): number {
@@ -105,6 +107,8 @@ export async function scoreRun(ctx: OutcomeScorerContext): Promise<RunOutcome | 
     const res = await chatOnce(ctx.agent, {
       agentName: "swarm-outcome-scorer",
       promptText: prompt,
+      manager: ctx.manager,
+      activity: { kind: "outcome", label: "rubric scoring" },
     });
     responseText = extractText(res) ?? "";
   } catch (err) {

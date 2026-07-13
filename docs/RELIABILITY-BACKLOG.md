@@ -11,11 +11,11 @@
 | Stale sidebar busy | Thinking forever after done | **Done:** view demote + dock demote + activity done through suppress |
 | Ghost agents after pipeline phase | Old agent-N cards after handoff | **Done:** `agents_roster` + phase handoff killAll |
 | Dual event hubs / double broadcast | Missing or duplicate UI events | **Done:** single `createHub` + hub-only wrap emit |
-| Hard stop hung on provider | Stop never returns | **Partial:** 45s worker wait + session abort; still external HTTP tails |
+| Hard stop hung on provider | Stop never returns | **Done:** 45s worker + 10s loop race; timeout re-aborts + system line then killAll |
 | Hung / runaway continuous stream | Idle wall never trips while streaming | **Done:** absolute prompt wall-clock (fail-closed, no idle reset) |
-| Autonomous ignores token/wall caps | rounds=0 cycles forever past budget | **Done:** cycle-boundary `checkCouncilResourceCaps` |
+| Autonomous ignores token/wall caps | rounds=0 cycles forever past budget | **Done:** cycle-boundary gates + default 8h wall if no cap on start |
 | Blackboard caps silent to Brain/UI | Cap stop without RECONFIG / early-stop chip | **Done:** notifyGuardTrip + earlyStopDetail from terminationReason |
-| chatOnce headless sidebar | Research/coach dock without status | **Done:** coach/stall/reflection/pre-pass/worker bash wired |
+| chatOnce headless sidebar | Research/coach dock without status | **Done:** coach/stall/reflection/pre-pass/worker/outcome/ui-audit wired |
 
 ## P1 — degraded multi-day use
 
