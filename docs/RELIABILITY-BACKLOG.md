@@ -36,7 +36,7 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | Headless activity labels | Sidebar only says "thinking" | **Done:** promptWithRetry default kind/label |
 | Provider parallel overload | Quota storms, all agents retry | **Policy:** open fan-out; use failover / lower agentCount |
 | Historical token totals wrong | 1d / all-time misleading | **Done:** live + summary `estimated` flags; UI callout for approximate totals |
-| Soft-drain vs hard-stop confusion | Wrong button behavior | **Documented** in `run-stop-drain-lifecycle.md` |
+| Soft-drain vs hard-stop confusion | Wrong button behavior | **Done:** Drain/Stop UI + `/drain` `mode` (`soft`/`hard-fallback`); failed drain no longer fakes stopped; control notice banner |
 | Autonomous soft-done spun forever | Soft `"done"` cleared `earlyStopDetail` and re-cycled | **Done:** `councilSettlementPolicy` — soft done is terminal; autonomy continues only via `"retry"` |
 | No-op apply marked completed | Empty `filesWritten` treated as successful commit | **Done:** `WorkerPipeline` fail-closed + council worker zero-write retry |
 | Blackboard zero-write approve | Auditor/propose path could complete empty work | **Done:** auditor reject zero files; proposeCommit rejects empty hunks |

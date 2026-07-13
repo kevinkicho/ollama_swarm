@@ -83,6 +83,16 @@ test("Orchestrator: stopRun/drainRun use exact runId only (no prefix match)", ()
   assert.match(SRC, /getRunExact\(runId\)/);
 });
 
+test("Orchestrator: drainRun reports soft vs hard-fallback mode", () => {
+  assert.match(
+    SRC,
+    /mode:\s*"soft"\s*\|\s*"hard-fallback"\s*\|\s*"already-stopped"/,
+    "drainRun must return explicit mode for UI honesty",
+  );
+  assert.match(SRC, /mode:\s*"hard-fallback"/);
+  assert.match(SRC, /mode:\s*"soft"/);
+});
+
 test("Orchestrator: natural completion reaps run without re-stop", () => {
   // start() awaits the full loop; waitUntilSettled + isRunning are backstops.
   assert.match(

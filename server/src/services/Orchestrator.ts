@@ -956,30 +956,43 @@ export class Orchestrator {
   }
 
   // Task #167: soft-stop entry point. If the active runner supports
-  // drain() (blackboard does), use it; otherwise fall through to hard
-  // stop. The runner manages its own escalation deadline + watcher.
-  async drain(): Promise<void> {
-    if (!this.runner) return;
+  // drain() (blackboard/council/discussion/pipeline), use it; otherwise
+  // fall through to hard stop. The runner manages its own escalation
+  // deadline + watcher.
+  async drain(): Promise<"soft" | "hard-fallback" | "idle"> {
+    if (!this.runner) return "idle";
     if (typeof this.runner.drain === "function") {
       await this.runner.drain();
-      return;
+      return "soft";
     }
     await this.stop();
+    return "hard-fallback";
   }
 
-  /** Per-run soft stop. Returns false when runId isn't active. */
-  async drainRun(runId: string): Promise<boolean> {
+  /**
+   * Per-run soft stop.
+   * - `false` when runId isn't active and unknown
+   * - `{ ok, mode: "soft" }` when runner.drain() ran
+   * - `{ ok, mode: "hard-fallback" }` when runner has no drain (e.g. baseline)
+   * - `{ ok, mode: "already-stopped" }` when path known but run map empty
+   */
+  async drainRun(
+    runId: string,
+  ): Promise<false | { ok: true; mode: "soft" | "hard-fallback" | "already-stopped" }> {
     const run = this.getRunExact(runId);
     if (!run) {
       // Already terminated (exact id known from runPaths) → successful no-op.
-      if (runId && this.runPaths.has(runId)) return true;
+      if (runId && this.runPaths.has(runId)) {
+        return { ok: true, mode: "already-stopped" };
+      }
       return false;
     }
     if (typeof run.runner.drain === "function") {
       await run.runner.drain();
-      return true;
+      return { ok: true, mode: "soft" };
     }
-    return this.stopRun(runId);
+    const stopped = await this.stopRun(runId);
+    return stopped ? { ok: true, mode: "hard-fallback" } : false;
   }
 
   /** Stop every active run (used by force-restart and shutdown). */

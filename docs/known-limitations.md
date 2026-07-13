@@ -38,19 +38,20 @@ features remains fine; keep them secondary to the primary gates above.
 
 ---
 
-## Host bind defaults to loopback; API token optional (2026-07-09)
+## Host bind defaults to loopback; LAN without token is fail-closed (2026-07-13)
 
 **Choice:** `SERVER_HOST` defaults to `127.0.0.1`. `SWARM_API_TOKEN` is optional
-(empty = open API for a single trusted local operator). MCP process spawn from
-start body / env is **off** unless `SWARM_ALLOW_MCP_SERVERS=true`.
+on loopback (empty = open API for a single trusted local operator). Non-loopback
+binds **refuse to listen** unless `SWARM_API_TOKEN` is set or
+`SWARM_ALLOW_INSECURE_LAN=1`. MCP process spawn from start body / env is **off**
+unless `SWARM_ALLOW_MCP_SERVERS=true`.
 
-**Why:** Trusted-appliance security posture for release 1.0 Phase 1. Binding
-`0.0.0.0` without a token is still possible but logs a loud warning.
+**Why:** Trusted-appliance security posture for release 1.0 — LAN exposure without
+auth was a foot-gun (warn-only was too easy to miss).
 
-**When to revisit:** Multi-user LAN install or reverse-proxy front door —
-require token by default when host is non-loopback.
+**When to revisit:** Multi-user install or reverse-proxy front door with mTLS.
 
-**See:** `docs/RELEASE-1.0-PLAN.md`.
+**See:** `docs/RELEASE-1.0-PLAN.md`, `server/src/index.ts` (D11).
 
 ---
 

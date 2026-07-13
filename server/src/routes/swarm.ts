@@ -328,12 +328,17 @@ export function swarmRouter(orch: Orchestrator): Router {
         });
         lastStopClickAtByRun.touch(resolved.runId);
         if (decision.action === "drain") {
-          const ok = await orch.drainRun(resolved.runId);
-          if (!ok) {
+          const result = await orch.drainRun(resolved.runId);
+          if (!result) {
             res.status(404).json({ error: "runId not active" });
             return;
           }
-          res.json({ ok: true, action: "drain", reason: decision.reason });
+          res.json({
+            ok: true,
+            action: "drain",
+            mode: result.mode,
+            reason: decision.reason,
+          });
           return;
         }
       }
@@ -412,12 +417,22 @@ export function swarmRouter(orch: Orchestrator): Router {
       return;
     }
     try {
-      const ok = await orch.drainRun(resolved.runId);
-      if (!ok) {
+      const result = await orch.drainRun(resolved.runId);
+      if (!result) {
         res.status(404).json({ error: "runId not active" });
         return;
       }
-      res.json({ ok: true });
+      res.json({
+        ok: true,
+        mode: result.mode,
+        // Soft drain finishes current work; hard-fallback means runner has no drain().
+        message:
+          result.mode === "soft"
+            ? "Soft drain started — finish in-flight work, then stop."
+            : result.mode === "hard-fallback"
+              ? "Runner has no soft drain — hard-stopped instead."
+              : "Run already stopped.",
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: msg });

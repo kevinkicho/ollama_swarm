@@ -68,6 +68,8 @@ export const SwarmView = memo(function SwarmView() {
   /** In-flight stop/drain/resume — scoped so concurrent runs stay controllable.
    *  Drain leaves hard Stop enabled so the user can escalate mid-drain. */
   const [pendingAction, setPendingAction] = useState<PendingStopAction | null>(null);
+  /** Operator feedback for drain/stop mode (soft vs hard-fallback). */
+  const [controlNotice, setControlNotice] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("transcript");
   const { runId: routeRunId } = useParams<{ runId?: string }>();
 
@@ -234,16 +236,39 @@ export const SwarmView = memo(function SwarmView() {
     const targetRunId = viewRunId;
     if (!targetRunId) return;
     setPendingAction({ runId: targetRunId, kind: "stop" });
+    setControlNotice(null);
     try {
-      const res = await apiFetch(stopUrl, { method: "POST" });
-      // Show closing phase immediately; rehydrate will sync summary + terminal state.
-      setPhaseScoped("stopping", (useSwarm.getState().round || 0) as any);
+      const res = await apiFetch(stopUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ runId: targetRunId }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        action?: string;
+        mode?: string;
+        reason?: string;
+      };
       if (!res.ok) {
-        // already stopped or not active in backend
+        // 404 = already gone is fine; other errors should surface.
+        if (res.status !== 404) {
+          setError(payload.error || `Stop failed (HTTP ${res.status})`);
+          return;
+        }
+      }
+      // Drain-on-stop (SWARM_DRAIN_ON_STOP) may soft-drain on first click.
+      if (payload.action === "drain") {
+        setPhaseScoped("draining", (useSwarm.getState().round || 0) as any);
+        setControlNotice(
+          payload.mode === "hard-fallback"
+            ? "Stop mapped to hard-stop (no soft drain on this runner)."
+            : "First Stop soft-drains (finish current turn). Click Stop again within 5s to kill immediately.",
+        );
+      } else {
+        setPhaseScoped("stopping", (useSwarm.getState().round || 0) as any);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setPhaseScoped("stopped", (useSwarm.getState().round || 0) as any);
     } finally {
       setPendingAction((cur) => (cur?.runId === targetRunId && cur.kind === "stop" ? null : cur));
       // re-hydrate status so UI reflects backend (especially useful for
@@ -256,27 +281,46 @@ export const SwarmView = memo(function SwarmView() {
   // no in-flight commits get lost), no new claims, then escalates
   // to hard stop. Backstopped at 3 min on the server side.
   // Hard Stop stays enabled during drain so the user can escalate.
+  // Phase is set only after a successful response so a failed drain
+  // does not fake "stopped" / "draining".
   const onDrain = async () => {
     if (!confirm("Drain & Stop: workers finish their current claim (no new claims), then the swarm exits. Hung prompts abort after ~90s; full backstop 3 min. OK to proceed? (Stop remains available to kill immediately.)")) return;
     const targetRunId = viewRunId;
     if (!targetRunId) return;
-    setPhaseScoped("draining", (useSwarm.getState().round || 0) as any);
     setPendingAction({ runId: targetRunId, kind: "drain" });
+    setControlNotice(null);
     try {
-      const drainUrl = viewRunId ? `/api/swarm/drain` : "/api/swarm/drain";
-      const body = viewRunId ? JSON.stringify({ runId: viewRunId }) : undefined;
+      const drainUrl = "/api/swarm/drain";
+      const body = JSON.stringify({ runId: viewRunId });
       const res = await apiFetch(drainUrl, {
         method: "POST",
-        headers: body ? { "Content-Type": "application/json" } : undefined,
+        headers: { "Content-Type": "application/json" },
         body,
       });
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        mode?: string;
+        message?: string;
+      };
       if (!res.ok) {
-        const s = useSwarm.getState();
-        s.setPhase("stopped", s.round || 0);
+        setError(payload.error || `Drain failed (HTTP ${res.status})`);
+        return;
+      }
+      if (payload.mode === "hard-fallback") {
+        setPhaseScoped("stopping", (useSwarm.getState().round || 0) as any);
+        setControlNotice(
+          payload.message
+            || "Runner has no soft drain — hard-stopped instead. Prefer Stop for immediate kill next time.",
+        );
+      } else if (payload.mode === "already-stopped") {
+        setControlNotice(payload.message || "Run already stopped.");
+      } else {
+        // soft (default)
+        setPhaseScoped("draining", (useSwarm.getState().round || 0) as any);
+        if (payload.message) setControlNotice(payload.message);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setPhaseScoped("stopped", (useSwarm.getState().round || 0) as any);
     } finally {
       setPendingAction((cur) => (cur?.runId === targetRunId && cur.kind === "drain" ? null : cur));
       // re-hydrate status so UI reflects backend (especially useful for
@@ -502,7 +546,23 @@ export const SwarmView = memo(function SwarmView() {
       <CloneBanner />
       {phase === "draining" ? (
         <div className="shrink-0 px-3 py-1.5 bg-amber-950/50 border-b border-amber-700/40 text-xs text-amber-200">
-          Draining — finishing in-flight work, then stopping. Hung prompts abort after ~90s; use Stop to escalate immediately.
+          Draining — finishing in-flight work, then stopping. Hung prompts abort after ~90s; use <strong>Stop now</strong> to escalate immediately.
+        </div>
+      ) : null}
+      {controlNotice ? (
+        <div
+          className="shrink-0 px-3 py-1.5 bg-sky-950/40 border-b border-sky-700/30 text-xs text-sky-100 flex items-center gap-2"
+          role="status"
+        >
+          <span className="flex-1 min-w-0">{controlNotice}</span>
+          <button
+            type="button"
+            onClick={() => setControlNotice(null)}
+            className="shrink-0 text-sky-300 hover:text-white text-lg leading-none px-1"
+            aria-label="Dismiss control notice"
+          >
+            ×
+          </button>
         </div>
       ) : null}
       {(phase === "planning" || phase === "seeding") && planningSubphase ? (
