@@ -211,18 +211,17 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
     }
   }
 
-  // 5. Empty diff: hunks applied but produced no actual changes
-  //    (e.g., the search-replace was a no-op, or every file was
-  //    already at the target state). Treat as a successful no-op
-  //    commit elision — return ok with empty filesWritten so the
-  //    caller can mark the todo committed without a git commit.
+  // 5. Empty diff: hunks "applied" but produced no actual changes
+  //    (search-replace was a no-op, or every file already at target).
+  //    Fail closed — callers must not mark the todo committed / completed
+  //    without a real write. Workers should skip with an explicit reason
+  //    when the work is already done; silent no-op success hides stalls.
   if (filesWritten.length === 0) {
     return {
-      ok: true,
-      commitSha: "",
-      filesWritten: [],
-      linesAdded: 0,
-      linesRemoved: 0,
+      ok: false,
+      reason:
+        "apply produced no file changes (no-op elided) — not a successful commit; "
+        + "skip with reason if already done, or emit real hunks",
     };
   }
 

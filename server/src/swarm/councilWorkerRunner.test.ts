@@ -74,3 +74,16 @@ test("councilWorkerRunner — file-scoped dequeue defers overlapping writers", (
 test("councilWorkerRunner — reports settle agent id for cycle settlement", () => {
   assert.match(SRC, /onTodoSettledByAgent/, "must notify settlement with agent id");
 });
+
+test("councilWorkerRunner — fail-closed when apply writes zero files", () => {
+  assert.match(
+    SRC,
+    /filesWritten\.length === 0/,
+    "must not complete a todo on no-op apply (zero filesWritten)",
+  );
+  assert.match(
+    SRC,
+    /wrote zero files/,
+    "zero-write path must surface an explicit retry reason",
+  );
+});

@@ -643,6 +643,15 @@ async function tryWorkerPrompt(
       });
 
       if (applyResult.ok) {
+        // Fail-closed: pipeline may still report ok with empty writes only if
+        // policy changes; require real filesWritten before completing.
+        if (!applyResult.filesWritten || applyResult.filesWritten.length === 0) {
+          return {
+            outcome: "retry",
+            reason: "apply wrote zero files (no-op) — not a successful commit",
+            lastResponse: res,
+          };
+        }
         ctx.appendSystem(`[execution] ${agent.id} ✓ applied — ${applyResult.commitSha?.slice(0, 7)}.`);
         return { outcome: "completed" };
       }
@@ -684,6 +693,13 @@ async function tryWorkerPrompt(
                 git: gitAdapter,
               });
               if (repairResult.ok) {
+                if (!repairResult.filesWritten || repairResult.filesWritten.length === 0) {
+                  return {
+                    outcome: "retry",
+                    reason: "hunk repair wrote zero files (no-op) — not a successful commit",
+                    lastResponse: repairText,
+                  };
+                }
                 ctx.appendSystem(`[execution] ${agent.id} ✓ applied (hunk repair) — ${repairResult.commitSha?.slice(0, 7)}.`);
                 return { outcome: "completed" };
               }

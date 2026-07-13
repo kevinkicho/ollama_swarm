@@ -37,6 +37,8 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | Provider parallel overload | Quota storms, all agents retry | **Policy:** open fan-out; use failover / lower agentCount |
 | Historical token totals wrong | 1d / all-time misleading | **Partial:** single `recordChatUsage`; old runs estimated |
 | Soft-drain vs hard-stop confusion | Wrong button behavior | **Documented** in `run-stop-drain-lifecycle.md` |
+| Autonomous soft-done spun forever | Soft `"done"` cleared `earlyStopDetail` and re-cycled | **Done:** `councilSettlementPolicy` — soft done is terminal; autonomy continues only via `"retry"` |
+| No-op apply marked completed | Empty `filesWritten` treated as successful commit | **Done:** `WorkerPipeline` fail-closed + council worker zero-write retry |
 
 ## P2 — product / security / polish
 

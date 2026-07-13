@@ -287,9 +287,9 @@ describe("applyAndCommit — failure modes", () => {
 });
 
 describe("applyAndCommit — no-op + empty cases", () => {
-  it("hunks that produce no diff result in ok with empty filesWritten + no commit", async () => {
-    // Replace "x" with "x" — applyHunks succeeds but the result equals
-    // the input. Pipeline elides the commit (clean tree, nothing to do).
+  it("hunks that produce no diff fail closed (not a successful commit)", async () => {
+    // Replace "x" with "x" — applyHunks succeeds but nothing changes on disk.
+    // Fail closed so callers cannot mark the todo completed without a write.
     const { fs } = makeFakeFs({ "a.ts": "x" });
     const { git, state: gitState } = makeFakeGit();
     const hunks: Hunk[] = [{ op: "replace", file: "a.ts", search: "x", replace: "x" }];
@@ -301,10 +301,9 @@ describe("applyAndCommit — no-op + empty cases", () => {
       fs,
       git,
     });
-    assert.equal(out.ok, true);
-    if (!out.ok) return;
-    assert.equal(out.commitSha, ""); // no commit fired
-    assert.deepEqual(out.filesWritten, []);
+    assert.equal(out.ok, false);
+    if (out.ok) return;
+    assert.match(out.reason, /no file changes|no-op/i);
     assert.equal(gitState.commits.length, 0);
   });
 });
@@ -409,11 +408,11 @@ describe("applyAndCommit — verification gate (#296)", () => {
     assert.ok(out.reason.length <= 15 + 800 + 5);
   });
 
-  it("doesn't run verify when there are no writes (empty diff)", async () => {
+  it("doesn't run verify when there are no writes (empty diff fails closed)", async () => {
     const { fs } = makeFakeFs({ "a.ts": "hello" });
     const { git } = makeFakeGit();
     let verifyCalled = 0;
-    // No-op replace: search === replace → no actual write
+    // No-op replace: search === replace → no actual write → fail closed before verify
     const out = await applyAndCommit({
       todoId: "t1", workerId: "w", expectedFiles: ["a.ts"],
       hunks: [{ op: "replace", file: "a.ts", search: "hello", replace: "hello" }],
@@ -421,7 +420,8 @@ describe("applyAndCommit — verification gate (#296)", () => {
       verify: { async run() { verifyCalled++; return { ok: true }; } },
     });
     assert.equal(verifyCalled, 0, "verify should not run on empty diff");
-    assert.equal(out.ok, true);
+    assert.equal(out.ok, false);
+    if (!out.ok) assert.match(out.reason, /no file changes|no-op/i);
   });
 
   it("leaves newly-created files in place on revert (no fs.delete adapter)", async () => {

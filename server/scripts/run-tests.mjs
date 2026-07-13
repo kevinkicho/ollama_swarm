@@ -118,6 +118,7 @@ const TEST_FILES = [
   "src/swarm/councilDecisions.test.ts",
   "src/swarm/councilTodoClassify.test.ts",
   "src/swarm/councilWorkerRunner.test.ts",
+  "src/swarm/councilSettlementPolicy.test.ts",
   "src/swarm/extractText.test.ts",
   "src/swarm/runEndReflection.test.ts",
   "src/swarm/staggerStart.test.ts",

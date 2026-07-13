@@ -85,6 +85,7 @@ import {
   type CouncilProgressHost,
 } from "./councilProgress.js";
 import { runCouncilCycle } from "./councilRunCycle.js";
+import { decideCouncilLoopAfterCycle } from "./councilSettlementPolicy.js";
 
 /**
  * Ambition tier cap for council (mirrors blackboard tierRunner.resolvedMaxTiers).
@@ -420,27 +421,28 @@ export class CouncilRunner extends DiscussionRunnerBase {
         this.state.stopping = this.closingRequested();
         const result = await this.runCycle(cfg, cycle, isAutonomous);
 
-        if (result === "stop") break;
-        if (result === "retry") {
-          // Ambition tier-up, unmet criteria with new todos, stall backoff, etc.
-          await new Promise((r) => setTimeout(r, 1000));
+        const decision = decideCouncilLoopAfterCycle(result, {
+          isAutonomous,
+          executionOnlyResume: this.executionOnlyResume,
+          closingRequested: this.closingRequested(),
+          earlyStopDetail: this.earlyStopDetail,
+        });
+        if (decision.action === "continue") {
+          // Ambition tier-up, unmet criteria with new todos, stretch, stall backoff.
+          // Open-ended autonomy is expressed by "retry", never by ignoring soft "done".
+          await new Promise((r) => setTimeout(r, decision.delayMs));
           continue;
         }
-        // result === "done"
-        if (this.executionOnlyResume) {
+        // decision.action === "break" — soft-done is real settlement; hard-stop
+        // keeps earlyStopDetail. Never clear earlyStopDetail on soft-done.
+        if (decision.kind === "resume-complete") {
           this.appendSystem("[resume] Execution-only resume complete — finishing run.");
-          break;
+        } else if (decision.kind === "soft-done" && isAutonomous) {
+          this.appendSystem(
+            "[council] Soft settlement (done) — ending autonomous run. "
+              + "Further work requires retry (tier/stretch/todos), not soft-done spin.",
+          );
         }
-        if (this.closingRequested()) break;
-        if (isAutonomous) {
-          // Open-ended: never treat a soft "done" as terminal — keep cycling
-          // so ambition / stretch work can keep progressing.
-          this.earlyStopDetail = undefined;
-          await new Promise((r) => setTimeout(r, 2000));
-          continue;
-        }
-        // Finite rounds: soft "done" ends the run. Tier promotion and unmet
-        // work return "retry" above, so this path is for true settlement.
         break;
       }
       this.appendCouncilTerminalMessage();

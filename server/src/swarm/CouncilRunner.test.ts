@@ -370,6 +370,16 @@ test("CouncilRunner — ambition tier-up returns retry so multi-cycle / autonomo
   );
   assert.match(
     COUNCIL_SRC,
+    /decideCouncilLoopAfterCycle/,
+    "outer loop must use settlement policy (soft done is real; no clear-and-spin)",
+  );
+  assert.doesNotMatch(
+    COUNCIL_SRC,
+    /earlyStopDetail\s*=\s*undefined/,
+    "must not clear earlyStopDetail on soft-done (erases real stop reasons)",
+  );
+  assert.match(
+    COUNCIL_SRC,
     /resolveCouncilMaxTiers/,
     "must resolve ambition max tiers from run config",
   );
