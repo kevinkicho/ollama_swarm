@@ -88,6 +88,7 @@ export async function evaluateCouncilStallGate(
     coachAgent: planner,
     clonePath: host.getActiveLocalPath(),
     runId: host.getActiveRunId(),
+    manager: host.state.manager as any,
     appendSystem: (msg) => host.appendSystem(msg),
     emit: (e) => host.emit(e),
   });

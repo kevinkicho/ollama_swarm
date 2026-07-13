@@ -103,6 +103,7 @@ export abstract class DiscussionRunnerBase {
         agent: coach,
         clonePath: this.active?.localPath,
         runId: this.active?.runId,
+        manager: this.opts.manager,
         appendSystem: (msg) => this.appendSystem(msg),
         emit: (e) => this.opts.emit(e),
       });

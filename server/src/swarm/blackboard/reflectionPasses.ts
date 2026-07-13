@@ -55,7 +55,7 @@ import { parseGoalList } from "./goalListParser.js";
 async function promptOnFreshSession(
   planner: Agent,
   prompt: string,
-  _label: string,
+  label: string,
   opts: {
     /** Caller-provided abort signal — when fired, the in-flight
      *  session.prompt call gets aborted. Used by the runner's hard
@@ -68,6 +68,7 @@ async function promptOnFreshSession(
      *  processing the reflection prompt (the agent.status mismatch
      *  Kevin flagged). */
     onStatusChange?: (status: "thinking" | "ready") => void;
+    manager?: import("../../services/AgentManager.js").AgentManager;
   } = {},
 ): Promise<string | undefined> {
   if (opts.signal?.aborted) return undefined;
@@ -77,6 +78,11 @@ async function promptOnFreshSession(
       agentName: "swarm-read",
       promptText: prompt,
       signal: opts.signal,
+      manager: opts.manager,
+      activity: { kind: "reflection", label },
+      // Caller drives ready via onStatusChange when set; manager owns
+      // settle when status callback is absent.
+      keepThinking: !!opts.onStatusChange,
     });
     return extractText(res);
   } catch (err) {
@@ -122,6 +128,8 @@ export interface ReflectionContext {
    *  design memory roadmap so it stays aligned with the mission instead
    *  of drifting toward generic platform features. */
   userDirective?: string;
+  /** AgentManager for sidebar lifecycle during reflection prompts. */
+  manager?: import("../../services/AgentManager.js").AgentManager;
 }
 
 export async function runStretchGoalReflectionPass(
@@ -161,7 +169,11 @@ export async function runStretchGoalReflectionPass(
   try {
     // Task #183: fresh session — planner's main session has too much
     // context by reflection-pass time, was returning empty.
-    const text = await promptOnFreshSession(planner, prompt, "stretch", { signal: ctx.signal, onStatusChange: ctx.onPlannerStatusChange });
+    const text = await promptOnFreshSession(planner, prompt, "stretch", {
+      signal: ctx.signal,
+      onStatusChange: ctx.onPlannerStatusChange,
+      manager: ctx.manager,
+    });
     if (!text) {
       ctx.appendSystem("Stretch-goal reflection: planner returned empty.");
       return;
@@ -231,7 +243,11 @@ export async function runMemoryDistillationPass(
   ].join("\n");
 
   // Task #183: fresh session.
-  const responseText = await promptOnFreshSession(planner, prompt, "memory-distill", { signal: ctx.signal, onStatusChange: ctx.onPlannerStatusChange });
+  const responseText = await promptOnFreshSession(planner, prompt, "memory-distill", {
+    signal: ctx.signal,
+    onStatusChange: ctx.onPlannerStatusChange,
+    manager: ctx.manager,
+  });
   if (!responseText) {
     ctx.appendSystem("Memory distillation: planner returned empty.");
     return;
@@ -336,7 +352,11 @@ export async function runDesignMemoryUpdatePass(
   ].join("\n");
 
   // Task #183: fresh session.
-  const responseText = await promptOnFreshSession(planner, prompt, "design-memory", { signal: ctx.signal, onStatusChange: ctx.onPlannerStatusChange });
+  const responseText = await promptOnFreshSession(planner, prompt, "design-memory", {
+    signal: ctx.signal,
+    onStatusChange: ctx.onPlannerStatusChange,
+    manager: ctx.manager,
+  });
   if (!responseText) {
     ctx.appendSystem("Design memory update: planner returned empty.");
     return;

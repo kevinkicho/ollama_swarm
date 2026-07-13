@@ -35,6 +35,8 @@ export interface StatusContext {
   agentStates: () => AgentState[];
   getPartialStreams: () => Record<string, { text: string; updatedAt: number }>;
   getActivitySnapshot?: () => NonNullable<SwarmStatus["agentActivity"]>;
+  /** Cap termination reason (wall-clock / token / cost) for early-stop UI. */
+  getTerminationReason?: () => string | undefined;
   utilCtx: () => RunnerUtilContext;
 }
 
@@ -152,6 +154,10 @@ export function status(ctx: StatusContext): SwarmStatus {
       return agentActivity && Object.keys(agentActivity).length > 0
         ? { agentActivity }
         : {};
+    })(),
+    ...((): { earlyStopDetail?: string } => {
+      const reason = ctx.getTerminationReason?.();
+      return reason ? { earlyStopDetail: reason } : {};
     })(),
     ...(thinkGuardReferee ? { thinkGuardReferee } : {}),
   };

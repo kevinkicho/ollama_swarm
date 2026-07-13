@@ -1,4 +1,4 @@
-import type { Agent } from "../../services/AgentManager.js";
+import type { Agent, AgentManager } from "../../services/AgentManager.js";
 import type { SwarmEvent } from "../../types.js";
 import type { ToolResultHook } from "../../tools/ToolDispatcher.js";
 import type { SwarmControlCenter } from "./SwarmControlCenter.js";
@@ -10,6 +10,7 @@ export interface CouncilControlHookDeps {
   runId?: string;
   appendSystem?: (msg: string) => void;
   emit?: (e: SwarmEvent) => void;
+  manager?: AgentManager;
 }
 
 export function buildCouncilToolCoachHook(
@@ -25,6 +26,7 @@ export function buildCouncilToolCoachHook(
       agent: coach,
       clonePath: deps.clonePath,
       runId: deps.runId,
+      manager: deps.manager,
       appendSystem: deps.appendSystem,
       emit: deps.emit,
     });

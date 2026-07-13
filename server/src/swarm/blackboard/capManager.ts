@@ -78,6 +78,11 @@ export interface CapContext {
   // shorthand: isStopping() === lifecycleState === "stopping"
   appendSystem: (msg: string, summary?: TranscriptEntrySummary) => void;
   setPhase: (phase: string) => void;
+  /** Optional Brain service for guard RECONFIG on cap trips. */
+  getBrainService?: () =>
+    | { injectSuggestion?: (runId: string, s: { title: string; text: string; category?: string }) => void }
+    | null
+    | undefined;
   v2ObserverApply: (event: { type: string; ts: number; reason?: string }) => void;
   recordError: (err: unknown, opts: { causeHint?: ErrorCategory; statusCode?: number }) => void;
 }
@@ -137,6 +142,22 @@ export function checkAndApplyCaps(ctx: CapContext): boolean {
   if (!finalReason) return false;
   ctx.setTerminationReason(finalReason);
   ctx.appendSystem(`Stopping: ${finalReason}`);
+  // Brain RECONFIG + early-stop chip (parity with council resource gates).
+  const kind =
+    tokenReason != null
+      ? ("token-budget" as const)
+      : costReason != null
+        ? ("quota" as const)
+        : ("wall-clock" as const);
+  void import("../guardNotify.js").then(({ notifyGuardTrip }) => {
+    notifyGuardTrip({
+      kind,
+      detail: finalReason,
+      runId: ctx.getActive()?.runId,
+      appendSystem: (t, s) => ctx.appendSystem(t, s),
+      getBrainService: ctx.getBrainService,
+    });
+  }).catch(() => {});
   ctx.setLifecycleState("stopping");
   for (const ctrl of ctx.getActiveAborts()) {
     try {
@@ -227,6 +248,8 @@ export async function runPauseProbe(ctx: CapContext): Promise<void> {
     const probeRes = await chatOnce(planner, {
       agentName: "swarm-read",
       promptText: "ping",
+      // Quiet probe — do not flip sidebar busy for a health ping.
+      activity: { kind: "diag", label: "quota probe" },
     });
     void probeRes;
     probeOk = true;

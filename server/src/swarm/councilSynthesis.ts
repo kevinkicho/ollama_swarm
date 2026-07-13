@@ -110,6 +110,7 @@ export async function runSynthesisPass(
         getCoachAgent: ctx.getCoachAgent,
         clonePath: cfg.localPath,
         runId: cfg.runId,
+        manager: ctx.manager as any,
         appendSystem: ctx.appendSystem,
         emit: ctx.emit as (e: import("../types.js").SwarmEvent) => void,
       }),

@@ -74,6 +74,7 @@ async function promptAuditor(
           getCoachAgent: ctx.getCoachAgent,
           clonePath: cfg.localPath,
           runId: cfg.runId,
+          manager: ctx.manager as any,
           appendSystem: ctx.appendSystem,
           emit: ctx.emit,
         }),

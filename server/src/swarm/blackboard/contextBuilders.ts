@@ -338,6 +338,7 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
         coachAgent: planner,
         clonePath: active?.localPath,
         runId: active?.runId,
+        manager: r.opts.manager,
         interactionTracker: r.interactionTracker,
         exceptionCollector: r.exceptionCollector,
         appendSystem: (msg: string) => r.appendSystem(msg),
@@ -544,6 +545,7 @@ export function capContext(r: BlackboardRunnerFields): CapContext {
     isStopping: () => r.lifecycleState === "stopping",
     appendSystem: (msg: string, summary?: TranscriptEntrySummary) => r.appendSystem(msg, summary),
     setPhase: (phase: SwarmPhase) => r.setPhase(phase),
+    getBrainService: () => r.opts.getBrainService?.() ?? null,
     v2ObserverApply: (event: SwarmEvent) => r.v2Observer.apply(event),
     recordError: (err: unknown, opts?: { causeHint?: ErrorCategory; statusCode?: number }) => r.recordError(err, opts),
   } as unknown as CapContext;

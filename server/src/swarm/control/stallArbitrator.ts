@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { Agent } from "../../services/AgentManager.js";
+import type { Agent, AgentManager } from "../../services/AgentManager.js";
 import { chatOnce } from "../chatOnce.js";
 import type { StallBoardSnapshot, StallGateVerdict } from "@ollama-swarm/shared/swarmControl/types";
 import {
@@ -21,6 +21,8 @@ export interface StallArbitratorDeps {
   runId?: string;
   recurringPatterns?: string[];
   interactionSummary?: string;
+  /** When set, owns sidebar lifecycle for the arbitrator prompt. */
+  manager?: AgentManager;
 }
 
 export async function runStallArbitrator(
@@ -55,6 +57,8 @@ export async function runStallArbitrator(
       promptText: prompt,
       clonePath: deps.clonePath,
       runId: deps.runId,
+      manager: deps.manager,
+      activity: { kind: "control", label: "stall arbitrator" },
       format: {
         type: "object",
         properties: {

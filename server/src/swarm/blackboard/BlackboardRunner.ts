@@ -504,6 +504,7 @@ export class BlackboardRunner implements SwarmRunner {
         typeof this.opts.manager.getActivitySnapshot === "function"
           ? this.opts.manager.getActivitySnapshot()
           : {},
+      getTerminationReason: () => this.terminationReason,
       utilCtx: () => this.utilCtx(),
     });
   }
@@ -779,6 +780,7 @@ export class BlackboardRunner implements SwarmRunner {
         this.markPlannerStatus(_planner, status);
       },
       userDirective: this.active?.userDirective,
+      manager: this.opts.manager,
     };
   }
 

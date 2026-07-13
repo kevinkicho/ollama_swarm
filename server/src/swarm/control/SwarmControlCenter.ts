@@ -1,4 +1,4 @@
-import type { Agent } from "../../services/AgentManager.js";
+import type { Agent, AgentManager } from "../../services/AgentManager.js";
 import type { SwarmEvent } from "../../types.js";
 import type { ExitContract, Todo } from "../blackboard/types.js";
 import type { InteractionTracker } from "../blackboard/brainOverseer/interactionTracker.js";
@@ -38,6 +38,7 @@ export interface StallGateInput {
   exceptionCollector?: ExceptionCollector | null;
   appendSystem: (msg: string) => void;
   emit?: SwarmControlEmit;
+  manager?: AgentManager;
 }
 
 export class SwarmControlCenter {
@@ -173,6 +174,7 @@ export class SwarmControlCenter {
         agent: input.coachAgent,
         clonePath: input.clonePath,
         runId: input.runId,
+        manager: input.manager,
         recurringPatterns: patterns,
         interactionSummary: this.summarizeInteractions(input.interactionTracker),
       })) ?? ruleVerdict;
@@ -251,4 +253,5 @@ export interface ToolCoachRecordDeps {
   runId?: string;
   appendSystem?: (msg: string) => void;
   emit?: SwarmControlEmit;
+  manager?: AgentManager;
 }

@@ -1,4 +1,4 @@
-import type { Agent } from "../../services/AgentManager.js";
+import type { Agent, AgentManager } from "../../services/AgentManager.js";
 import { chatOnce } from "../chatOnce.js";
 import type { ToolFailureRecord } from "@ollama-swarm/shared/swarmControl/types";
 import { toolFailureFingerprint } from "@ollama-swarm/shared/swarmControl/toolFailureTrack";
@@ -11,6 +11,7 @@ export interface ToolCoachDeps {
   clonePath?: string;
   runId?: string;
   priorPatterns?: string[];
+  manager?: AgentManager;
 }
 
 export async function runToolFailureCoach(
@@ -41,6 +42,8 @@ export async function runToolFailureCoach(
       promptText: prompt,
       clonePath: deps.clonePath,
       runId: deps.runId,
+      manager: deps.manager,
+      activity: { kind: "control", label: "tool coach" },
     });
     const hint =
       (res as { data?: { parts?: Array<{ text?: string }> } })?.data?.parts?.[0]?.text?.trim() ?? "";

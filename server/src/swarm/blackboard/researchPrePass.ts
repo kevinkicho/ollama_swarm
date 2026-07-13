@@ -90,7 +90,11 @@ export async function runResearchPrePass(
           opts.onStatusChange?.("thinking");
           try {
             const { chatOnce } = await import("../chatOnce.js");
-            return chatOnce(planner, chatOpts);
+            return chatOnce(planner, {
+              ...chatOpts,
+              manager: opts.streaming?.manager,
+              activity: { kind: "planning", label: "research pre-pass" },
+            });
           } finally {
             opts.onStatusChange?.("ready");
           }

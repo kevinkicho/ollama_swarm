@@ -14,7 +14,8 @@
 | Hard stop hung on provider | Stop never returns | **Partial:** 45s worker wait + session abort; still external HTTP tails |
 | Hung / runaway continuous stream | Idle wall never trips while streaming | **Done:** absolute prompt wall-clock (fail-closed, no idle reset) |
 | Autonomous ignores token/wall caps | rounds=0 cycles forever past budget | **Done:** cycle-boundary `checkCouncilResourceCaps` |
-| chatOnce headless sidebar | Research/coach dock without status | **Done:** optional manager owns markStatus on chatOnce |
+| Blackboard caps silent to Brain/UI | Cap stop without RECONFIG / early-stop chip | **Done:** notifyGuardTrip + earlyStopDetail from terminationReason |
+| chatOnce headless sidebar | Research/coach dock without status | **Done:** coach/stall/reflection/pre-pass/worker bash wired |
 
 ## P1 — degraded multi-day use
 

@@ -119,6 +119,7 @@ function buildCouncilToolCoachHook(
       agent: coach,
       clonePath: state.clonePath,
       runId: state.cfg.runId,
+      manager: state.manager as any,
       appendSystem: ctx.appendSystem,
       emit: ctx.emit,
     });
@@ -389,6 +390,8 @@ async function executeCouncilBuildTodo(
         webToolsConfig: state.cfg,
         runId: state.cfg.runId,
         mcpServers: state.cfg.mcpServers,
+        manager: state.manager as any,
+        activity: { kind: "worker", label: "bash todo" },
         onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
       });
       const text = extractText(res)?.trim();
