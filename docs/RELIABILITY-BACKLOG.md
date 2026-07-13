@@ -55,6 +55,9 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | no-productive-progress → "completed" | Summary lies about success | **Done:** classifyStopReason maps progress gates to no-progress |
 | writeMode never sent from UI | multi experimental gate unused | **Done:** SetupForm write mode + start payload |
 | No-op replan thrash | Replan full 3× on zero-write | **Done:** noop stale → replan cap 1 + permanent skip |
+| Debug Log list O(bytes) | Scanning every debug.jsonl | **Done:** `debug.meta.json` sidecar + optional `?limit=&offset=` |
+| Brain RECONFIG after stop | Button hidden on terminal phase | **Done:** soft-terminal + 90s grace; deferred sessionStorage on 404 |
+| conflictPolicy unused in UI | multi only | **Done:** SetupForm conflict policy when writeMode=multi |
 
 ## P2 — product / security / polish
 

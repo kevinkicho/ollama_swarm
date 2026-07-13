@@ -202,6 +202,132 @@ export interface PerRunDebugIndexEntry {
   mtimeMs: number;
   lineCount: number;
   derived: DerivedRunState | null;
+  /** True when list row came from debug.meta.json (no full debug scan). */
+  fromMeta?: boolean;
+}
+
+/** Sidecar written beside debug.jsonl so list build is O(small reads). */
+export interface DebugMetaSidecar {
+  version: 1;
+  runId: string;
+  startedAt?: number;
+  finishedAt?: number;
+  preset?: string;
+  lineCount: number;
+  bytes: number;
+  stopReason?: string;
+  hasSummary?: boolean;
+  /** Compact derived subset for list cards. */
+  derived?: Partial<DerivedRunState> & { runId?: string };
+  writtenAt: number;
+}
+
+export const DEBUG_META_FILENAME = "debug.meta.json";
+
+/** Write or refresh logs/<runId>/debug.meta.json from an index entry. */
+export async function writeDebugMetaSidecar(
+  logDir: string,
+  entry: Pick<PerRunDebugIndexEntry, "runId" | "bytes" | "lineCount" | "derived">,
+): Promise<string> {
+  const dir = path.join(logDir, entry.runId);
+  await fs.mkdir(dir, { recursive: true });
+  const metaPath = path.join(dir, DEBUG_META_FILENAME);
+  const d = entry.derived;
+  const body: DebugMetaSidecar = {
+    version: 1,
+    runId: entry.runId,
+    startedAt: d?.startedAt,
+    finishedAt: d?.finishedAt,
+    preset: d?.preset,
+    lineCount: entry.lineCount,
+    bytes: entry.bytes,
+    stopReason: d?.stopReason,
+    hasSummary: d?.hasSummary,
+    derived: d
+      ? {
+          runId: d.runId ?? entry.runId,
+          preset: d.preset,
+          startedAt: d.startedAt,
+          finishedAt: d.finishedAt,
+          durationMs: d.durationMs,
+          finalPhase: d.finalPhase,
+          stopReason: d.stopReason,
+          hasSummary: d.hasSummary,
+          transcriptCount: d.transcriptCount,
+          agentCount: d.agentCount,
+          anomalyFlags: d.anomalyFlags,
+          errors: d.errors?.slice(0, 5),
+          eventTypeCounts: d.eventTypeCounts,
+        }
+      : { runId: entry.runId },
+    writtenAt: Date.now(),
+  };
+  await fs.writeFile(metaPath, JSON.stringify(body), "utf8");
+  return metaPath;
+}
+
+/** Prefer fresh debug.meta.json over scanning debug.jsonl. */
+export async function tryReadDebugMetaSidecar(
+  logDir: string,
+  runId: string,
+  debugMtimeMs: number,
+  debugBytes: number,
+): Promise<PerRunDebugIndexEntry | null> {
+  const metaPath = path.join(logDir, runId, DEBUG_META_FILENAME);
+  try {
+    const [metaSt, raw] = await Promise.all([
+      fs.stat(metaPath),
+      fs.readFile(metaPath, "utf8"),
+    ]);
+    // Stale if debug.jsonl is clearly newer than meta (more events landed).
+    // 2s skew for Windows filesystem timestamp rounding.
+    if (debugMtimeMs > metaSt.mtimeMs + 2_000) return null;
+    const parsed = JSON.parse(raw) as DebugMetaSidecar;
+    if (!parsed || parsed.version !== 1 || parsed.runId !== runId) return null;
+    const derivedBase = parsed.derived ?? {};
+    const derived: DerivedRunState = {
+      errors: Array.isArray(derivedBase.errors) ? derivedBase.errors : [],
+      transcriptCount: derivedBase.transcriptCount ?? 0,
+      agentStateUpdates: 0,
+      agentActivityEvents: 0,
+      activityTimeline: [],
+      hasSummary: derivedBase.hasSummary ?? parsed.hasSummary ?? false,
+      phaseTimeline: [],
+      eventTypeCounts: derivedBase.eventTypeCounts ?? {},
+      modelShiftCount: 0,
+      brainFallbackCount: 0,
+      todoClaimed: 0,
+      todoFailed: 0,
+      todoReplanned: 0,
+      todoSkipped: 0,
+      streamingEventCount: 0,
+      streamingEndCount: 0,
+      amendmentCount: 0,
+      conformanceSampleCount: 0,
+      driftSampleCount: 0,
+      coldStartCount: 0,
+      streamAnomalies: [],
+      anomalyFlags: Array.isArray(derivedBase.anomalyFlags) ? derivedBase.anomalyFlags : [],
+      runId: derivedBase.runId ?? runId,
+      preset: derivedBase.preset ?? parsed.preset,
+      startedAt: derivedBase.startedAt ?? parsed.startedAt,
+      finishedAt: derivedBase.finishedAt ?? parsed.finishedAt,
+      durationMs: derivedBase.durationMs,
+      finalPhase: derivedBase.finalPhase,
+      stopReason: derivedBase.stopReason ?? parsed.stopReason,
+      agentCount: derivedBase.agentCount,
+    };
+    return {
+      runId,
+      bytes: parsed.bytes || debugBytes,
+      mtimeMs: metaSt.mtimeMs,
+      lineCount: parsed.lineCount ?? 0,
+      derived,
+      fromMeta: true,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** One pass over a debug log: line count + event-type histogram (no full JSON parse). */
@@ -275,6 +401,10 @@ async function indexOnePerRunDebugLog(
   const debugPath = path.join(logDir, runId, "debug.jsonl");
   try {
     const st = await fs.stat(debugPath);
+    // PR1: prefer sidecar when fresh (avoids scanning multi-MB debug.jsonl).
+    const fromMeta = await tryReadDebugMetaSidecar(logDir, runId, st.mtimeMs, st.size);
+    if (fromMeta && fromMeta.lineCount > 0) return fromMeta;
+
     let lineCount = 0;
     let derived: DerivedRunState | null = null;
     try {
@@ -293,7 +423,18 @@ async function indexOnePerRunDebugLog(
     } catch {
       lineCount = 0;
     }
-    return { runId, bytes: st.size, mtimeMs: st.mtimeMs, lineCount, derived };
+    const entry: PerRunDebugIndexEntry = {
+      runId,
+      bytes: st.size,
+      mtimeMs: st.mtimeMs,
+      lineCount,
+      derived,
+    };
+    // Best-effort write sidecar for next list (completed runs with summary).
+    if (derived?.hasSummary || derived?.finishedAt) {
+      void writeDebugMetaSidecar(logDir, entry).catch(() => {});
+    }
+    return entry;
   } catch {
     return null;
   }

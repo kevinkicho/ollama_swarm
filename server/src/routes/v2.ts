@@ -51,12 +51,32 @@ export function v2Router(deps: V2RouterDeps): Router {
     });
   });
 
-  r.get("/event-log/runs", async (_req: Request, res: Response) => {
+  r.get("/event-log/runs", async (req: Request, res: Response) => {
     try {
       const list = await buildEventLogRunList(deps.eventLogPath, logDir);
+      const total = list.runs.length;
+      // PR2: optional server-side pagination (client still pages for UX).
+      const limitRaw = Number(req.query.limit);
+      const offsetRaw = Number(req.query.offset);
+      const limit =
+        Number.isFinite(limitRaw) && limitRaw > 0
+          ? Math.min(200, Math.floor(limitRaw))
+          : undefined;
+      const offset =
+        Number.isFinite(offsetRaw) && offsetRaw > 0
+          ? Math.floor(offsetRaw)
+          : 0;
+      const runs =
+        limit != null
+          ? list.runs.slice(offset, offset + limit)
+          : list.runs;
       res.json({
-        runs: list.runs,
-        sliceCount: list.runs.length,
+        runs,
+        sliceCount: runs.length,
+        total,
+        offset,
+        limit: limit ?? total,
+        hasMore: limit != null ? offset + runs.length < total : false,
         malformed: 0,
         sources: [deps.eventLogPath],
         totalRecords: list.tailRecordCount,

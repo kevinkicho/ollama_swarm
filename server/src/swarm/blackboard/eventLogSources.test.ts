@@ -10,6 +10,9 @@ import {
   findRunReplay,
   clearEventLogListCache,
   PER_RUN_INDEX_FULL_READ_MAX_BYTES,
+  writeDebugMetaSidecar,
+  tryReadDebugMetaSidecar,
+  indexPerRunDebugLogs,
 } from "./eventLogSources.js";
 
 describe("readAllEventLogs", () => {
@@ -35,6 +38,80 @@ describe("readAllEventLogs", () => {
       assert.equal(result.records[1].event.runId, "new-run");
       assert.equal(result.archivesTotal, 1);
       assert.equal(result.archivesRead, 1);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("debug.meta.json sidecar", () => {
+  it("prefer fresh meta over re-scanning debug.jsonl", async () => {
+    clearEventLogListCache();
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "evt-meta-"));
+    try {
+      const runId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+      const runDir = path.join(dir, runId);
+      await fs.mkdir(runDir, { recursive: true });
+      const debugPath = path.join(runDir, "debug.jsonl");
+      await fs.writeFile(
+        debugPath,
+        JSON.stringify({ ts: 1, event: { type: "run_started", runId, preset: "council" } }) + "\n",
+        "utf8",
+      );
+      const st = await fs.stat(debugPath);
+      await writeDebugMetaSidecar(dir, {
+        runId,
+        bytes: st.size,
+        lineCount: 42,
+        derived: {
+          runId,
+          preset: "council",
+          startedAt: 1000,
+          finishedAt: 5000,
+          durationMs: 4000,
+          hasSummary: true,
+          stopReason: "completed",
+          errors: [],
+          transcriptCount: 3,
+          agentStateUpdates: 0,
+          agentActivityEvents: 0,
+          activityTimeline: [],
+          phaseTimeline: [],
+          eventTypeCounts: {},
+          modelShiftCount: 0,
+          brainFallbackCount: 0,
+          todoClaimed: 0,
+          todoFailed: 0,
+          todoReplanned: 0,
+          todoSkipped: 0,
+          streamingEventCount: 0,
+          streamingEndCount: 0,
+          amendmentCount: 0,
+          conformanceSampleCount: 0,
+          driftSampleCount: 0,
+          coldStartCount: 0,
+          streamAnomalies: [],
+          anomalyFlags: [],
+        },
+      });
+      // Ensure meta mtime is not older than debug (Windows fs rounding).
+      const metaPath = path.join(runDir, "debug.meta.json");
+      const metaExists = await fs.stat(metaPath).catch(() => null);
+      assert.ok(metaExists, "debug.meta.json must exist after writeDebugMetaSidecar");
+      const future = new Date(Date.now() + 5_000);
+      await fs.utimes(metaPath, future, future);
+
+      const fromMeta = await tryReadDebugMetaSidecar(dir, runId, st.mtimeMs, st.size);
+      assert.ok(fromMeta, "tryReadDebugMetaSidecar should accept fresh meta");
+      assert.equal(fromMeta!.fromMeta, true);
+      assert.equal(fromMeta!.lineCount, 42);
+      assert.equal(fromMeta!.derived?.stopReason, "completed");
+
+      const indexed = await indexPerRunDebugLogs(dir);
+      const row = indexed.find((r) => r.runId === runId);
+      assert.ok(row);
+      assert.equal(row!.fromMeta, true);
+      assert.equal(row!.lineCount, 42);
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }

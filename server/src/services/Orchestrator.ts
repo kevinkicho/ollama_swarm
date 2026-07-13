@@ -392,10 +392,26 @@ export class Orchestrator {
     return stored;
   }
 
-  /** Extend mid-run limits (rounds, wall-clock cap, token budget). */
+  /** Extend mid-run limits (rounds, wall-clock cap, token budget).
+   *  Also allowed briefly while stopping/draining so Brain RECONFIG still
+   *  applies after the UI has flipped to a soft-terminal phase. */
   reconfigRun(runId: string, patch: RunReconfigPatch): RunReconfigResult | null {
     const run = this.runs.get(runId);
-    if (!run || !run.runner.isRunning()) return null;
+    if (!run) return null;
+    const running = run.runner.isRunning();
+    let softTerminal = false;
+    if (!running) {
+      try {
+        const phase = run.runner.status?.()?.phase;
+        softTerminal =
+          phase === "stopping"
+          || phase === "draining"
+          || phase === "paused";
+      } catch {
+        softTerminal = false;
+      }
+    }
+    if (!running && !softTerminal) return null;
 
     const applied = applyRunReconfig(run.cfg, patch, { startedAt: run.startedAt });
     if (!applied.ok) return applied;
@@ -426,8 +442,13 @@ export class Orchestrator {
       run.runConfig.thinkGuardRefereeMaxOutputTokens = tg.thinkGuardRefereeMaxOutputTokens.to;
     }
 
-    run.runner.reconfig?.(applied.changes);
-    run.runner.appendSystemMessage?.(applied.message);
+    // When soft-terminal, still patch cfg for any residual loop; runner may ignore.
+    try {
+      run.runner.reconfig?.(applied.changes);
+      run.runner.appendSystemMessage?.(applied.message);
+    } catch {
+      /* runner tearing down */
+    }
 
     this.opts.emit({
       type: "run_reconfigured",

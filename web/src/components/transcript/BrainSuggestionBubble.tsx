@@ -1,6 +1,6 @@
 // Brain / guard suggestion bubble with optional one-click RECONFIG apply.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSwarm } from "../../state/store";
 import { apiFetch } from "../../lib/apiFetch";
 import {
@@ -8,6 +8,9 @@ import {
   formatReconfigLabel,
 } from "../brainChat/chatHelpers";
 import type { RunReconfigPatch } from "../brainChat/types";
+
+/** How long after a hard terminal phase we still offer Apply (ms). */
+const TERMINAL_RECONFIG_GRACE_MS = 90_000;
 
 export function BrainSuggestionBubble({
   text,
@@ -22,6 +25,23 @@ export function BrainSuggestionBubble({
   const [busy, setBusy] = useState(false);
   const [applied, setApplied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [terminalSince, setTerminalSince] = useState<number | null>(null);
+
+  // Track when we first observe a hard terminal phase for this run.
+  useEffect(() => {
+    if (phase === "completed" || phase === "stopped" || phase === "failed") {
+      setTerminalSince((prev) => prev ?? Date.now());
+    } else if (
+      phase === "executing"
+      || phase === "planning"
+      || phase === "discussing"
+      || phase === "stopping"
+      || phase === "draining"
+      || phase === "paused"
+    ) {
+      setTerminalSince(null);
+    }
+  }, [phase]);
 
   // Strip leading badge prefix for display body.
   const body = text
@@ -32,14 +52,23 @@ export function BrainSuggestionBubble({
   const titleLine = body.split("\n")[0] ?? "Brain suggestion";
   const rest = body.includes("\n") ? body.slice(titleLine.length).trimStart() : "";
 
+  const hardTerminal =
+    phase === "completed" || phase === "stopped" || phase === "failed";
+  const softTerminal =
+    phase === "stopping" || phase === "draining" || phase === "paused";
+  const inTerminalGrace =
+    hardTerminal
+    && terminalSince != null
+    && Date.now() - terminalSince < TERMINAL_RECONFIG_GRACE_MS;
+
+  // Allow apply on live work, soft-terminal (stop/drain in flight), and
+  // briefly after hard terminal while the run may still be reconfigurable.
   const canApply =
-    !!reconfig &&
-    !!runId &&
-    !applied &&
-    phase !== "idle" &&
-    phase !== "completed" &&
-    phase !== "stopped" &&
-    phase !== "failed";
+    !!reconfig
+    && !!runId
+    && !applied
+    && phase !== "idle"
+    && (softTerminal || inTerminalGrace || !hardTerminal);
 
   async function applyReconfig() {
     if (!reconfig || !runId || busy) return;
@@ -52,7 +81,24 @@ export function BrainSuggestionBubble({
         body: JSON.stringify({ runId, ...reconfig }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error((data as { error?: string }).error ?? res.statusText);
+      if (!res.ok) {
+        const msg = (data as { error?: string }).error ?? res.statusText;
+        // Persist for next start when the run already finished.
+        if (res.status === 404 || /no active run/i.test(msg)) {
+          try {
+            sessionStorage.setItem(
+              "swarm:deferredReconfig",
+              JSON.stringify({ runId, patch: reconfig, at: Date.now() }),
+            );
+          } catch {
+            /* ignore */
+          }
+          throw new Error(
+            "Run already finished — saved patch for next start (see setup refill).",
+          );
+        }
+        throw new Error(msg);
+      }
       setApplied(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -85,7 +131,11 @@ export function BrainSuggestionBubble({
               onClick={() => void applyReconfig()}
               className="text-[10px] px-1.5 py-0.5 rounded border border-sky-700/60 bg-sky-950/40 text-sky-200 hover:bg-sky-900/50 disabled:opacity-50"
             >
-              {busy ? "applying…" : "Apply limits"}
+              {busy
+                ? "applying…"
+                : hardTerminal
+                  ? "Apply (grace)"
+                  : "Apply limits"}
             </button>
           ) : null}
           {applied ? (
@@ -93,6 +143,11 @@ export function BrainSuggestionBubble({
           ) : null}
           {error ? (
             <span className="text-[10px] text-rose-400/90">{error}</span>
+          ) : null}
+          {hardTerminal && !canApply && !applied ? (
+            <span className="text-[10px] text-ink-500">
+              reconfig window closed (run finished)
+            </span>
           ) : null}
         </div>
       ) : null}

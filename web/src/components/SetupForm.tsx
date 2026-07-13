@@ -610,9 +610,32 @@ export function SetupForm() {
             </Field>
           </div>
           {form.writeMode === "multi" && (
-            <div className="mt-2 text-[10px] text-amber-400/90 border border-amber-700/40 rounded px-2 py-1 bg-amber-950/30">
-              Multi-writer is experimental — start will send <code className="font-mono">allowExperimental: true</code>.
-              Prefer single-writer for production multi-day runs.
+            <div className="mt-2 space-y-2">
+              <div className="text-[10px] text-amber-400/90 border border-amber-700/40 rounded px-2 py-1 bg-amber-950/30">
+                Multi-writer is experimental — start will send{" "}
+                <code className="font-mono">allowExperimental: true</code>. Prefer single-writer
+                for production multi-day runs.
+              </div>
+              <Field
+                label="Conflict policy"
+                hint="How multi-writer hunk conflicts are resolved (server-side)."
+              >
+                <select
+                  className="input"
+                  value={form.conflictPolicy ?? "vote"}
+                  onChange={(e) =>
+                    form.setConflictPolicy(
+                      e.target.value as "merge" | "sequential" | "vote" | "judge" | "pick",
+                    )
+                  }
+                >
+                  <option value="vote">vote (majority)</option>
+                  <option value="merge">merge (non-overlapping)</option>
+                  <option value="sequential">sequential (CAS order)</option>
+                  <option value="judge">judge picks</option>
+                  <option value="pick">pick best (lead)</option>
+                </select>
+              </Field>
             </div>
           )}
         </Section>

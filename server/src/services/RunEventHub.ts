@@ -211,6 +211,55 @@ export function createDebugSink(runId: string, baseLogDir: string = "logs"): Eve
         stream.write(JSON.stringify({ ts: Date.now(), category, event }) + "\n");
         writeCount++;
         maybeRotateDebug();
+        // When a run summary lands, refresh debug.meta.json for fast Debug Log list.
+        const ev = event as { type?: string; summary?: { stopReason?: string; preset?: string; startedAt?: number; endedAt?: number } };
+        if (ev.type === "run_summary" || ev.type === "run_finished") {
+          void (async () => {
+            try {
+              const { writeDebugMetaSidecar } = await import(
+                "../swarm/blackboard/eventLogSources.js"
+              );
+              const st = fs.statSync(debugPath);
+              const summary = ev.summary;
+              await writeDebugMetaSidecar(baseLogDir, {
+                runId,
+                bytes: st.size,
+                lineCount: writeCount,
+                derived: {
+                  runId,
+                  preset: summary?.preset,
+                  startedAt: summary?.startedAt,
+                  finishedAt: summary?.endedAt ?? Date.now(),
+                  stopReason: summary?.stopReason,
+                  hasSummary: true,
+                  errors: [],
+                  transcriptCount: 0,
+                  agentStateUpdates: 0,
+                  agentActivityEvents: 0,
+                  activityTimeline: [],
+                  phaseTimeline: [],
+                  eventTypeCounts: {},
+                  modelShiftCount: 0,
+                  brainFallbackCount: 0,
+                  todoClaimed: 0,
+                  todoFailed: 0,
+                  todoReplanned: 0,
+                  todoSkipped: 0,
+                  streamingEventCount: 0,
+                  streamingEndCount: 0,
+                  amendmentCount: 0,
+                  conformanceSampleCount: 0,
+                  driftSampleCount: 0,
+                  coldStartCount: 0,
+                  streamAnomalies: [],
+                  anomalyFlags: [],
+                } as import("../swarm/blackboard/EventLogReaderV2.js").DerivedRunState,
+              });
+            } catch {
+              /* best effort */
+            }
+          })();
+        }
       } catch {
         // best effort
       }

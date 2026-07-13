@@ -97,6 +97,9 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [ambitionTiers, setAmbitionTiers] = useState("");
   /** Write mode for discussion deliverable apply (multi is experimental). */
   const [writeMode, setWriteMode] = useState<"none" | "single" | "multi">("single");
+  const [conflictPolicy, setConflictPolicy] = useState<
+    "merge" | "sequential" | "vote" | "judge" | "pick"
+  >("vote");
   const [busy, setBusy] = useState(false);
 
   // Keep the autocomplete provider in sync with the main model choice.
@@ -235,6 +238,7 @@ export function useSetupForm(navigate: (path: string) => void) {
         // Server fail-closed for experimental/research unless acknowledged.
         ...(needsExperimentalAck ? { allowExperimental: true } : {}),
         ...(writeMode && writeMode !== "none" ? { writeMode } : {}),
+        ...(writeMode === "multi" ? { conflictPolicy } : {}),
         ...(directiveTrimmed ? { userDirective: directiveTrimmed } : {}),
         webTools,
         ...(preset.id === "council" || preset.id === "blackboard"
@@ -329,6 +333,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     wallClockCapMin, setWallClockCapMin,
     ambitionTiers, setAmbitionTiers,
     writeMode, setWriteMode,
+    conflictPolicy, setConflictPolicy,
     busy, setBusy,
     preset,
     isActive,

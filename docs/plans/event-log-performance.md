@@ -4,7 +4,7 @@
 > `debug.jsonl` files grow. List view should open in &lt;1s; drill-down can be
 > heavier but must not freeze the server.
 
-**Status:** In progress — list fast-path shipped (2026-07); follow-ups queued below  
+**Status:** List fast-path + `debug.meta.json` sidecar + list pagination query (2026-07)  
 **Priority:** P2 — dev UX; worsens over long sessions with many runs  
 **Primary code:** `server/src/swarm/blackboard/eventLogSources.ts`, `web/src/components/EventLogPanel.tsx`
 
@@ -70,59 +70,26 @@ runs this can still be noticeable on cold cache (45s TTL).
 
 ## Queued work (recommended order)
 
-### PR1 — `debug.meta.json` sidecar (highest ROI)
+### PR1 — `debug.meta.json` sidecar (highest ROI) — **Done**
 
-**Goal:** List build reads ~200 bytes per run instead of scanning `debug.jsonl`.
-
-Write `logs/<runId>/debug.meta.json` when a run ends (on `run_summary` in the
-debug sink or run housekeeper):
-
-```json
-{
-  "runId": "…",
-  "startedAt": 0,
-  "finishedAt": 0,
-  "preset": "blackboard",
-  "lineCount": 12345,
-  "stopReason": "completed",
-  "bytes": 22000000,
-  "derived": { "…": "subset of DerivedRunState for list cards" }
-}
-```
+Write `logs/<runId>/debug.meta.json` on `run_summary` / `run_finished` in
+`createDebugSink`, and when list indexing scans a completed run.
 
 **List builder:** prefer meta when `debug.meta.json` mtime ≥ `debug.jsonl`
-mtime; fall back to current head/tail/stream path if missing or stale.
+mtime; fall back to head/tail/stream path if missing or stale.
 
-**Touchpoints:**
-
-- `server/src/services/RunEventHub.ts` (`createDebugSink`)
-- `server/src/swarm/runHousekeeper.ts` (optional backfill for old runs)
-- `server/src/swarm/blackboard/eventLogSources.ts` (`indexOnePerRunDebugLog`)
-
-**Effort:** ~1 PR · **Impact:** list time ~O(runs) small reads, not O(bytes).
+**API:** `writeDebugMetaSidecar` / `tryReadDebugMetaSidecar` in `eventLogSources.ts`.
 
 ---
 
-### PR2 — Paginated list API
-
-**Goal:** First paint in ~100ms regardless of total run count.
+### PR2 — Paginated list API — **Done (server)**
 
 ```
 GET /api/v2/event-log/runs?limit=10&offset=0
-→ { runs, total, hasMore, … }
+→ { runs, total, hasMore, offset, limit, … }
 ```
 
-Wire `EventLogPanel` pagination (already 5 segments/page client-side) to
-server offset/limit. Optionally return meta-only rows without scanning all
-folders when PR1 lands.
-
-**Touchpoints:**
-
-- `server/src/routes/v2.ts`
-- `server/src/swarm/blackboard/eventLogSources.ts`
-- `web/src/components/EventLogPanel.tsx`
-
-**Effort:** ~1 PR · **Impact:** perceived load time; less server work per open.
+Client still pages 5/page for UX; server limit/offset available for heavy fleets.
 
 ---
 
