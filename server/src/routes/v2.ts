@@ -56,8 +56,9 @@ export function v2Router(deps: V2RouterDeps): Router {
       const list = await buildEventLogRunList(deps.eventLogPath, logDir);
       const total = list.runs.length;
       // PR2: optional server-side pagination (client still pages for UX).
-      const limitRaw = Number(req.query.limit);
-      const offsetRaw = Number(req.query.offset);
+      const q = (req.query ?? {}) as Record<string, unknown>;
+      const limitRaw = Number(q.limit);
+      const offsetRaw = Number(q.offset);
       const limit =
         Number.isFinite(limitRaw) && limitRaw > 0
           ? Math.min(200, Math.floor(limitRaw))
