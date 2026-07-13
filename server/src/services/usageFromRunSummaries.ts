@@ -216,5 +216,6 @@ export function summaryRowsToUsageRecords(rows: readonly SummaryTokenRow[]): Usa
       ? `summary-est:${row.runId.slice(0, 8)}`
       : `summary-backfill:${row.runId.slice(0, 8)}`,
     runId: row.runId,
+    ...(row.estimated ? { estimated: true as const } : {}),
   }));
 }

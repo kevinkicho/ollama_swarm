@@ -728,6 +728,13 @@ export interface SwarmStatusSnapshot {
       attempt?: number;
       maxAttempts?: number;
       reason?: string;
+      history?: Array<{
+        phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+        ts: number;
+        kind?: string;
+        label?: string;
+        activityId?: string;
+      }>;
     }
   >;
   // Phase 2a: stigmergy pheromone table for catch-up hydration.

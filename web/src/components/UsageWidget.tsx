@@ -28,6 +28,8 @@ interface UsageWindow {
   windowLabel: string;
   byModel: Record<string, UsageBreakdownEntry>;
   byPreset: Record<string, UsageBreakdownEntry>;
+  /** When present: how many calls in this window were estimated. */
+  estimatedCalls?: number;
 }
 
 interface UsageRecord {
@@ -309,17 +311,26 @@ export function UsageWidget() {
                       Windows include live calls + historical run summaries.
                     </div>
                     {(() => {
-                      const est = (data.recent ?? []).filter(
-                        (r) =>
-                          r.estimated
-                          || (typeof r.path === "string"
-                            && (r.path.includes("estimated") || r.path.startsWith("summary-est"))),
-                      ).length;
-                      if (est === 0) return null;
+                      const isEst = (r: UsageRecord) =>
+                        r.estimated
+                        || (typeof r.path === "string"
+                          && (r.path.includes("estimated") || r.path.startsWith("summary-est")));
+                      const est = (data.recent ?? []).filter(isEst).length;
+                      const win = data.last24h;
+                      const winEst = win?.estimatedCalls
+                        ?? (data.recent ?? []).filter((r) => {
+                          if (!isEst(r)) return false;
+                          const age = Date.now() - r.ts;
+                          return age <= 24 * 60 * 60 * 1000;
+                        }).length;
+                      if (est === 0 && winEst === 0) return null;
                       return (
                         <div className="text-amber-400/90">
-                          {est} recent call{est === 1 ? "" : "s"} marked estimated
-                          (provider omitted usage or summary backfill) — not raw meter data.
+                          {est > 0
+                            ? `${est} recent call${est === 1 ? "" : "s"} marked estimated`
+                            : `${winEst} call${winEst === 1 ? "" : "s"} in last 24h estimated`}
+                          {" "}
+                          (provider omitted usage or summary backfill) — treat totals as approximate.
                         </div>
                       );
                     })()}

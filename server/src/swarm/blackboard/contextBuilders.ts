@@ -293,6 +293,8 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
     getAuditInvocations: () => r.auditInvocations,
     getCompletionDetail: () => r.completionDetail,
     getConsecutiveStuckCycles: () => r.consecutiveStuckCycles,
+    getZeroProgressStreak: () =>
+      (r as { zeroProgressStreak?: number }).zeroProgressStreak ?? 0,
     setCurrentTier: (t: number) => { r.currentTier = t; },
     setTiersCompleted: (t: number) => { r.tiersCompleted = t; },
     setTierStartedAt: (t: number | undefined) => { r.tierStartedAt = t; },
@@ -301,6 +303,9 @@ export function tierContext(r: BlackboardRunnerFields): TierContext {
     setCompletionDetail: (d: string | undefined) => { r.completionDetail = d; },
     setContract: (c: ExitContract | undefined) => { r.contract = c; },
     setConsecutiveStuckCycles: (n: number) => { r.consecutiveStuckCycles = n; },
+    setZeroProgressStreak: (n: number) => {
+      (r as { zeroProgressStreak?: number }).zeroProgressStreak = n;
+    },
     appendSystem: (msg: string, summary?: import("../../types.js").TranscriptEntrySummary) =>
       r.appendSystem(msg, summary),
     appendAgent: (agent: Agent, text: string) => r.appendAgent(agent, text),

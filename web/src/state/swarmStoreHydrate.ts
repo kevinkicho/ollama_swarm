@@ -2,6 +2,7 @@ import type { StoreApi } from "zustand";
 import type { SwarmEvent, SwarmStatusSnapshot, TranscriptEntry } from "../types";
 import type { SwarmPhase } from "../types";
 import type { SwarmStore } from "./store";
+import type { AgentActivityRecord } from "./agentActivityProjection";
 import { inferAgentsFromSnapshot, mergeAgentsForSnapshot } from "../lib/inferAgents";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
 import { syncThinkGuardRefereeStore } from "./thinkGuardRefereeSync";
@@ -307,6 +308,16 @@ export function applyStatusSnapshotToStore(
     const cur = store.getState().agentActivity;
     const next = { ...cur };
     for (const [agentId, rec] of Object.entries(snap.agentActivity)) {
+      // Prefer server history; merge with any live local history on reconnect.
+      const localHist = cur[agentId]?.history ?? [];
+      const recAny = rec as AgentActivityRecord & { history?: AgentActivityRecord["history"] };
+      const serverHist = Array.isArray(recAny.history) ? recAny.history : [];
+      const mergedHist =
+        serverHist.length >= localHist.length
+          ? serverHist
+          : localHist.length > 0
+            ? localHist
+            : serverHist;
       next[agentId] = {
         phase: rec.phase,
         ts: rec.ts,
@@ -317,6 +328,7 @@ export function applyStatusSnapshotToStore(
         attempt: rec.attempt,
         maxAttempts: rec.maxAttempts,
         reason: rec.reason,
+        ...(mergedHist && mergedHist.length > 0 ? { history: mergedHist } : {}),
       };
     }
     store.setState({ agentActivity: next });

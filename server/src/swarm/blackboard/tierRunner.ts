@@ -22,6 +22,12 @@ import { isTransientProviderStall } from "./retry.js";
 import { resolveToolProfile } from "../toolProfiles.js";
 import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
+import {
+  DEFAULT_ZERO_PROGRESS_LIMIT,
+  formatNoProductiveProgressReason,
+  isProductiveCycle,
+  updateZeroProgressStreak,
+} from "../productiveProgress.js";
 
 export interface TierContext {
   // --- state getters ---
@@ -36,6 +42,7 @@ export interface TierContext {
   getAuditInvocations: () => number;
   getCompletionDetail: () => string | undefined;
   getConsecutiveStuckCycles: () => number;
+  getZeroProgressStreak: () => number;
 
   // --- state setters ---
   setCurrentTier: (t: number) => void;
@@ -46,6 +53,7 @@ export interface TierContext {
   setCompletionDetail: (d: string | undefined) => void;
   setContract: (c: ExitContract | undefined) => void;
   setConsecutiveStuckCycles: (n: number) => void;
+  setZeroProgressStreak: (n: number) => void;
 
   // --- callbacks ---
   appendSystem: (msg: string, summary?: import("../../types.js").TranscriptEntrySummary) => void;
@@ -408,6 +416,11 @@ export async function runAuditedExecution(
 ): Promise<void> {
   while (!ctx.getStopping()) {
     if (ctx.checkAndApplyCaps()) return;
+
+    const committedBefore = ctx.boardCounts().committed;
+    const metBefore =
+      ctx.getContract()?.criteria.filter((c) => c.status === "met").length ?? 0;
+
     await ctx.runWorkers(workers);
     if (ctx.getStopping()) return;
 
@@ -423,6 +436,7 @@ export async function runAuditedExecution(
     if (!ctx.getContract() || ctx.getContract()!.criteria.length === 0) return;
 
     if (allCriteriaMet(ctx)) {
+      ctx.setZeroProgressStreak(0);
       const maxTiers = resolvedMaxTiers(ctx);
       if (
         maxTiers > 1 &&
@@ -531,7 +545,56 @@ export async function runAuditedExecution(
     }
     if (ctx.getStopping()) return;
 
+    // Productive-progress gate (A3 blackboard symmetry): stop autonomous
+    // when workers+auditor produce neither commits nor met flips for N cycles,
+    // even if open todos keep thrashing on the board.
+    const rActive = ctx.getActive()?.rounds ?? 1;
+    const isAutonomousRun = rActive === 0 || rActive >= 1_000_000;
+    const commitsDelta = Math.max(0, ctx.boardCounts().committed - committedBefore);
+    const metAfter =
+      ctx.getContract()?.criteria.filter((c) => c.status === "met").length ?? 0;
+    const metFlips = Math.max(0, metAfter - metBefore);
     const openAfter = ctx.boardCounts().open;
+    const newTodosApprox = Math.max(0, openAfter - openBefore);
+    if (isAutonomousRun) {
+      const { streak, shouldStop } = updateZeroProgressStreak(
+        ctx.getZeroProgressStreak(),
+        isProductiveCycle({
+          metFlips,
+          commitsThisCycle: commitsDelta,
+          newTodos: newTodosApprox,
+        }),
+        DEFAULT_ZERO_PROGRESS_LIMIT,
+      );
+      ctx.setZeroProgressStreak(streak);
+      if (shouldStop) {
+        const reason = formatNoProductiveProgressReason(streak);
+        ctx.setCompletionDetail(reason);
+        ctx.appendSystem(`[progress] ${reason} — stopping autonomous blackboard.`);
+        try {
+          const { notifyGuardTrip } = await import("../guardNotify.js");
+          notifyGuardTrip({
+            kind: "tier-stuck",
+            detail: reason,
+            runId: ctx.getActive()?.runId,
+            appendSystem: (t, s) => ctx.appendSystem(t, s),
+            getBrainService: ctx.getBrainService,
+          });
+        } catch {
+          /* non-fatal */
+        }
+        return;
+      }
+      if (streak > 0) {
+        ctx.appendSystem(
+          `[progress] Zero productive progress streak ${streak}/${DEFAULT_ZERO_PROGRESS_LIMIT} ` +
+            `(commits+${commitsDelta}, met+${metFlips}, openΔ${newTodosApprox}).`,
+        );
+      }
+    } else if (commitsDelta > 0 || metFlips > 0) {
+      ctx.setZeroProgressStreak(0);
+    }
+
     if (openAfter === openBefore && !allCriteriaResolved(ctx) && openAfter === 0) {
       let fallbackSucceeded = false;
       try {

@@ -35,7 +35,7 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | Early-stop opaque | Run ended, reason buried | **Done:** RunHealthChip shows truncated detail + full tooltip |
 | Headless activity labels | Sidebar only says "thinking" | **Done:** promptWithRetry default kind/label |
 | Provider parallel overload | Quota storms, all agents retry | **Policy:** open fan-out; use failover / lower agentCount |
-| Historical token totals wrong | 1d / all-time misleading | **Partial:** single `recordChatUsage`; old runs estimated |
+| Historical token totals wrong | 1d / all-time misleading | **Done:** live + summary `estimated` flags; UI callout for approximate totals |
 | Soft-drain vs hard-stop confusion | Wrong button behavior | **Documented** in `run-stop-drain-lifecycle.md` |
 | Autonomous soft-done spun forever | Soft `"done"` cleared `earlyStopDetail` and re-cycled | **Done:** `councilSettlementPolicy` — soft done is terminal; autonomy continues only via `"retry"` |
 | No-op apply marked completed | Empty `filesWritten` treated as successful commit | **Done:** `WorkerPipeline` fail-closed + council worker zero-write retry |
@@ -48,6 +48,9 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | Experimental start without ack | API accepts research presets silently | **Done:** `allowExperimental` required for experimental/research + multi-writer |
 | LAN bind open | Warn-only without token | **Done:** refuse listen unless token or `SWARM_ALLOW_INSECURE_LAN=1` |
 | Log dir growth | Manual prune only | **Done:** startup best-effort `prune-logs --apply` |
+| Blackboard thrash with open todos | Stuck only when open=0 | **Done:** productive-progress streak on commits/met flips |
+| Activity history lost on WS | Sidebar only last phase live | **Done:** client ring buffer on `setAgentActivity` + hydrate merge |
+| Audit before cycle settle | Unresolved fails advance cycle | **Done:** abandon residual → permanent-skip before audit; pending-commit wait |
 
 ## P2 — product / security / polish
 

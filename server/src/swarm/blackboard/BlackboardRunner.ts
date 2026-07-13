@@ -331,6 +331,8 @@ export class BlackboardRunner implements SwarmRunner {
   // W17/R13: heap-pressure pause flag.
   private memoryPaused = false;
   private consecutiveStuckCycles = 0;
+  /** Autonomous: consecutive audit cycles with no commits or met flips. */
+  private zeroProgressStreak = 0;
   /** Last planner/auditor transport stall — tier loop must not count quota hits as stuck. */
   private lastProviderStallReason?: string;
 

@@ -354,6 +354,17 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
           delete streamingMeta[ev.agentId];
         }
       }
+      // Ring buffer: keep recent transitions for AgentPanel timeline (B6).
+      const HISTORY_LIMIT = 40;
+      const priorHist = prior?.history ?? [];
+      const entry = {
+        phase: ev.phase,
+        ts: ev.ts,
+        kind: ev.kind ?? prior?.kind,
+        label: ev.label ?? prior?.label,
+        activityId: ev.activityId ?? prior?.activityId,
+      };
+      const history = [...priorHist, entry].slice(-HISTORY_LIMIT);
       const nextActivity: AgentActivityRecord = {
         phase: ev.phase,
         ts: ev.ts,
@@ -369,6 +380,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
             : ev.reason !== undefined
               ? ev.reason
               : prior?.reason,
+        history,
       };
       const patched = patchAgentForLiveSignals(s.agents[ev.agentId], {
         activity: nextActivity,

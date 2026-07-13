@@ -125,8 +125,26 @@ export async function drainCouncilTodos(
         break;
       }
 
-      if (host.state.todoQueue.counts().pending === 0 && host.state.todoQueue.counts().inProgress === 0) {
-        break;
+      {
+        const counts = host.state.todoQueue.counts();
+        // Wait for pending-commit too (cycleExecutionSettled) so audit does not
+        // run while auditor-gated commits are still open.
+        if (
+          counts.pending === 0
+          && counts.inProgress === 0
+          && counts.pendingCommit === 0
+        ) {
+          break;
+        }
+        // Only pending-commit remain — workers cannot progress; reaper will
+        // reopen stale ones. Avoid spinning empty worker passes.
+        if (counts.pending === 0 && counts.inProgress === 0 && counts.pendingCommit > 0) {
+          host.appendSystem(
+            `[execution] ${counts.pendingCommit} pending-commit todo(s) await auditor; ` +
+              `pausing worker drain for this cycle (reaper TTL applies).`,
+          );
+          break;
+        }
       }
 
       const { completed, failed, skipped } = await runCouncilWorkers(

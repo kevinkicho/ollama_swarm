@@ -167,6 +167,18 @@ describe("applyStatusSnapshotToStore", () => {
           label: "standup",
           kind: "council",
           activityId: "agent-1-1",
+          history: [
+            {
+              phase: "queued" as const,
+              ts: 1_700_000_000_000,
+              label: "standup",
+            },
+            {
+              phase: "waiting" as const,
+              ts: 1_700_000_000_100,
+              label: "standup",
+            },
+          ],
         },
       },
       streaming: {
@@ -179,6 +191,7 @@ describe("applyStatusSnapshotToStore", () => {
     assert.equal(act?.phase, "waiting");
     assert.equal(act?.label, "standup");
     assert.equal(act?.startedAt, 1_700_000_000_000);
+    assert.equal(act?.history?.length, 2);
     // Streaming restored after activity (activity hydrate must not clear it).
     assert.equal(store.getState().streaming["agent-1"], "partial draft");
   });

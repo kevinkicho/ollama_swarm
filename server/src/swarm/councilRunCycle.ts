@@ -21,6 +21,12 @@ import type { PostTodoInput } from "./blackboard/TodoQueue.js";
 import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import { runCouncilResearchStandup } from "./councilResearchStandup.js";
 import { checkCouncilResourceCaps } from "./councilResourceGates.js";
+import {
+  cycleExecutionSettled,
+  isPermanentSkipReason,
+  permanentSkipReason,
+  summarizeUnresolved,
+} from "./councilCycleSettlement.js";
 
 export interface CouncilRunCycleHost {
   state: CouncilAdapterState;
@@ -165,8 +171,19 @@ export async function runCouncilCycle(
   }
 
   if (host.closingRequested()) {
+    // Soft drain / hard stop: permanently skip residual soft-failed work so
+    // the run does not leave the board half-settled without a reason.
+    abandonUnresolvedCouncilTodos(host, cycle, "run stopping");
     host.finalizeCycleProgress(cycle);
     return "stop";
+  }
+
+  if (!cycleExecutionSettled(host.state.todoQueue)) {
+    const leftover = summarizeUnresolved(host.state.todoQueue);
+    host.appendSystem(
+      `[execution] Cycle queue not fully settled (${leftover}) — permanent-skipping residual fails before audit.`,
+    );
+    abandonUnresolvedCouncilTodos(host, cycle, "cycle settlement incomplete");
   }
 
   if (host.state.contract) {
@@ -196,6 +213,36 @@ export async function runCouncilCycle(
 
   host.finalizeCycleProgress(cycle);
   return "done";
+}
+
+/** Convert residual failed/soft-skipped todos to permanent skips so audit sees settled queue. */
+function abandonUnresolvedCouncilTodos(
+  host: CouncilRunCycleHost,
+  _cycle: number,
+  reason: string,
+): void {
+  const q = host.state.todoQueue;
+  let n = 0;
+  for (const t of q.list()) {
+    if (t.status === "failed") {
+      try {
+        q.skip(t.id, permanentSkipReason("attempts-exhausted", reason));
+        n++;
+      } catch {
+        /* ignore */
+      }
+      continue;
+    }
+    if (t.status === "skipped" && !isPermanentSkipReason(t.reason)) {
+      t.reason = permanentSkipReason("attempts-exhausted", t.reason ?? reason);
+      n++;
+    }
+  }
+  if (n > 0) {
+    host.appendSystem(
+      `[execution] Abandoned ${n} residual todo(s) as permanent-skip (${reason}).`,
+    );
+  }
 }
 
 async function runCycle1Discussion(
