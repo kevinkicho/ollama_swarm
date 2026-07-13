@@ -109,6 +109,20 @@ export interface SwarmStatus {
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   /** Live think-guard referee budget (resolved defaults + usage). */
   thinkGuardReferee?: import("@ollama-swarm/shared/thinkGuardBudget").ResolvedThinkGuardRefereeBudget;
+  /**
+   * Composite pipeline identity — which sub-preset is running now.
+   * Absent for non-pipeline presets.
+   */
+  pipelinePhase?: {
+    /** 1-based index of the active phase. */
+    index: number;
+    /** Total phases in the configured pipeline. */
+    count: number;
+    /** Active sub-preset id (e.g. council, blackboard). */
+    preset: string;
+    /** Full chain for UI (e.g. "council → blackboard"). */
+    chain?: string;
+  };
 }
 
 export interface SwarmStatusStreamingEntry {

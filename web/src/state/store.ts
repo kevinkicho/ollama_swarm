@@ -105,16 +105,26 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   drainIneligibleReason: undefined,
   capsRemaining: undefined,
   earlyStopDetail: undefined,
+  pipelinePhase: undefined,
 
   latchTranscriptPlainList: () =>
     set((s) => (s.transcriptPlainListLatched ? s : { transcriptPlainListLatched: true })),
 
   setRunHealthFromStatus: (patch) =>
-    set(() => ({
-      drainEligible: patch.drainEligible,
-      drainIneligibleReason: patch.drainIneligibleReason,
-      capsRemaining: patch.capsRemaining,
-      earlyStopDetail: patch.earlyStopDetail,
+    set((s) => ({
+      drainEligible: patch.drainEligible ?? s.drainEligible,
+      drainIneligibleReason: patch.drainIneligibleReason ?? s.drainIneligibleReason,
+      capsRemaining: patch.capsRemaining ?? s.capsRemaining,
+      earlyStopDetail:
+        patch.earlyStopDetail !== undefined
+          ? patch.earlyStopDetail
+          : s.earlyStopDetail,
+      pipelinePhase:
+        patch.pipelinePhase === null
+          ? undefined
+          : patch.pipelinePhase !== undefined
+            ? patch.pipelinePhase
+            : s.pipelinePhase,
     })),
 
   setPhase: (phase, round, opts) =>
@@ -150,6 +160,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
           streamingMeta: {},
           agentActivity: {},
           agents,
+          pipelinePhase: undefined,
           // Keep plain list latched through stop — do not flip to virtual.
           transcriptPlainListLatched: s.transcriptPlainListLatched || latchLive,
         };
@@ -555,6 +566,11 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       mapperSlices: {},
       outcome: undefined,
       transcriptPlainListLatched: false,
+      drainEligible: undefined,
+      drainIneligibleReason: undefined,
+      capsRemaining: undefined,
+      earlyStopDetail: undefined,
+      pipelinePhase: undefined,
     }),
   // Task #37 (partial): clear per-run state when a new run kicks off
   // WITHOUT blowing away transcript/findings/board — those are the
@@ -626,6 +642,11 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         conformance: [],
         drift: [],
         amendments: [],
+        earlyStopDetail: undefined,
+        pipelinePhase: undefined,
+        drainEligible: undefined,
+        drainIneligibleReason: undefined,
+        capsRemaining: undefined,
         ...blackboardReset,
         transcript: newTranscript,
         transcriptPlainListLatched: true,

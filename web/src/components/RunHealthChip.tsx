@@ -19,6 +19,7 @@ export function RunHealthChip() {
   const early = useSwarm((s) => s.earlyStopDetail);
   const drainEligible = useSwarm((s) => s.drainEligible);
   const drainReason = useSwarm((s) => s.drainIneligibleReason);
+  const pipelinePhase = useSwarm((s) => s.pipelinePhase);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -34,8 +35,13 @@ export function RunHealthChip() {
   if (wallCapMin != null && Number.isFinite(wallCapMin)) {
     parts.push(`cap ${wallCapMin}m`);
   }
-  if (cfg?.rounds != null && cfg.rounds > 0) {
-    parts.push(`${cfg.rounds} rounds`);
+  if (cfg?.rounds != null) {
+    parts.push(cfg.rounds === 0 ? "autonomous" : `${cfg.rounds} rounds`);
+  }
+  if (pipelinePhase?.preset) {
+    parts.push(
+      `pipe ${pipelinePhase.index}/${pipelinePhase.count} ${pipelinePhase.preset}`,
+    );
   }
   if (caps?.wallClockMsRemaining != null) {
     parts.push(`left ${formatMs(caps.wallClockMsRemaining)}`);
@@ -49,14 +55,20 @@ export function RunHealthChip() {
     parts.push("drain-ok");
   }
   if (early) {
-    parts.push("early-stop");
+    // Surface a short reason in the chip itself (not only the tooltip).
+    const short =
+      early.length > 28 ? `${early.slice(0, 26)}…` : early;
+    parts.push(`stop:${short}`);
   }
 
   if (parts.length === 0 && !live) return null;
 
   const title = [
     wallCapMin != null && Number.isFinite(wallCapMin) ? `Wall-clock cap: ${wallCapMin} min` : null,
-    cfg?.rounds != null ? `Rounds: ${cfg.rounds === 0 ? "autonomous" : cfg.rounds}` : null,
+    cfg?.rounds != null ? `Rounds: ${cfg.rounds === 0 ? "autonomous (0)" : cfg.rounds}` : null,
+    pipelinePhase
+      ? `Pipeline phase ${pipelinePhase.index}/${pipelinePhase.count}: ${pipelinePhase.preset}${pipelinePhase.chain ? ` (${pipelinePhase.chain})` : ""}`
+      : null,
     caps?.wallClockMsRemaining != null
       ? `Wall-clock remaining ≈ ${formatMs(caps.wallClockMsRemaining)}`
       : null,
@@ -65,7 +77,7 @@ export function RunHealthChip() {
       : null,
     drainEligible === false ? `Drain: ${drainReason ?? "not eligible"}` : null,
     drainEligible === true ? "Drain: soft-stop available" : null,
-    early ? `Early stop: ${early}` : null,
+    early ? `Early stop / guard: ${early}` : null,
     live ? "Use +15m / +2 rounds / +50k tok to extend mid-run (POST /api/swarm/reconfig)." : null,
   ]
     .filter(Boolean)

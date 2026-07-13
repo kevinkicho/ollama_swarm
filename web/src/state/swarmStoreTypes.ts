@@ -170,6 +170,13 @@ export interface SwarmStore {
     tokenBudgetRemaining?: number;
   };
   earlyStopDetail?: string;
+  /** Active composite pipeline sub-phase (from /status). */
+  pipelinePhase?: {
+    index: number;
+    count: number;
+    preset: string;
+    chain?: string;
+  };
 
   setPhase: (
     phase: SwarmPhase,
@@ -186,6 +193,7 @@ export interface SwarmStore {
     drainIneligibleReason?: string;
     capsRemaining?: SwarmStore["capsRemaining"];
     earlyStopDetail?: string;
+    pipelinePhase?: SwarmStore["pipelinePhase"] | null;
   }) => void;
   upsertAgent: (a: AgentState) => void;
   /** Replace entire agent roster (pipeline handoff / killAll). */

@@ -204,10 +204,12 @@ export const SwarmView = memo(function SwarmView() {
     ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/status`
     : "/api/swarm/status";
 
-  // Poll while draining/stopping so agent cards + transcript stay in sync
-  // when WS events are missed or prompts abort without streaming chunks.
+  // Poll while draining/stopping (abort tails) OR during composite pipeline
+  // (phase identity + child roster live on /status more than on WS).
   useEffect(() => {
-    if (phase !== "draining" && phase !== "stopping") return;
+    const pipelineLive =
+      cfg?.preset === "pipeline" && isActiveSwarmPhase(phase);
+    if (phase !== "draining" && phase !== "stopping" && !pipelineLive) return;
     let cancelled = false;
     const tick = async () => {
       try {
@@ -225,7 +227,7 @@ export const SwarmView = memo(function SwarmView() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [phase, statusUrl]);
+  }, [phase, statusUrl, cfg?.preset]);
 
   const onStop = async () => {
     if (!confirm("Stop the swarm IMMEDIATELY? All spawned opencode processes will be terminated and any worker mid-commit will lose its work.")) return;

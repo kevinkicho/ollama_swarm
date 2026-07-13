@@ -221,10 +221,23 @@ export async function promptWithRetry(
   // ledgered via recordChatUsage (no finally-block tracker delta — that
   // double-counted and polluted parallel runs).
   let lastErr: unknown;
-  let session = opts.manager?.resolvePromptActivity(agent.id, agent.index, opts.activity) ?? {
-    activityId: opts.activity?.activityId ?? `${agent.id}-${Date.now()}`,
-    kind: opts.activity?.kind,
-    label: opts.activity?.label,
+  // Default kind/label so sidebar never shows bare "thinking" when callers
+  // pass manager without activity metadata (headless-adjacent paths).
+  const defaultKind = opts.activity?.kind ?? "prompt";
+  const defaultLabel =
+    opts.activity?.label?.trim()
+    || (opts.activity?.kind ? String(opts.activity.kind) : undefined)
+    || (agentName.startsWith("swarm-") ? agentName.replace(/^swarm-/, "") : undefined)
+    || "prompt";
+  const activityMeta = {
+    ...opts.activity,
+    kind: defaultKind,
+    label: defaultLabel,
+  };
+  let session = opts.manager?.resolvePromptActivity(agent.id, agent.index, activityMeta) ?? {
+    activityId: activityMeta.activityId ?? `${agent.id}-${Date.now()}`,
+    kind: activityMeta.kind,
+    label: activityMeta.label,
     emitQueued: true,
   };
   const emitActivity = (
@@ -233,8 +246,8 @@ export async function promptWithRetry(
   ) => {
     opts.manager?.emitAgentActivity(agent.id, agent.index, phase, {
       activityId: session.activityId,
-      kind: session.kind ?? opts.activity?.kind,
-      label: session.label ?? opts.activity?.label,
+      kind: session.kind ?? activityMeta.kind,
+      label: session.label ?? activityMeta.label,
       maxAttempts: RETRY_MAX_ATTEMPTS,
       ...extra,
     });

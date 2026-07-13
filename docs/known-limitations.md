@@ -4,6 +4,10 @@ Deliberate trade-offs in the current build. Each entry names the choice, why
 we made it, and what would force us to revisit. Anything that becomes a
 *real* problem in practice should graduate out of here into a plan item.
 
+**Active reliability work:** see [`docs/RELIABILITY-BACKLOG.md`](RELIABILITY-BACKLOG.md)
+for ranked P0/P1 risks and mitigation status (control plane, pipeline ghosts,
+activity timeline, stop/drain).
+
 ---
 
 ## Brain does not auto-start runs by default (2026-07-09)

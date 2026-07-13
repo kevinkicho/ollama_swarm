@@ -1,6 +1,6 @@
 # Project status — what's true right now
 
-**Last updated:** 2026-07-10 (empty-output/caps guards + Brain RECONFIG; quality levers wired; spawnAgent unify; dead-code prune; god-file modularization.)
+**Last updated:** 2026-07-10 (reliability: single event hub, agent control plane, pipeline ghosts/phase identity, activity timeline, early-stop chip; see `docs/RELIABILITY-BACKLOG.md`.)
 **Purpose:** single short doc you read first to understand current state without trawling through changelog or stale function references. If this doc disagrees with code, code wins — file an issue against this doc.
 
 > **Release track:** See [`docs/RELEASE-1.0-PLAN.md`](RELEASE-1.0-PLAN.md). Setup **Simple** = core+supported (default blackboard). Brain agents: `GET /api/swarm/brain/control-surface` + [`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`](BRAIN-OS-FOR-EXTERNAL-AGENTS.md).

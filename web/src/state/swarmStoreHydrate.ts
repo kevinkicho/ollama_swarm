@@ -191,18 +191,28 @@ export function applyStatusSnapshotToStore(
       tokenBudgetRemaining?: number;
     };
     earlyStopDetail?: string;
+    pipelinePhase?: {
+      index: number;
+      count: number;
+      preset: string;
+      chain?: string;
+    };
   };
   if (
     healthSnap.drainEligible !== undefined ||
     healthSnap.drainIneligibleReason ||
     healthSnap.capsRemaining ||
-    healthSnap.earlyStopDetail
+    healthSnap.earlyStopDetail ||
+    healthSnap.pipelinePhase
   ) {
     s.setRunHealthFromStatus({
       drainEligible: healthSnap.drainEligible,
       drainIneligibleReason: healthSnap.drainIneligibleReason,
       capsRemaining: healthSnap.capsRemaining,
       earlyStopDetail: healthSnap.earlyStopDetail,
+      ...(healthSnap.pipelinePhase
+        ? { pipelinePhase: healthSnap.pipelinePhase }
+        : {}),
     });
   }
 

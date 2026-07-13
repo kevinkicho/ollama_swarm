@@ -169,7 +169,16 @@ export const SwarmEventSchema = z.discriminatedUnion("type", [
     agents: z.array(AgentStateSchema),
     runId: z.string().optional(),
   }),
-  z.object({ type: z.literal("swarm_state"), phase: SwarmPhaseSchema, round: z.number(), runId: z.string().optional() }),
+  z.object({
+    type: z.literal("swarm_state"),
+    phase: SwarmPhaseSchema,
+    round: z.number(),
+    runId: z.string().optional(),
+    /** Composite pipeline: 0-based phase index (optional). */
+    phaseIndex: z.number().optional(),
+    /** Composite pipeline: active sub-preset id (optional). */
+    phasePreset: z.string().optional(),
+  }),
   z.object({
     type: z.literal("agent_streaming"),
     agentId: z.string(),

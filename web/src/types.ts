@@ -744,6 +744,12 @@ export interface SwarmStatusSnapshot {
   };
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   thinkGuardReferee?: ResolvedThinkGuardRefereeBudget;
+  pipelinePhase?: {
+    index: number;
+    count: number;
+    preset: string;
+    chain?: string;
+  };
 }
 
 export interface RegionStatus {

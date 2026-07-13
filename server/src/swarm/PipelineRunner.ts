@@ -28,6 +28,11 @@ export class PipelineRunner implements SwarmRunner {
   private factory: RunnerFactory;
   /** True if any non-terminal phase failed (used for final status). */
   private hadPhaseFailure = false;
+  /** Live pipeline identity for status / UI (1-based index). */
+  private pipelinePhaseIndex = 0;
+  private pipelinePhaseCount = 0;
+  private pipelinePhasePreset: string | undefined;
+  private pipelineChain: string | undefined;
 
   constructor(opts: RunnerOpts, factory: RunnerFactory) {
     this.opts = opts;
@@ -66,6 +71,31 @@ export class PipelineRunner implements SwarmRunner {
       ...(agentActivity && Object.keys(agentActivity).length > 0
         ? { agentActivity }
         : {}),
+      ...(this.pipelinePhaseIndex > 0 && this.pipelinePhasePreset
+        ? {
+            pipelinePhase: {
+              index: this.pipelinePhaseIndex,
+              count: this.pipelinePhaseCount,
+              preset: this.pipelinePhasePreset,
+              ...(this.pipelineChain ? { chain: this.pipelineChain } : {}),
+            },
+          }
+        : {}),
+      // Prefer child early-stop / drain signals when present.
+      ...(currentStatus?.earlyStopDetail
+        ? { earlyStopDetail: currentStatus.earlyStopDetail }
+        : {}),
+      ...(currentStatus?.drainEligible !== undefined
+        ? {
+            drainEligible: currentStatus.drainEligible,
+            ...(currentStatus.drainIneligibleReason
+              ? { drainIneligibleReason: currentStatus.drainIneligibleReason }
+              : {}),
+          }
+        : {}),
+      ...(currentStatus?.capsRemaining
+        ? { capsRemaining: currentStatus.capsRemaining }
+        : {}),
     } as SwarmStatus;
     return base;
   }
@@ -89,6 +119,10 @@ export class PipelineRunner implements SwarmRunner {
     this.hadPhaseFailure = false;
     this.transcript = [];
     this.phaseResults = [];
+    this.pipelinePhaseIndex = 0;
+    this.pipelinePhaseCount = 0;
+    this.pipelinePhasePreset = undefined;
+    this.pipelineChain = undefined;
 
     this.setPhase("discussing");
 
@@ -111,12 +145,19 @@ export class PipelineRunner implements SwarmRunner {
       this.appendSystem(dividerText);
     }
 
-    this.appendSystem(`[Pipeline] Using configured pipeline phases: ${pipeline.phases.map(p => p.preset).join(' → ')} (pipeMode=${pipeline.pipeMode ?? 'both'})`);
+    this.pipelineChain = pipeline.phases.map((p) => p.preset).join(" → ");
+    this.pipelinePhaseCount = pipeline.phases.length;
+    this.appendSystem(
+      `[Pipeline] Using configured pipeline phases: ${this.pipelineChain} (pipeMode=${pipeline.pipeMode ?? "both"})`,
+    );
 
     for (let i = 0; i < pipeline.phases.length; i++) {
       if (this.stopping) break;
       this.round = i + 1;
       const phase = pipeline.phases[i];
+      this.pipelinePhaseIndex = i + 1;
+      this.pipelinePhasePreset = phase.preset;
+      this.emitPipelinePhaseState();
 
       const prevResult = this.phaseResults[i - 1];
       const pipedDirective = buildPipedDirective(
@@ -403,7 +444,28 @@ export class PipelineRunner implements SwarmRunner {
 
   private setPhase(phase: SwarmPhase): void {
     this.phase = phase;
-    this.opts.emit({ type: "swarm_state", phase, round: this.round });
+    this.opts.emit({
+      type: "swarm_state",
+      phase,
+      round: this.round,
+      ...(this.pipelinePhaseIndex > 0
+        ? {
+            phaseIndex: this.pipelinePhaseIndex - 1,
+            phasePreset: this.pipelinePhasePreset,
+          }
+        : {}),
+    });
+  }
+
+  /** Emit phase identity when advancing to a new pipeline sub-preset. */
+  private emitPipelinePhaseState(): void {
+    this.opts.emit({
+      type: "swarm_state",
+      phase: this.phase,
+      round: this.round,
+      phaseIndex: Math.max(0, this.pipelinePhaseIndex - 1),
+      phasePreset: this.pipelinePhasePreset,
+    });
   }
 }
 
