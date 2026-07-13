@@ -1,6 +1,6 @@
 # Reliability backlog (multi-day / multi-preset)
 
-**Last updated:** 2026-07-10  
+**Last updated:** 2026-07-13  
 **Purpose:** Ranked failure points and mitigations. Code wins if this drifts.
 
 ## P0 — user-visible wrongness or stuck runs
@@ -12,7 +12,9 @@
 | Ghost agents after pipeline phase | Old agent-N cards after handoff | **Done:** `agents_roster` + phase handoff killAll |
 | Dual event hubs / double broadcast | Missing or duplicate UI events | **Done:** single `createHub` + hub-only wrap emit |
 | Hard stop hung on provider | Stop never returns | **Partial:** 45s worker wait + session abort; still external HTTP tails |
-| Autonomous never ends / ends too soon | rounds=0 ambition vs empty gates | **Partial:** empty/plan-empty/caps primary; continue improving audit ambition |
+| Hung / runaway continuous stream | Idle wall never trips while streaming | **Done:** absolute prompt wall-clock (fail-closed, no idle reset) |
+| Autonomous ignores token/wall caps | rounds=0 cycles forever past budget | **Done:** cycle-boundary `checkCouncilResourceCaps` |
+| chatOnce headless sidebar | Research/coach dock without status | **Done:** optional manager owns markStatus on chatOnce |
 
 ## P1 — degraded multi-day use
 

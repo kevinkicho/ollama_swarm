@@ -508,6 +508,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
         earlyStopDetail: this.earlyStopDetail,
         setEarlyStopDetail: (d) => { this.earlyStopDetail = d; },
         getRunId: () => this.active?.runId,
+        getStartedAt: () => this.startedAt,
+        getTokenBaseline: () => this.tokenBaselineForStatus,
         getBrainService: () => this.opts.getBrainService?.() ?? null,
         swarmControl: this.swarmControl,
         manager: this.opts.manager,

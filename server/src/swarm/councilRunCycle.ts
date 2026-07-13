@@ -20,6 +20,7 @@ import { reconcileCriteriaFromSkips } from "./councilSkipReconcile.js";
 import type { PostTodoInput } from "./blackboard/TodoQueue.js";
 import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import { runCouncilResearchStandup } from "./councilResearchStandup.js";
+import { checkCouncilResourceCaps } from "./councilResourceGates.js";
 
 export interface CouncilRunCycleHost {
   state: CouncilAdapterState;
@@ -37,6 +38,10 @@ export interface CouncilRunCycleHost {
   emit: (e: SwarmEvent) => void;
   logDiag?: (entry: unknown) => void;
   stats: any;
+  /** Run wall-clock start (ms) for cap checks. */
+  getStartedAt?: () => number | undefined;
+  /** Token baseline at run start for tokenBudget checks. */
+  getTokenBaseline?: () => number | undefined;
   setCycleTranscriptStart: (n: number) => void;
   getCycleTranscriptStart: () => number;
   setExecutionFailures: (f: string[]) => void;
@@ -83,6 +88,28 @@ export async function runCouncilCycle(
   cycle: number,
   _isAutonomous: boolean,
 ): Promise<"done" | "retry" | "stop"> {
+  // Fail-closed: autonomous rounds=0 can otherwise ignore caps until user Stop.
+  const capHit = checkCouncilResourceCaps({
+    wallClockCapMs: cfg.wallClockCapMs,
+    startedAt: host.getStartedAt?.(),
+    tokenBudget: cfg.tokenBudget,
+    tokenBaseline: host.getTokenBaseline?.(),
+  });
+  if (capHit.stop) {
+    host.setEarlyStopDetail(capHit.detail);
+    host.appendSystem(
+      `[cap] ${capHit.detail} — ending council cycle ${cycle} (fail-closed resource gate).`,
+    );
+    notifyGuardTrip({
+      kind: capHit.kind === "tokens" ? "token-budget" : "wall-clock",
+      detail: capHit.detail,
+      runId: host.getRunId?.() ?? cfg.runId,
+      appendSystem: (t, s) => host.appendSystem(t, s),
+      getBrainService: host.getBrainService,
+    });
+    return "stop";
+  }
+
   host.setCycleTranscriptStart(host.transcript.length);
   host.progressLedger.lastCycle = cycle;
   host.syncProgressContext();

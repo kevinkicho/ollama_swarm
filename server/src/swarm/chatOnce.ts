@@ -9,7 +9,7 @@
 // caller already handles, so the migration is a pure call-site swap
 // without touching response-extraction code.
 
-import type { Agent } from "../services/AgentManager.js";
+import type { Agent, AgentManager } from "../services/AgentManager.js";
 import { pickProvider } from "../providers/pickProvider.js";
 
 import { throwChatProviderError } from "./sdkError.js";
@@ -39,6 +39,15 @@ export interface ChatOnceOpts {
   agentName: string;
   /** Prompt text to send. */
   promptText: string;
+  /**
+   * When set, owns sidebar control plane (markStatus thinking → ready) for
+   * the duration of this chat — same contract as promptWithRetry.
+   */
+  manager?: AgentManager;
+  /** Activity labels for agent_activity / sidebar (defaults from agentName). */
+  activity?: { kind?: string; label?: string };
+  /** When true, do not auto markStatus(ready) even if this call opened thinking. */
+  keepThinking?: boolean;
   /** Cancel the in-flight call. When undefined, an internal never-fired
    *  AbortController is used (matches legacy behavior of session.prompt
    *  callers that didn't pass a signal). */
@@ -200,24 +209,89 @@ export async function chatOnce(
 ): Promise<ChatOnceResult> {
   const signal = opts.signal ?? new AbortController().signal;
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
-    try {
-      return await chatOnceOnce(agent, { ...opts, signal });
-    } catch (err) {
-      lastErr = err;
-      if (signal.aborted || isPromptGuardAbort(err)) throw err;
-      if (!isRetryableSdkError(err)) throw err;
-      if (attempt >= RETRY_MAX_ATTEMPTS) throw err;
-      const delayMs = RETRY_BACKOFF_MS[attempt - 1];
-      opts.onRetry?.({
-        attempt: attempt + 1,
-        max: RETRY_MAX_ATTEMPTS,
-        reasonShort: shortRetryReason(err),
-        delayMs,
+
+  // Control-plane ownership (fail-closed sidebar honesty for headless paths).
+  const defaultKind = opts.activity?.kind ?? "prompt";
+  const defaultLabel =
+    opts.activity?.label?.trim()
+    || (opts.activity?.kind ? String(opts.activity.kind) : undefined)
+    || (opts.agentName.startsWith("swarm-")
+      ? opts.agentName.replace(/^swarm-/, "")
+      : undefined)
+    || "prompt";
+  let ownedStatus = false;
+  const canMark =
+    opts.manager
+    && typeof opts.manager.markStatus === "function";
+  if (canMark && opts.keepThinking !== true) {
+    const mgr = opts.manager!;
+    const cur =
+      typeof mgr.getState === "function" ? mgr.getState(agent.id) : undefined;
+    if (cur?.status !== "thinking" && cur?.status !== "retrying") {
+      mgr.markStatus(agent.id, "thinking", {
+        activityKind: defaultKind,
+        activityLabel: defaultLabel,
+        thinkingSince: Date.now(),
       });
-      const completed = await interruptibleSleep(delayMs, signal);
-      if (!completed) throw err;
+      ownedStatus = true;
     }
   }
-  throw lastErr ?? new Error("chatOnce: no result");
+  const settleOwnedStatus = () => {
+    if (!ownedStatus || !canMark || !opts.manager) return;
+    ownedStatus = false;
+    const mgr = opts.manager;
+    const cur =
+      typeof mgr.getState === "function" ? mgr.getState(agent.id) : undefined;
+    if (!cur || cur.status === "thinking" || cur.status === "retrying") {
+      mgr.markStatus(agent.id, "ready", { lastMessageAt: Date.now() });
+    }
+  };
+
+  try {
+    for (let attempt = 1; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+      try {
+        if (attempt > 1 && canMark) {
+          opts.manager!.markStatus(agent.id, "retrying", {
+            retryAttempt: attempt,
+            retryMax: RETRY_MAX_ATTEMPTS,
+            retryReason: shortRetryReason(lastErr),
+          });
+        }
+        const res = await chatOnceOnce(agent, { ...opts, signal });
+        settleOwnedStatus();
+        return res;
+      } catch (err) {
+        lastErr = err;
+        if (signal.aborted || isPromptGuardAbort(err)) {
+          settleOwnedStatus();
+          throw err;
+        }
+        if (!isRetryableSdkError(err)) {
+          settleOwnedStatus();
+          throw err;
+        }
+        if (attempt >= RETRY_MAX_ATTEMPTS) {
+          settleOwnedStatus();
+          throw err;
+        }
+        const delayMs = RETRY_BACKOFF_MS[attempt - 1];
+        opts.onRetry?.({
+          attempt: attempt + 1,
+          max: RETRY_MAX_ATTEMPTS,
+          reasonShort: shortRetryReason(err),
+          delayMs,
+        });
+        const completed = await interruptibleSleep(delayMs, signal);
+        if (!completed) {
+          settleOwnedStatus();
+          throw err;
+        }
+      }
+    }
+    settleOwnedStatus();
+    throw lastErr ?? new Error("chatOnce: no result");
+  } catch (err) {
+    settleOwnedStatus();
+    throw err;
+  }
 }

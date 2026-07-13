@@ -204,6 +204,8 @@ async function runCouncilLiteratureResearch(
       runId: cfg.runId,
       mcpServers: cfg.mcpServers,
       signal,
+      manager: state.manager as any,
+      activity: { kind: "worker", label: "literature research" },
       maxToolTurns: EXPLORE_MAX_LITERATURE_TOOL_TURNS,
       toolsOverride: [...LITERATURE_RESEARCH_TOOLS],
       toolLoopNudge: {

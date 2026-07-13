@@ -68,6 +68,8 @@ export async function runCouncilResearchStandup(opts: {
           runId: cfg.runId,
           mcpServers: cfg.mcpServers,
           signal,
+          manager: manager as any,
+          activity: { kind: "council", label: "research standup" },
           maxToolTurns: Math.min(6, EXPLORE_MAX_LITERATURE_TOOL_TURNS),
           toolsOverride: [...LITERATURE_RESEARCH_TOOLS],
           toolLoopNudge: {

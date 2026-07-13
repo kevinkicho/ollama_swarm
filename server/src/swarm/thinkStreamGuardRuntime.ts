@@ -6,7 +6,14 @@ import {
 import { ThinkGuardAbortError } from "@ollama-swarm/shared/thinkGuardErrors";
 
 export type PromptGuardOpts = {
+  /** Idle wall-clock: resets on each stream chunk (provider still talking). */
   wallClockMs?: number;
+  /**
+   * Absolute hard ceiling from prompt start — never resets on chunks.
+   * Fail-closed for runaway continuous streams that would never hit idle timeout.
+   * Default: max(5 × wallClockMs, 10 min) when wallClockMs set; else 15 min.
+   */
+  absoluteMaxMs?: number;
   refereeOn?: boolean;
   /**
    * Live re-read for mid-run reconfig (e.g. user turns referee on).
@@ -19,6 +26,18 @@ export type PromptGuardOpts = {
   /** Reuse session for continuation prompts (budgetExtended may already be set). */
   session?: ThinkGuardSession;
 };
+
+/** Resolve absolute prompt ceiling (fail-closed hung/runaway stream). */
+export function resolveAbsolutePromptMaxMs(
+  wallClockMs?: number,
+  absoluteMaxMs?: number,
+): number {
+  if (absoluteMaxMs != null && absoluteMaxMs > 0) return absoluteMaxMs;
+  if (wallClockMs != null && wallClockMs > 0) {
+    return Math.max(wallClockMs * 5, 600_000);
+  }
+  return 900_000; // 15 min default when no idle wall is configured
+}
 
 export function composePromptGuardSignals(
   parent: AbortSignal,
@@ -47,6 +66,19 @@ export function composePromptGuardSignals(
   cleanups.push(() => {
     if (wallTimer) clearTimeout(wallTimer);
   });
+
+  // Absolute hard ceiling — does NOT reset on chunks. Without this, a model
+  // that streams forever never trips the idle wall-clock.
+  const absoluteMaxMs = resolveAbsolutePromptMaxMs(opts.wallClockMs, opts.absoluteMaxMs);
+  const absoluteTimer = setTimeout(() => {
+    trip.abort(
+      new Error(
+        `prompt absolute wall-clock exceeded ${absoluteMaxMs}ms (fail-closed hung prompt)`,
+      ),
+    );
+  }, absoluteMaxMs);
+  absoluteTimer.unref?.();
+  cleanups.push(() => clearTimeout(absoluteTimer));
 
   const signal =
     typeof AbortSignal !== "undefined" && "any" in AbortSignal

@@ -77,7 +77,10 @@ export function isThinkGuardAbort(err: unknown): err is ThinkGuardAbortError {
 export function isPromptGuardAbort(err: unknown): boolean {
   if (isThinkGuardAbort(err)) return true;
   const msg = err instanceof Error ? err.message : String(err);
-  return /wall-clock exceeded|think stream|think-only stream|repetitive reasoning|tool loop stuck/i.test(msg);
+  // Idle wall-clock, absolute hard ceiling, think-stream, tool-loop stuck.
+  return /wall-clock (idle |absolute )?exceeded|prompt absolute wall-clock|think stream|think-only stream|repetitive reasoning|tool loop stuck|fail-closed hung prompt/i.test(
+    msg,
+  );
 }
 
 export function extractThinkGuardAbortError(

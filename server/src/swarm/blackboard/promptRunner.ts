@@ -219,6 +219,11 @@ export async function chatOnceWithStreaming(
     const res = await chatOnce(agent, {
       ...chatOpts,
       signal: promptSignal,
+      // Already markStatus'd via emitAgentActivity above — pass manager for
+      // retrying labels; keepThinking so settle stays with this surface.
+      manager: surface.manager,
+      activity: surface.activity,
+      keepThinking: true,
       onRetry: ({ attempt, max, reasonShort, delayMs }) => {
         surface.manager.markStatus(agent.id, "retrying", {
           retryAttempt: attempt,
