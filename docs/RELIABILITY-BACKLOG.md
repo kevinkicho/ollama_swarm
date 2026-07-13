@@ -51,6 +51,10 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | Blackboard thrash with open todos | Stuck only when open=0 | **Done:** productive-progress streak on commits/met flips |
 | Activity history lost on WS | Sidebar only last phase live | **Done:** client ring buffer on `setAgentActivity` + hydrate merge |
 | Audit before cycle settle | Unresolved fails advance cycle | **Done:** abandon residual → permanent-skip before audit; pending-commit wait |
+| Blackboard completionDetail not live | Chip empty while stuck/no-progress | **Done:** status earlyStopDetail from completionDetail |
+| no-productive-progress → "completed" | Summary lies about success | **Done:** classifyStopReason maps progress gates to no-progress |
+| writeMode never sent from UI | multi experimental gate unused | **Done:** SetupForm write mode + start payload |
+| No-op replan thrash | Replan full 3× on zero-write | **Done:** noop stale → replan cap 1 + permanent skip |
 
 ## P2 — product / security / polish
 

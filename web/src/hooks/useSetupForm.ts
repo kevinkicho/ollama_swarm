@@ -95,6 +95,8 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [mcpServers, setMcpServers] = useState("");
   const [wallClockCapMin, setWallClockCapMin] = useState("0");
   const [ambitionTiers, setAmbitionTiers] = useState("");
+  /** Write mode for discussion deliverable apply (multi is experimental). */
+  const [writeMode, setWriteMode] = useState<"none" | "single" | "multi">("single");
   const [busy, setBusy] = useState(false);
 
   // Keep the autocomplete provider in sync with the main model choice.
@@ -220,7 +222,9 @@ export function useSetupForm(navigate: (path: string) => void) {
       const directiveTrimmed = userDirective.trim();
       const maturity = (preset as { maturity?: string }).maturity;
       const needsExperimentalAck =
-        maturity === "experimental" || maturity === "research";
+        maturity === "experimental"
+        || maturity === "research"
+        || writeMode === "multi";
       const payload = {
         repoUrl,
         parentPath,
@@ -230,6 +234,7 @@ export function useSetupForm(navigate: (path: string) => void) {
         rounds: roundsInput,
         // Server fail-closed for experimental/research unless acknowledged.
         ...(needsExperimentalAck ? { allowExperimental: true } : {}),
+        ...(writeMode && writeMode !== "none" ? { writeMode } : {}),
         ...(directiveTrimmed ? { userDirective: directiveTrimmed } : {}),
         webTools,
         ...(preset.id === "council" || preset.id === "blackboard"
@@ -323,6 +328,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     mcpServers, setMcpServers,
     wallClockCapMin, setWallClockCapMin,
     ambitionTiers, setAmbitionTiers,
+    writeMode, setWriteMode,
     busy, setBusy,
     preset,
     isActive,

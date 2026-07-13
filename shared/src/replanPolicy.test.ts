@@ -22,6 +22,17 @@ describe("classifyStaleReason", () => {
     assert.equal(classifyStaleReason("CAS mismatch on t2"), "cas-drift");
     assert.equal(classifyStaleReason("hunk apply failed: search not unique"), "hunk-fail");
   });
+
+  it("classifies no-op / zero-write as hunk-fail", () => {
+    assert.equal(
+      classifyStaleReason("apply produced no file changes (no-op elided)"),
+      "hunk-fail",
+    );
+    assert.equal(
+      classifyStaleReason("apply wrote zero files (no-op) — not a successful commit"),
+      "hunk-fail",
+    );
+  });
 });
 
 describe("resolveReplanPolicy", () => {

@@ -507,6 +507,7 @@ export class BlackboardRunner implements SwarmRunner {
           ? this.opts.manager.getActivitySnapshot()
           : {},
       getTerminationReason: () => this.terminationReason,
+      getCompletionDetail: () => this.completionDetail,
       utilCtx: () => this.utilCtx(),
     });
   }

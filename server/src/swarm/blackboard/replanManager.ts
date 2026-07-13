@@ -163,13 +163,24 @@ export async function replanOne(
   if (!todo) return;
   if (todo.status !== "stale") return;
 
-  if (todo.replanCount >= MAX_REPLAN_ATTEMPTS) {
+  // Fail-closed thrash: pure no-op / empty apply after one replan attempt is enough.
+  const staleText = `${todo.staleReason ?? ""} ${(todo as { reason?: string }).reason ?? ""}`;
+  const isNoopStale =
+    /no file changes|no-op elided|wrote zero files|zero files \(no-op\)|hunk-empty|empty hunks/i.test(
+      staleText,
+    );
+  const replanCap = isNoopStale ? 1 : MAX_REPLAN_ATTEMPTS;
+  if (todo.replanCount >= replanCap) {
     ctx.wrappers.skipTodoQ(
       todoId,
-      `auto-skipped: replan attempts exhausted (${todo.replanCount})`,
+      isNoopStale
+        ? `permanent:noop-exhausted: replan after no-op apply (${todo.replanCount})`
+        : `auto-skipped: replan attempts exhausted (${todo.replanCount})`,
     );
     ctx.appendSystem(
-      `Replan exhausted for todo ${todoId} after ${todo.replanCount} attempt(s). Skipped.`,
+      isNoopStale
+        ? `Permanent-skipped todo ${todoId} after no-op apply thrash.`
+        : `Replan exhausted for todo ${todoId} after ${todo.replanCount} attempt(s). Skipped.`,
     );
     return;
   }

@@ -592,7 +592,29 @@ export function SetupForm() {
                 />
               </Field>
             )}
+            <Field
+              label="Write mode"
+              hint="single = one-writer deliverable apply (default). multi = experimental multi-writer reconcile (server requires allowExperimental)."
+            >
+              <select
+                className="input"
+                value={form.writeMode ?? "single"}
+                onChange={(e) =>
+                  form.setWriteMode(e.target.value as "none" | "single" | "multi")
+                }
+              >
+                <option value="single">single (default)</option>
+                <option value="none">none</option>
+                <option value="multi">multi (experimental)</option>
+              </select>
+            </Field>
           </div>
+          {form.writeMode === "multi" && (
+            <div className="mt-2 text-[10px] text-amber-400/90 border border-amber-700/40 rounded px-2 py-1 bg-amber-950/30">
+              Multi-writer is experimental — start will send <code className="font-mono">allowExperimental: true</code>.
+              Prefer single-writer for production multi-day runs.
+            </div>
+          )}
         </Section>
 
         {/* Advanced settings delegated to Topology (for blackboard: full WallClockCap + AmbitionTiers with warnings) */}

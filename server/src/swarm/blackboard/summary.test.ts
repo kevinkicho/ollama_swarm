@@ -260,6 +260,26 @@ describe("buildSummary — stopReason classification", () => {
     assert.equal(s.stopReason, "no-progress");
   });
 
+  it("reports 'no-progress' for no-productive-progress completionDetail", () => {
+    const s = buildSummary(
+      baseInput({
+        board: { committed: 2, skipped: 4, total: 10 },
+        completionDetail:
+          "no-productive-progress: 3 cycle(s) without commits, met flips, or new todos",
+        contract: {
+          missionStatement: "ship",
+          criteria: [
+            { id: "c1", description: "a", expectedFiles: ["a.ts"], status: "unmet" },
+            { id: "c2", description: "b", expectedFiles: ["b.ts"], status: "met" },
+          ],
+        },
+        agents: [agent(1, 5)],
+      }),
+    );
+    assert.equal(s.stopReason, "no-progress");
+    assert.match(s.stopDetail ?? "", /no-productive-progress/);
+  });
+
   it("reports 'no-progress' when all criteria unmet and auditor+planner stuck despite commits", () => {
     const s = buildSummary(
       baseInput({

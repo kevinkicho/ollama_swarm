@@ -37,6 +37,8 @@ export interface StatusContext {
   getActivitySnapshot?: () => NonNullable<SwarmStatus["agentActivity"]>;
   /** Cap termination reason (wall-clock / token / cost) for early-stop UI. */
   getTerminationReason?: () => string | undefined;
+  /** Natural stop / stuck / no-progress reason (not always a cap). */
+  getCompletionDetail?: () => string | undefined;
   utilCtx: () => RunnerUtilContext;
 }
 
@@ -156,7 +158,11 @@ export function status(ctx: StatusContext): SwarmStatus {
         : {};
     })(),
     ...((): { earlyStopDetail?: string } => {
-      const reason = ctx.getTerminationReason?.();
+      // Prefer hard cap/termination; fall back to completionDetail so
+      // no-productive-progress / stuck stops surface on RunHealthChip live.
+      const reason =
+        ctx.getTerminationReason?.()
+        || ctx.getCompletionDetail?.();
       return reason ? { earlyStopDetail: reason } : {};
     })(),
     ...(thinkGuardReferee ? { thinkGuardReferee } : {}),

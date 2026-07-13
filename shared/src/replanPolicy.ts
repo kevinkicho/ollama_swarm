@@ -23,6 +23,9 @@ const WORKER_TIMEOUT_RE = /wall[- ]?clock exceeded|prompt wall-clock/i;
 const WORKER_TOOL_CAP_RE = /tool loop exceeded|tool cap|tool-turn/i;
 const CAS_RE = /cas mismatch/i;
 const HUNK_RE = /hunk apply failed|hunk.*reject/i;
+/** No-op / empty apply — same family as hunk-fail for replan policy. */
+const NOOP_RE =
+  /no file changes|no-op elided|wrote zero files|zero files \(no-op\)|hunk-empty|empty hunks/i;
 const AUDITOR_RE = /auditor:|hallucinated|auditor-confirmed/i;
 const PROMPT_FAIL_RE = /prompt failed|transport:/i;
 
@@ -32,7 +35,7 @@ export function classifyStaleReason(reason: string | undefined): StaleReasonClas
   if (WORKER_TIMEOUT_RE.test(r)) return "worker-timeout";
   if (WORKER_TOOL_CAP_RE.test(r)) return "worker-tool-cap";
   if (CAS_RE.test(r)) return "cas-drift";
-  if (HUNK_RE.test(r)) return "hunk-fail";
+  if (NOOP_RE.test(r) || HUNK_RE.test(r)) return "hunk-fail";
   if (AUDITOR_RE.test(r)) return "auditor";
   if (PROMPT_FAIL_RE.test(r)) return "prompt-fail";
   return "unknown";

@@ -382,6 +382,27 @@ function classifyStopReason(
       stopDetail: input.completionDetail,
     };
   }
+  // Productive-progress / stuck gates set completionDetail without terminationReason.
+  // Must not classify as "completed" or the UI banner hides the real stop.
+  if (input.completionDetail) {
+    const d = input.completionDetail;
+    if (
+      /no-productive-progress|no new work|unresolved criteria remain|tier-stuck|audit-stuck|attempts-exhausted|noop-exhausted|produced no actionable/i.test(
+        d,
+      )
+    ) {
+      return { stopReason: "no-progress", stopDetail: d };
+    }
+    if (
+      /cap:|wall-clock|token budget|quota/i.test(d)
+    ) {
+      const capType = parseCapType(d);
+      return { stopReason: capType, stopDetail: d };
+    }
+    if (/pipeline phase|ambition-failed|planner-fallback/i.test(d)) {
+      return { stopReason: "early-stop", stopDetail: d };
+    }
+  }
   // Partial progress: some criteria met, some wont-do, rest unresolvable.
   // The wont-do ones mean the auditor explicitly gave up on them.
   const hasWontDo = hadCriteria && criteria.some((c) => c.status === "wont-do");
