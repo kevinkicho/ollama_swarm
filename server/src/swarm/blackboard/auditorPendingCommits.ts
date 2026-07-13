@@ -123,13 +123,21 @@ export async function reviewPendingCommits(
         const res = await applyFn(item.hunks, item.files, item.message, { skipCommit: true });
         if (!res.ok) {
           batchOk = false;
-          ctx.wrappers.rejectCommitQ(item.todo.id, res.reason || 'apply failed in batch');
-        } else if (res.filesWritten) {
-          filesWritten.push(...(res.filesWritten || []));
+          ctx.wrappers.rejectCommitQ(item.todo.id, res.reason || "apply failed in batch");
+        } else if (!res.filesWritten || res.filesWritten.length === 0) {
+          // Fail-closed symmetry with WorkerPipeline + council workers:
+          // never approve a todo that wrote nothing (even if apply said ok).
+          batchOk = false;
+          ctx.wrappers.rejectCommitQ(
+            item.todo.id,
+            "apply wrote zero files (no-op) — not a successful commit",
+          );
+        } else {
+          filesWritten.push(...res.filesWritten);
         }
       } catch (e: any) {
         batchOk = false;
-        ctx.wrappers.rejectCommitQ(item.todo.id, e?.message || 'apply exception');
+        ctx.wrappers.rejectCommitQ(item.todo.id, e?.message || "apply exception");
       }
     }
 

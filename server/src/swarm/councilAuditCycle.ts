@@ -27,6 +27,13 @@ import type { StallGateVerdict } from "@ollama-swarm/shared/swarmControl/types";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractProviderText, parseJsonArrayFromResponse, createTimeoutController } from "./councilUtils.js";
 import { resolveCouncilToolProfile } from "./toolProfiles.js";
+import {
+  formatNoProductiveProgressReason,
+  isProductiveCycle,
+  updateZeroProgressStreak,
+  DEFAULT_ZERO_PROGRESS_LIMIT,
+} from "./productiveProgress.js";
+import { notifyGuardTrip } from "./guardNotify.js";
 
 export interface CouncilAuditHost {
   state: CouncilAdapterState;
@@ -60,6 +67,8 @@ export interface CouncilAuditHost {
   setConsecutiveEmptyCycles: (n: number) => void;
   getTierPromotionRetries: () => number;
   setTierPromotionRetries: (n: number) => void;
+  getZeroProgressStreak: () => number;
+  setZeroProgressStreak: (n: number) => void;
   setEarlyStopDetail: (s: string) => void;
   logDiag?: (entry: unknown) => void;
 }
@@ -199,6 +208,57 @@ export async function runCouncilAuditCycle(
   host.setPreviousUnmetIds(currentUnmetIds);
   host.setPreviousStuckFailSignature(failSignature);
 
+  const commitsThisCycle = host.progressLedger.observations.filter(
+    (o) => o.kind === "commit" && o.cycle === cycle,
+  ).length;
+
+  /** Autonomous: stop after N cycles with no real progress (commits/met/todos). */
+  const maybeStopNoProgress = (
+    signals: {
+      metFlips: number;
+      commitsThisCycle: number;
+      newTodos: number;
+      tierPromoted?: boolean;
+    },
+  ): "stop" | null => {
+    if (!isAutonomous) {
+      if (isProductiveCycle(signals)) host.setZeroProgressStreak(0);
+      return null;
+    }
+    const { streak, shouldStop } = updateZeroProgressStreak(
+      host.getZeroProgressStreak(),
+      isProductiveCycle(signals),
+      DEFAULT_ZERO_PROGRESS_LIMIT,
+    );
+    host.setZeroProgressStreak(streak);
+    if (!shouldStop) {
+      if (streak > 0) {
+        host.appendSystem(
+          `[audit] Zero productive progress streak ${streak}/${DEFAULT_ZERO_PROGRESS_LIMIT}.`,
+        );
+      }
+      return null;
+    }
+    const reason = formatNoProductiveProgressReason(streak);
+    host.setEarlyStopDetail(reason);
+    host.appendSystem(`[audit] ${reason} — stopping autonomous run.`);
+    host.logDiag?.({
+      type: "council_stop_reason",
+      runId: host.getActiveRunId() || cfg.runId,
+      cycle,
+      reason,
+    });
+    host.setPhase("stopped");
+    void notifyGuardTrip({
+      kind: "audit-stuck",
+      detail: reason,
+      runId: host.getActiveRunId() || undefined,
+      appendSystem: (t, s) => host.appendSystem(t, s),
+      getBrainService: host.getBrainService,
+    });
+    return "stop";
+  };
+
   if (unmetCount > 0 && sameUnmet === currentUnmetIds.size) {
     const noLedgerProgress = sameFailurePattern && !commitOnUnmet && metFlips === 0;
     if (noLedgerProgress) {
@@ -280,7 +340,6 @@ export async function runCouncilAuditCycle(
           reason,
         });
         host.setPhase("stopped");
-        const { notifyGuardTrip } = await import("./guardNotify.js");
         notifyGuardTrip({
           kind: "audit-stuck",
           detail: `same ${sameUnmet} criteria unmet for ${stuck} cycles`,
@@ -334,6 +393,7 @@ export async function runCouncilAuditCycle(
         // ratchet always needs another cycle to execute the new tier's
         // unmet criteria — including when the user set rounds=0 and when
         // they set a finite rounds cap that still allows multi-cycle work.
+        host.setZeroProgressStreak(0);
         return "retry";
       }
       const retries = host.getTierPromotionRetries() + 1;
@@ -347,6 +407,7 @@ export async function runCouncilAuditCycle(
               `[ambition] Tier promotion failed ${retries} times — enqueued ${stretch} stretch todo(s); continuing.`,
             );
             host.setTierPromotionRetries(0);
+            host.setZeroProgressStreak(0);
             return "retry";
           }
         }
@@ -373,6 +434,7 @@ export async function runCouncilAuditCycle(
         host.appendSystem(
           `[ambition] All criteria met (no further tiers) — enqueued ${stretch} stretch todo(s) for open-ended directive; continuing.`,
         );
+        host.setZeroProgressStreak(0);
         return "retry";
       }
     }
@@ -401,6 +463,7 @@ export async function runCouncilAuditCycle(
   host.appendSystem(`[audit] Created ${auditEnqueued} todo(s) for unmet criteria.`);
 
   if (newTodos.length === 0) {
+    // No new work — may still stop autonomous on zero-progress streak.
     const empty = host.getConsecutiveEmptyCycles() + 1;
     host.setConsecutiveEmptyCycles(empty);
     if (empty >= 2) {
@@ -462,6 +525,7 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
                 host.appendSystem(`[planner] Fallback created ${fallbackEnqueued} todo(s).`);
                 if (fallbackEnqueued > 0) {
                   cleanup();
+                  host.setZeroProgressStreak(0);
                   return "retry";
                 }
               }
@@ -479,9 +543,17 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
               `[planner] Fallback produced nothing — enqueued ${stretch} stretch todo(s); continuing autonomous.`,
             );
             host.setConsecutiveEmptyCycles(0);
+            host.setZeroProgressStreak(0);
             return "retry";
           }
         }
+        // Empty planner + empty stretch: count as zero productive progress.
+        const emptyStop = maybeStopNoProgress({
+          metFlips,
+          commitsThisCycle,
+          newTodos: 0,
+        });
+        if (emptyStop) return emptyStop;
         const reason = "planner-fallback: no todos for unmet criteria";
         host.appendSystem(`[planner] Fallback produced nothing — stopping.`);
         host.setEarlyStopDetail(reason);
@@ -498,5 +570,16 @@ Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
     host.setConsecutiveEmptyCycles(0);
   }
 
+  // Todos enqueued — productive; reset streak when any new work.
+  if (auditEnqueued > 0) {
+    host.setZeroProgressStreak(0);
+    return "retry";
+  }
+  const noWorkStop = maybeStopNoProgress({
+    metFlips,
+    commitsThisCycle,
+    newTodos: auditEnqueued,
+  });
+  if (noWorkStop) return noWorkStop;
   return "retry";
 }

@@ -73,13 +73,15 @@ export async function drainCouncilTodos(
 
   const REAPER_INTERVAL = 30_000;
   const IN_PROGRESS_TTL = 15 * 60_000;
+  const PENDING_COMMIT_TTL = 20 * 60_000;
   const reaper = setInterval(() => {
-    const reaped = host.state.todoQueue.reapStaleInProgress(Date.now(), IN_PROGRESS_TTL);
+    const now = Date.now();
+    const reaped = host.state.todoQueue.reapStaleInProgress(now, IN_PROGRESS_TTL);
     for (const id of reaped) {
       const todo = host.state.todoQueue.get(id);
       const workerId = todo?.workerId;
       if (workerId) {
-        recordSettlementAttempt(settlementBook, id, workerId);
+        recordSettlementAttempt(settlementBook, id, workerId, "reaper: in-progress TTL");
         const ctrl = todoAborts.get(workerId);
         if (ctrl && !ctrl.signal.aborted) {
           try {
@@ -93,6 +95,14 @@ export async function drainCouncilTodos(
         `[reaper] Timed out todo ${id} — was in-progress for >${Math.round(IN_PROGRESS_TTL / 60_000)}min` +
           (workerId ? ` (aborted ${workerId})` : "") +
           ".",
+      );
+    }
+    // C9: pending-commit must not block cycle settlement forever.
+    const pcReaped = host.state.todoQueue.reapStalePendingCommit(now, PENDING_COMMIT_TTL);
+    for (const id of pcReaped) {
+      recordSettlementAttempt(settlementBook, id, "auditor", "reaper: pending-commit TTL");
+      host.appendSystem(
+        `[reaper] Timed out pending-commit ${id} — reopened after >${Math.round(PENDING_COMMIT_TTL / 60_000)}min.`,
       );
     }
   }, REAPER_INTERVAL);
@@ -129,7 +139,12 @@ export async function drainCouncilTodos(
           },
           onTodoSettledByAgent: (agentId, info) => {
             if (info.outcome === "failed" || info.outcome === "skipped") {
-              recordSettlementAttempt(settlementBook, info.todoId, agentId);
+              recordSettlementAttempt(
+                settlementBook,
+                info.todoId,
+                agentId,
+                info.detail,
+              );
             }
             host.recordTodoSettled(cycle, {
               description: info.description,
@@ -159,12 +174,19 @@ export async function drainCouncilTodos(
 
       // Fallback: if worker didn't report agent id, attribute fail/skip by last workerId on todo before clear — already recorded via onTodoSettledByAgent when wired.
 
-      const { requeued, exhausted } = requeueUnresolvedCouncilTodos(
+      const { requeued, exhausted, permanentSkipped } = requeueUnresolvedCouncilTodos(
         host.state.todoQueue,
         executionAgentIds,
         settlementBook,
         { maxAttempts },
       );
+
+      if (permanentSkipped.length > 0) {
+        host.appendSystem(
+          `[execution] Permanent-skipped ${permanentSkipped.length} todo(s) ` +
+            `(noop/attempts exhausted): ${permanentSkipped.join(", ")}.`,
+        );
+      }
 
       if (requeued > 0) {
         host.appendSystem(

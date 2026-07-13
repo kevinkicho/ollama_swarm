@@ -2,8 +2,8 @@ import { memo } from "react";
 import { useSwarm } from "../state/store";
 
 /**
- * Surfaces stopReason + stopDetail after a run ends so quota walls and
- * audit-stuck are not confused.
+ * Surfaces stopReason + stopDetail after a run ends so quota walls,
+ * audit-stuck, caps, and pipeline failures are not buried in the transcript.
  */
 export const RunOutcomeBanner = memo(function RunOutcomeBanner() {
   const summary = useSwarm((s) => s.summary);
@@ -13,14 +13,29 @@ export const RunOutcomeBanner = memo(function RunOutcomeBanner() {
     (summary as { stopDetail?: string }).stopDetail ||
     (summary as { completionDetail?: string }).completionDetail ||
     "";
+
+  // Natural success / user stop — no banner.
+  if (reason === "completed" || reason === "user") {
+    return null;
+  }
+
   const isQuota =
     reason === "cap:quota" ||
     /provider-quota|429|session usage|rate limit/i.test(detail) ||
     /provider-quota/i.test(String(reason));
-  const isNoProgress = reason === "no-progress" || /audit-stuck/i.test(detail);
-
+  const isNoProgress =
+    reason === "no-progress"
+    || /audit-stuck|no-productive-progress|tier-stuck/i.test(detail);
   const isCrash = reason === "crash" || reason === "crashed";
-  if (!isQuota && !isNoProgress && !isCrash) {
+  const isEarlyStop =
+    reason === "early-stop"
+    || reason.startsWith("cap:")
+    || /pipeline phase|ambition-complete|planner-fallback|no-productive/i.test(
+      detail,
+    );
+
+  // Show for known terminal classes, or any non-empty stopDetail on non-success.
+  if (!isQuota && !isNoProgress && !isCrash && !isEarlyStop && !detail) {
     return null;
   }
 
@@ -34,7 +49,9 @@ export const RunOutcomeBanner = memo(function RunOutcomeBanner() {
     ? "Provider quota / transport wall"
     : isNoProgress
       ? "Stopped: no progress"
-      : `Stopped: ${reason}`;
+      : isEarlyStop
+        ? "Stopped early"
+        : `Stopped: ${reason}`;
 
   return (
     <div className={`mx-3 mt-2 mb-1 rounded border px-3 py-2 text-[11px] ${tone}`}>

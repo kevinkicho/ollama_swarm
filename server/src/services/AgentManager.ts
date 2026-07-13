@@ -166,6 +166,19 @@ export class AgentManager {
    * Last agent_activity record per agent — included in REST /status so
    * reconnect/hydrate restores sidebar labels and phase (not WS-only).
    */
+  /** Ring buffer of activity transitions per agent (B6 timeline product). */
+  private readonly activityHistoryByAgent = new Map<
+    string,
+    Array<{
+      phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+      ts: number;
+      kind?: string;
+      label?: string;
+      activityId?: string;
+    }>
+  >();
+  private static readonly ACTIVITY_HISTORY_LIMIT = 40;
+
   private readonly lastActivityByAgent = new Map<
     string,
     {
@@ -461,6 +474,22 @@ export class AgentManager {
             : prior?.reason,
     };
     this.lastActivityByAgent.set(agentId, record);
+    // Append to per-agent ring buffer for hydrate timeline (not only last phase).
+    let hist = this.activityHistoryByAgent.get(agentId);
+    if (!hist) {
+      hist = [];
+      this.activityHistoryByAgent.set(agentId, hist);
+    }
+    hist.push({
+      phase,
+      ts,
+      kind: record.kind,
+      label: record.label,
+      activityId: record.activityId,
+    });
+    if (hist.length > AgentManager.ACTIVITY_HISTORY_LIMIT) {
+      hist.splice(0, hist.length - AgentManager.ACTIVITY_HISTORY_LIMIT);
+    }
     this.onEvent({
       type: "agent_activity",
       agentId,
@@ -493,6 +522,14 @@ export class AgentManager {
       attempt?: number;
       maxAttempts?: number;
       reason?: string;
+      /** Recent activity transitions (newest last), for sidebar timeline. */
+      history?: Array<{
+        phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+        ts: number;
+        kind?: string;
+        label?: string;
+        activityId?: string;
+      }>;
     }
   > {
     const out: Record<string, {
@@ -505,11 +542,48 @@ export class AgentManager {
       attempt?: number;
       maxAttempts?: number;
       reason?: string;
+      history?: Array<{
+        phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+        ts: number;
+        kind?: string;
+        label?: string;
+        activityId?: string;
+      }>;
     }> = {};
     for (const [id, rec] of this.lastActivityByAgent) {
-      out[id] = { ...rec };
+      const history = this.activityHistoryByAgent.get(id);
+      out[id] = {
+        ...rec,
+        ...(history && history.length > 0 ? { history: [...history] } : {}),
+      };
     }
     return out;
+  }
+
+  /** Full activity timeline across agents (capped), for status hydrate. */
+  getActivityTimeline(limit = 80): Array<{
+    agentId: string;
+    phase: string;
+    ts: number;
+    kind?: string;
+    label?: string;
+    activityId?: string;
+  }> {
+    const all: Array<{
+      agentId: string;
+      phase: string;
+      ts: number;
+      kind?: string;
+      label?: string;
+      activityId?: string;
+    }> = [];
+    for (const [agentId, hist] of this.activityHistoryByAgent) {
+      for (const h of hist) {
+        all.push({ agentId, ...h });
+      }
+    }
+    all.sort((a, b) => a.ts - b.ts);
+    return all.slice(-limit);
   }
 
   /** Resolve label/kind for promptWithRetry — prefers runner markStatus, then opts. */
@@ -875,6 +949,7 @@ export class AgentManager {
     this.firstPromptLogged.clear();
     this.promptActivityByAgent.clear();
     this.lastActivityByAgent.clear();
+    this.activityHistoryByAgent.clear();
     this.streamingThrottle.clearAll();
     for (const stream of this.streamingByAgent.values()) {
       if (stream.timeoutHandle) clearTimeout(stream.timeoutHandle);

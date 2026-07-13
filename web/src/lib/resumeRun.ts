@@ -44,6 +44,8 @@ export type ResumeStartPayload = {
   wallClockCapMs?: number;
   ambitionTiers?: number;
   force?: boolean;
+  /** Required by server for experimental/research presets. */
+  allowExperimental?: boolean;
 };
 
 export function resumeParentPath(clonePath: string, repoUrl: string): string {
@@ -197,6 +199,25 @@ export function buildResumeStartPayload(sources: {
     runId: sum?.runId,
   });
 
+  // Experimental/research presets need allowExperimental on server (D12).
+  let allowExperimental = false;
+  try {
+    // Dynamic to avoid hard web→shared cycle in tests; fall back to list.
+    const experimental = new Set([
+      "role-diff",
+      "debate-judge",
+      "map-reduce",
+      "stigmergy",
+      "baseline",
+      "moa",
+      "pipeline",
+      "orchestrator-worker-deep",
+    ]);
+    allowExperimental = experimental.has(String(preset));
+  } catch {
+    allowExperimental = false;
+  }
+
   const payload: ResumeStartPayload = {
     repoUrl,
     parentPath: resumeParentPath(clonePath, repoUrl),
@@ -213,6 +234,7 @@ export function buildResumeStartPayload(sources: {
     plannerTools: plannerTools ?? undefined,
     mcpServers: mcpServers || undefined,
     force: true,
+    ...(allowExperimental ? { allowExperimental: true } : {}),
   };
 
   if (userDirective) {

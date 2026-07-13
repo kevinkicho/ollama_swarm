@@ -38,6 +38,8 @@ interface UsageRecord {
   model?: string;
   path?: string;
   preset?: string;
+  /** True when tokens were estimated (provider omitted usage). */
+  estimated?: boolean;
 }
 
 // Task #137: proxy-side quota state. Null when no wall observed since
@@ -302,9 +304,25 @@ export function UsageWidget() {
                     </div>
                   </div>
                 ) : (
-                  <div className="text-[10px] text-ink-500 px-1">
-                    Windows include live calls + historical run summaries (estimated when a
-                    summary recorded turns but omitted token counts).
+                  <div className="text-[10px] text-ink-500 px-1 space-y-0.5">
+                    <div>
+                      Windows include live calls + historical run summaries.
+                    </div>
+                    {(() => {
+                      const est = (data.recent ?? []).filter(
+                        (r) =>
+                          r.estimated
+                          || (typeof r.path === "string"
+                            && (r.path.includes("estimated") || r.path.startsWith("summary-est"))),
+                      ).length;
+                      if (est === 0) return null;
+                      return (
+                        <div className="text-amber-400/90">
+                          {est} recent call{est === 1 ? "" : "s"} marked estimated
+                          (provider omitted usage or summary backfill) — not raw meter data.
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
                 {/* Task #213: when all 4 rolling windows show identical

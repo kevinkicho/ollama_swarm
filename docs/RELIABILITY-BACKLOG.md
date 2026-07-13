@@ -39,15 +39,24 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | Soft-drain vs hard-stop confusion | Wrong button behavior | **Documented** in `run-stop-drain-lifecycle.md` |
 | Autonomous soft-done spun forever | Soft `"done"` cleared `earlyStopDetail` and re-cycled | **Done:** `councilSettlementPolicy` — soft done is terminal; autonomy continues only via `"retry"` |
 | No-op apply marked completed | Empty `filesWritten` treated as successful commit | **Done:** `WorkerPipeline` fail-closed + council worker zero-write retry |
+| Blackboard zero-write approve | Auditor/propose path could complete empty work | **Done:** auditor reject zero files; proposeCommit rejects empty hunks |
+| Permanent no-progress spin | Soft fail requeue forever | **Done:** `permanent:noop-exhausted` / attempts-exhausted + productive-progress gate |
+| Settlement reason opaque offline | Chip empty after reload | **Done:** hydrate from `summary.stopDetail`; pipeline failure summary + earlyStopDetail |
+| Token estimates look real | Fake 22k floors unlabelled | **Done:** `estimated` flag on live records + UI callout |
+| Activity history missing | Sidebar only last phase | **Done:** per-agent activity ring buffer + mini timeline in AgentPanel |
+| Pipeline phase fail no summary | Throw without stopDetail | **Done:** write failure summary + earlyStopDetail |
+| Experimental start without ack | API accepts research presets silently | **Done:** `allowExperimental` required for experimental/research + multi-writer |
+| LAN bind open | Warn-only without token | **Done:** refuse listen unless token or `SWARM_ALLOW_INSECURE_LAN=1` |
+| Log dir growth | Manual prune only | **Done:** startup best-effort `prune-logs --apply` |
 
 ## P2 — product / security / polish
 
 | Risk | Mitigation |
 |------|------------|
-| Experimental presets feel “core” | Keep maturity badges; fail-closed where possible |
-| Multi-writer conflicts | Prefer single-writer; CAS on blackboard |
-| Unauthenticated LAN bind | Token required when host non-loopback (release plan) |
-| Event log disk growth | Debug rotation exists; prune scripts for long fleets |
+| Experimental presets feel “core” | **Done:** server maturity gate + UI badges |
+| Multi-writer conflicts | Prefer single-writer; multi requires `allowExperimental` |
+| Unauthenticated LAN bind | **Done:** fail-closed without token |
+| Event log disk growth | **Done:** startup prune + rotation |
 | Brain auto-provision | Off by default |
 
 ## Working principles

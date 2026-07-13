@@ -198,18 +198,28 @@ export function applyStatusSnapshotToStore(
       chain?: string;
     };
   };
+  // Prefer live earlyStopDetail; fall back to summary.stopDetail so finished
+  // runs still surface settlement reason on hydrate (B4).
+  const summaryStopDetail =
+    (s.summary as { stopDetail?: string } | null | undefined)?.stopDetail
+    || (s.summary as { completionDetail?: string } | null | undefined)?.completionDetail;
+  const earlyStopDetail =
+    healthSnap.earlyStopDetail
+    || (typeof summaryStopDetail === "string" && summaryStopDetail.trim()
+      ? summaryStopDetail
+      : undefined);
   if (
     healthSnap.drainEligible !== undefined ||
     healthSnap.drainIneligibleReason ||
     healthSnap.capsRemaining ||
-    healthSnap.earlyStopDetail ||
+    earlyStopDetail ||
     healthSnap.pipelinePhase
   ) {
     s.setRunHealthFromStatus({
       drainEligible: healthSnap.drainEligible,
       drainIneligibleReason: healthSnap.drainIneligibleReason,
       capsRemaining: healthSnap.capsRemaining,
-      earlyStopDetail: healthSnap.earlyStopDetail,
+      earlyStopDetail,
       ...(healthSnap.pipelinePhase
         ? { pipelinePhase: healthSnap.pipelinePhase }
         : {}),

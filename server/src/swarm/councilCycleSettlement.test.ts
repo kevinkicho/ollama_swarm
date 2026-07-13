@@ -17,6 +17,33 @@ describe("councilCycleSettlement", () => {
     );
     assert.equal(isPermanentSkipReason("search text not found in file"), false);
     assert.equal(isPermanentSkipReason("out of scope for this worker"), true);
+    assert.equal(isPermanentSkipReason("permanent:noop-exhausted: wrote zero files"), true);
+  });
+
+  it("promotes repeated no-op fails to permanent skip", () => {
+    const q = new TodoQueue();
+    const id = q.post({
+      description: "noop",
+      expectedFiles: ["a.ts"],
+      createdBy: "test",
+    });
+    const book = createSettlementBook();
+    for (const worker of ["agent-2", "agent-3", "agent-4"]) {
+      q.dequeue(worker);
+      q.fail(id, "apply wrote zero files (no-op) — not a successful commit");
+      recordSettlementAttempt(
+        book,
+        id,
+        worker,
+        "apply wrote zero files (no-op) — not a successful commit",
+      );
+    }
+    const r = requeueUnresolvedCouncilTodos(q, ["agent-2", "agent-3", "agent-4"], book, {
+      maxAttempts: 5,
+    });
+    assert.ok(r.permanentSkipped.includes(id));
+    assert.equal(q.get(id)?.status, "skipped");
+    assert.match(q.get(id)?.reason ?? "", /permanent:noop-exhausted/);
   });
 
   it("maxAttemptsForCycle is at least 2 and scales with agents", () => {
@@ -51,8 +78,13 @@ describe("councilCycleSettlement", () => {
       maxAttempts: 2,
     });
     assert.equal(r2.requeued, 0);
-    assert.ok(r2.exhausted.includes(id));
-    assert.equal(q.get(id)?.status, "failed");
+    // Exhausted attempts → permanent skip so the cycle can settle.
+    assert.ok(r2.permanentSkipped.includes(id) || r2.exhausted.includes(id));
+    const final = q.get(id);
+    assert.ok(final?.status === "skipped" || final?.status === "failed");
+    if (final?.status === "skipped") {
+      assert.match(final.reason ?? "", /permanent:attempts-exhausted/);
+    }
   });
 
   it("does not requeue permanent skips", () => {

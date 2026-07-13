@@ -1,6 +1,14 @@
 import type { AgentState } from "../types";
 import { isPreStreamActivityPhase } from "./agentActivityPhases";
 
+export type AgentActivityHistoryEntry = {
+  phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
+  ts: number;
+  kind?: string;
+  label?: string;
+  activityId?: string;
+};
+
 export type AgentActivityRecord = {
   phase: "queued" | "waiting" | "streaming" | "retrying" | "done";
   ts: number;
@@ -11,6 +19,8 @@ export type AgentActivityRecord = {
   attempt?: number;
   maxAttempts?: number;
   reason?: string;
+  /** Recent transitions (newest last) from server ring buffer. */
+  history?: AgentActivityHistoryEntry[];
 };
 
 export type StreamingMeta = {

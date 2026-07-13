@@ -398,8 +398,10 @@ export const StartBody = z.object({
   workerDispositions: z.boolean().optional(),
   // Write mode: controls how files are written during execution.
   // "none" = single-worker hunk-based, "single" = single-writer synthesis,
-  // "multi" = multi-writer with conflict policy.
+  // "multi" = multi-writer with conflict policy (experimental — requires allowExperimental).
   writeMode: z.enum(["none", "single", "multi"]).optional(),
+  /** Opt-in for experimental/research presets and multi-writer (D12 / C8). */
+  allowExperimental: z.boolean().optional(),
   // Conflict policy for multi-write mode.
   conflictPolicy: z.enum(["merge", "sequential", "vote", "judge", "pick"]).optional(),
   // Plan 1: debate-judge auditor — PRO/CON/JUDGE replaces single-agent audit.

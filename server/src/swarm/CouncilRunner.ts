@@ -117,6 +117,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private stuckCycleCount = 0;
   private consecutiveEmptyCycles = 0;
   private tierPromotionRetries = 0;
+  /** Autonomous: consecutive cycles with no commits / met flips / new todos. */
+  private zeroProgressStreak = 0;
   private maxTiers = Infinity;
 
   private drainResolve: (() => void) | undefined;
@@ -625,6 +627,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
       getTierPromotionRetries: () => this.tierPromotionRetries,
       setTierPromotionRetries: (n) => {
         this.tierPromotionRetries = n;
+      },
+      getZeroProgressStreak: () => this.zeroProgressStreak,
+      setZeroProgressStreak: (n) => {
+        this.zeroProgressStreak = n;
       },
       setEarlyStopDetail: (s) => {
         this.earlyStopDetail = s;

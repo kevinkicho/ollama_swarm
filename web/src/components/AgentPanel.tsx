@@ -252,6 +252,35 @@ export const AgentPanel = memo(function AgentPanel({
       >
         {primaryLine}
       </div>
+      {activity?.history && activity.history.length > 1 ? (
+        <div
+          className="mt-1 max-h-[72px] overflow-y-auto rounded border border-ink-700/50 bg-ink-950/40 px-1.5 py-1 space-y-0.5"
+          title="Recent activity timeline"
+        >
+          {[...activity.history].slice(-8).reverse().map((h, i) => (
+            <div
+              key={`${h.ts}-${h.phase}-${i}`}
+              className="text-[9px] font-mono text-ink-500 truncate"
+            >
+              <span className="text-ink-600">
+                {new Date(h.ts).toLocaleTimeString(undefined, {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                  second: "2-digit",
+                })}
+              </span>
+              {" · "}
+              <span className="text-ink-400">{h.phase}</span>
+              {h.label || h.kind ? (
+                <span className="text-ink-500">
+                  {" "}
+                  · {(h.label || h.kind || "").slice(0, 36)}
+                </span>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
       {showPopover && hoverPos
         ? createPortal(
             <div

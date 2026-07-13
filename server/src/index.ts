@@ -748,6 +748,25 @@ void reclaimOrphans(repoRoot)
       console.warn("└──────────────────────────────────────────────────┘");
     }
     const listenHost = config.SERVER_HOST;
+    // D11: fail-closed — refuse non-loopback bind without SWARM_API_TOKEN.
+    // Override with SWARM_ALLOW_INSECURE_LAN=1 for lab networks only.
+    if (isInsecureLanExposure() && process.env.SWARM_ALLOW_INSECURE_LAN !== "1") {
+      console.error("FATAL: SERVER_HOST is not loopback and SWARM_API_TOKEN is unset.");
+      console.error("  Set SWARM_API_TOKEN, bind 127.0.0.1, or SWARM_ALLOW_INSECURE_LAN=1 (lab only).");
+      process.exit(1);
+    }
+    // D10: best-effort log prune when fleet dirs grow large (apply, not dry-run).
+    try {
+      const { spawn } = await import("node:child_process");
+      const prune = spawn(
+        process.execPath,
+        ["scripts/prune-logs.mjs", "--apply", "--keep-days=14", "--max-run-dirs=50"],
+        { cwd: process.cwd(), stdio: "ignore", detached: true },
+      );
+      prune.unref();
+    } catch {
+      /* optional */
+    }
     server.listen(config.SERVER_PORT, listenHost, () => {
       startProviderHealthScheduler();
       console.log(`ollama_swarm server listening on http://${listenHost === "0.0.0.0" ? "127.0.0.1" : listenHost}:${config.SERVER_PORT} (bind ${listenHost})`);
@@ -757,8 +776,8 @@ void reclaimOrphans(repoRoot)
       console.log(`  api auth: ${config.SWARM_API_TOKEN ? "token required" : "open (local trusted)"}`);
       console.log(`  mcp servers: ${config.SWARM_ALLOW_MCP_SERVERS ? "allowed" : "disabled"}`);
       if (isInsecureLanExposure()) {
-        console.warn("⚠ SECURITY: SERVER_HOST is not loopback and SWARM_API_TOKEN is unset.");
-        console.warn("  Anyone on the network can start runs and use provider keys. Set SWARM_API_TOKEN or bind 127.0.0.1.");
+        console.warn("⚠ SECURITY: SERVER_HOST is not loopback and SWARM_API_TOKEN is unset (SWARM_ALLOW_INSECURE_LAN=1).");
+        console.warn("  Anyone on the network can start runs and use provider keys.");
       }
       // R5 wiring (2026-05-04): auto-resume mid-flight runs from disk.
       // Fire-and-forget — startup must complete even if resume fails.

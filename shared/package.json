@@ -36,7 +36,8 @@
     "./swarmControl/toolFailureTrack": "./src/swarmControl/toolFailureTrack.ts",
     "./swarmControl/controlAdvice": "./src/swarmControl/controlAdvice.ts",
     "./wsProtocol": "./src/wsProtocol.ts",
-    "./workerHunks": "./src/workerHunks.ts"
+    "./workerHunks": "./src/workerHunks.ts",
+    "./presetMaturity": "./src/presetMaturity.ts"
   },
   "scripts": {
     "test": "node scripts/run-tests.mjs",

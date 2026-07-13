@@ -218,6 +218,9 @@ export function useSetupForm(navigate: (path: string) => void) {
     // the real long logic lives here or can be expanded
     try {
       const directiveTrimmed = userDirective.trim();
+      const maturity = (preset as { maturity?: string }).maturity;
+      const needsExperimentalAck =
+        maturity === "experimental" || maturity === "research";
       const payload = {
         repoUrl,
         parentPath,
@@ -225,6 +228,8 @@ export function useSetupForm(navigate: (path: string) => void) {
         model,
         agentCount,
         rounds: roundsInput,
+        // Server fail-closed for experimental/research unless acknowledged.
+        ...(needsExperimentalAck ? { allowExperimental: true } : {}),
         ...(directiveTrimmed ? { userDirective: directiveTrimmed } : {}),
         webTools,
         ...(preset.id === "council" || preset.id === "blackboard"

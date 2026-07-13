@@ -28,6 +28,8 @@ export class PipelineRunner implements SwarmRunner {
   private factory: RunnerFactory;
   /** True if any non-terminal phase failed (used for final status). */
   private hadPhaseFailure = false;
+  /** Fail-closed reason for phase failure / early stop (status + summary). */
+  private earlyStopDetail: string | undefined;
   /** Live pipeline identity for status / UI (1-based index). */
   private pipelinePhaseIndex = 0;
   private pipelinePhaseCount = 0;
@@ -81,10 +83,12 @@ export class PipelineRunner implements SwarmRunner {
             },
           }
         : {}),
-      // Prefer child early-stop / drain signals when present.
-      ...(currentStatus?.earlyStopDetail
-        ? { earlyStopDetail: currentStatus.earlyStopDetail }
-        : {}),
+      // Prefer pipeline-level fail reason, then child early-stop.
+      ...(this.earlyStopDetail
+        ? { earlyStopDetail: this.earlyStopDetail }
+        : currentStatus?.earlyStopDetail
+          ? { earlyStopDetail: currentStatus.earlyStopDetail }
+          : {}),
       ...(currentStatus?.drainEligible !== undefined
         ? {
             drainEligible: currentStatus.drainEligible,
@@ -198,6 +202,8 @@ export class PipelineRunner implements SwarmRunner {
       } catch (err) {
         this.hadPhaseFailure = true;
         const msg = err instanceof Error ? err.message : String(err);
+        this.earlyStopDetail =
+          `pipeline phase ${i + 1}/${pipeline.phases.length} (${phase.preset}) failed: ${msg.slice(0, 180)}`;
         this.opts.logDiag?.({
           type: "pipeline-phase-failure",
           i,
@@ -220,6 +226,7 @@ export class PipelineRunner implements SwarmRunner {
         this.running = false;
         this.setPhase("failed");
         this.currentRunner = null;
+        await this.writePipelineFailureSummary();
         throw err;
       }
 
@@ -228,6 +235,9 @@ export class PipelineRunner implements SwarmRunner {
 
       if (runnerStatus.phase === "failed") {
         this.hadPhaseFailure = true;
+        this.earlyStopDetail =
+          runnerStatus.earlyStopDetail
+          ?? `pipeline phase ${i + 1}/${pipeline.phases.length} (${phase.preset}) ended failed`;
         this.appendSystem(
           `[Pipeline] Phase ${i + 1} (${phase.preset}) ended failed — stopping pipeline.`,
         );
@@ -244,6 +254,7 @@ export class PipelineRunner implements SwarmRunner {
         this.running = false;
         this.setPhase("failed");
         this.currentRunner = null;
+        await this.writePipelineFailureSummary();
         throw new Error(`Pipeline phase ${i + 1} (${phase.preset}) failed`);
       }
 
@@ -308,7 +319,12 @@ export class PipelineRunner implements SwarmRunner {
           startedAt,
           endedAt: now,
           wallClockMs: Math.max(0, now - startedAt),
-          stopReason: this.stopping ? "user-stop" : "completed",
+          stopReason: this.stopping
+            ? "user-stop"
+            : this.hadPhaseFailure
+              ? "early-stop"
+              : "completed",
+          ...(this.earlyStopDetail ? { stopDetail: this.earlyStopDetail } : {}),
           model: this.active.model,
           agentCount: this.active.agentCount || 0,
           rounds: this.active.rounds || 0,
@@ -419,6 +435,66 @@ export class PipelineRunner implements SwarmRunner {
       } catch (e) {
         this.appendSystem(`[Pipeline] Failed to force summary write on stop: ${e}`);
       }
+    }
+  }
+
+  /** Durable summary on phase failure so history/UI get stopDetail (C7). */
+  private async writePipelineFailureSummary(): Promise<void> {
+    if (!this.active?.localPath || !this.active?.runId) return;
+    try {
+      const now = Date.now();
+      const startedAt =
+        this.phaseResults.length > 0
+          ? (this.phaseResults[0].transcript?.[0]?.ts || now - 60_000)
+          : now - 60_000;
+      const summary: any = {
+        runId: this.active.runId,
+        preset: this.active.preset,
+        startedAt,
+        endedAt: now,
+        wallClockMs: Math.max(0, now - startedAt),
+        stopReason: "early-stop",
+        stopDetail: this.earlyStopDetail ?? "pipeline phase failed",
+        model: this.active.model,
+        agentCount: this.active.agentCount || 0,
+        rounds: this.active.rounds || 0,
+        transcript: this.transcript,
+        topology: this.active.topology,
+        filesChanged: 0,
+        finalGitStatus: "",
+        finalGitStatusTruncated: "",
+        repoUrl: this.active.repoUrl || "",
+        localPath: this.active.localPath || "",
+        wastedWallClockMs: 0,
+        agents:
+          (this.phaseResults.length > 0
+            && this.phaseResults[this.phaseResults.length - 1].agents)
+            ? this.phaseResults[this.phaseResults.length - 1].agents
+            : (this.opts.manager.toStates ? this.opts.manager.toStates() : []),
+        clonePath: this.active.localPath,
+        phaseResults: this.phaseResults.map((p) => ({
+          preset: p.preset,
+          status: p.status,
+        })),
+      };
+      const hasRunFinished = this.transcript.some(
+        (e: any) => e.summary?.kind === "run_finished",
+      );
+      if (!hasRunFinished) {
+        this.transcript.push({
+          id: `run-finished-${summary.runId || Date.now()}`,
+          role: "system",
+          text: formatRunFinishedBanner(summary),
+          ts: now,
+          summary: buildRunFinishedSummary(summary),
+        } as any);
+      }
+      await writeRunSummary(this.active.localPath, {
+        ...summary,
+        transcript: this.transcript,
+      } as any);
+    } catch {
+      /* best-effort */
     }
   }
 

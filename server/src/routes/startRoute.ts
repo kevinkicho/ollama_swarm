@@ -65,6 +65,36 @@ export function registerStartRoute(
     startLog.info('start request received', {
       preset: parsed.data.preset,
     });
+
+    // D12 / C8: fail-closed experimental presets + multi-writer unless opt-in.
+    try {
+      const { requiresExperimentalAck } = await import(
+        "@ollama-swarm/shared/presetMaturity"
+      );
+      const allowExp = parsed.data.allowExperimental === true;
+      if (requiresExperimentalAck(parsed.data.preset) && !allowExp) {
+        res.status(400).json({
+          error:
+            `Preset "${parsed.data.preset}" is experimental/research. ` +
+            `Pass allowExperimental: true to start (UI: advanced / experimental badge).`,
+          code: "experimental_preset",
+          preset: parsed.data.preset,
+        });
+        return;
+      }
+      if (parsed.data.writeMode === "multi" && !allowExp) {
+        res.status(400).json({
+          error:
+            'writeMode "multi" is experimental. Pass allowExperimental: true or use single/none.',
+          code: "experimental_multi_writer",
+        });
+        return;
+      }
+    } catch (err) {
+      startLog.warn("experimental maturity gate skipped", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
     // ModelConfig consolidation (2026-05-17): replace scattered ?? chains
     // with a single resolveModels() call. 31 decision points → 1 function.
     const resolvedModels = resolveModels(

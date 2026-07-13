@@ -159,6 +159,24 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
     },
 
     proposeCommitQ(id, hunks, files) {
+      // Fail-closed: never park empty proposals as pending-commit progress.
+      if (!hunks || hunks.length === 0 || !files || files.length === 0) {
+        const transitioned = todoQueue.fail(
+          id,
+          "[v2] proposeCommit rejected: empty hunks or files",
+        );
+        if (transitioned) {
+          const t = todoQueue.get(id);
+          if (t) (t as { staleReason?: string }).staleReason = "hunk-empty";
+          emit({
+            type: "todo_stale",
+            todoId: id,
+            reason: "[v2] proposeCommit rejected: empty hunks or files",
+          } as any);
+        }
+        scheduleStateWrite();
+        return;
+      }
       todoQueue.proposeCommit(id, hunks, files);
       const todo = todoQueue.get(id);
       if (todo) {

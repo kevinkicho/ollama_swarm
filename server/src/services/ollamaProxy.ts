@@ -34,6 +34,8 @@ export interface UsageRecord {
   preset?: string;
   /** Run ID for per-run attribution. Null for calls outside a run. */
   runId?: string;
+  /** True when prompt/response tokens were estimated (provider omitted usage). */
+  estimated?: boolean;
 }
 
 export interface UsageWindow {
@@ -599,15 +601,16 @@ export function recordChatUsage(input: {
   model?: string;
   path?: string;
   runId?: string;
-}): { promptTokens: number; responseTokens: number } {
-  const promptTokens =
-    input.promptTokens && input.promptTokens > 0
-      ? input.promptTokens
-      : estimateTokensFromText(input.promptText);
-  const responseTokens =
-    input.responseTokens && input.responseTokens > 0
-      ? input.responseTokens
-      : estimateTokensFromText(input.responseText);
+}): { promptTokens: number; responseTokens: number; estimated: boolean } {
+  const hadPrompt = !!(input.promptTokens && input.promptTokens > 0);
+  const hadResponse = !!(input.responseTokens && input.responseTokens > 0);
+  const promptTokens = hadPrompt
+    ? input.promptTokens!
+    : estimateTokensFromText(input.promptText);
+  const responseTokens = hadResponse
+    ? input.responseTokens!
+    : estimateTokensFromText(input.responseText);
+  const estimated = !hadPrompt || !hadResponse;
   tokenTracker.add(
     {
       ts: Date.now(),
@@ -615,11 +618,14 @@ export function recordChatUsage(input: {
       responseTokens,
       durationMs: input.durationMs,
       model: input.model,
-      path: input.path,
+      path: estimated
+        ? (input.path ? `${input.path}|estimated` : "estimated")
+        : input.path,
+      estimated,
     },
     input.runId,
   );
-  return { promptTokens, responseTokens };
+  return { promptTokens, responseTokens, estimated };
 }
 
 interface ProxyOpts {
