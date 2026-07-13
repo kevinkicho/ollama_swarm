@@ -3,7 +3,16 @@
 **Last updated:** 2026-07-13  
 **Purpose:** Ranked failure points and mitigations. Code wins if this drifts.
 
-## P0 — user-visible wrongness or stuck runs
+### Operating assumption (operator feedback)
+
+**AI provider / model reliability is not a first-class issue in this deployment.**
+Cloud cold starts, quota storms, and “the model is dumb” are **out of scope** as
+primary product risks. Focus reliability work on **our** control plane: lifecycle,
+orchestration, UI truthfulness, composite presets, stop/drain, and autonomous end
+conditions. Absolute prompt walls and caps remain as **local fail-closed safety nets**
+(runaway stream / unbounded autonomous), not as a bet that the provider is flaky.
+
+## P0 — user-visible wrongness or stuck runs (app-owned)
 
 | Risk | Symptom | Mitigation status |
 |------|---------|-------------------|
@@ -11,9 +20,9 @@
 | Stale sidebar busy | Thinking forever after done | **Done:** view demote + dock demote + activity done through suppress |
 | Ghost agents after pipeline phase | Old agent-N cards after handoff | **Done:** `agents_roster` + phase handoff killAll |
 | Dual event hubs / double broadcast | Missing or duplicate UI events | **Done:** single `createHub` + hub-only wrap emit |
-| Hard stop hung on provider | Stop never returns | **Done:** 45s worker + 10s loop race; timeout re-aborts + system line then killAll |
-| Hung / runaway continuous stream | Idle wall never trips while streaming | **Done:** absolute prompt wall-clock (fail-closed, no idle reset) |
-| Autonomous ignores token/wall caps | rounds=0 cycles forever past budget | **Done:** cycle-boundary gates + default 8h wall if no cap on start |
+| Hard stop does not settle | Stop returns late / workers linger in UI | **Done:** 45s worker + 10s loop race; timeout re-aborts + system line then killAll |
+| Runaway continuous stream (no idle) | Idle wall never trips while still streaming | **Done:** absolute prompt wall-clock (local fail-closed) |
+| Autonomous ignores resource caps | rounds=0 cycles without a stop signal | **Done:** cycle-boundary gates + default 8h wall if no cap on start |
 | Blackboard caps silent to Brain/UI | Cap stop without RECONFIG / early-stop chip | **Done:** notifyGuardTrip + earlyStopDetail from terminationReason |
 | chatOnce headless sidebar | Research/coach dock without status | **Done:** coach/stall/reflection/pre-pass/worker/outcome/ui-audit wired |
 
