@@ -26,8 +26,11 @@ import { deriveCloneDir, RepoService } from "../services/RepoService.js";
 import { normalizeWslPath } from "../services/pathNormalize.js";
 import { preflightDiskCheck } from "../swarm/preflightDiskCheck.js";
 import { projectRunCost, exceedsBudget } from "../swarm/preflightCostProjector.js";
-import { decideStopAction } from "../swarm/drainStopPolicy.js";
 import { PerRunStopDebounce } from "../swarm/control/perRunStopDebounce.js";
+import {
+  executeDrainForRun,
+  executeStopForRun,
+} from "./runStopDrainHandlers.js";
 import { registerBrainRoutes } from "./brainRoutes.js";
 import { registerOpenPathRoute } from "./openPath.js";
 import { registerStartRoute } from "./startRoute.js";
@@ -198,14 +201,21 @@ export function swarmRouter(orch: Orchestrator): Router {
   });
 
   // T-Item-MultiTenant Phase 5 (2026-05-04): per-run stop.
+  // Shares SWARM_DRAIN_ON_STOP policy with legacy POST /stop.
   r.post("/runs/:runId/stop", async (req: Request, res: Response) => {
     const runId = String(req.params.runId);
-    const ok = await orch.stopRun(runId);
-    if (!ok) {
-      res.status(404).json({ error: "runId not active" });
-      return;
-    }
-    res.json({ ok: true });
+    const result = await executeStopForRun(orch, runId, {
+      drainOnStop: config.SWARM_DRAIN_ON_STOP,
+      debounce: lastStopClickAtByRun,
+    });
+    res.status(result.status).json(result.body);
+  });
+
+  // Per-run soft drain (multi-tenant; same body as legacy POST /drain).
+  r.post("/runs/:runId/drain", async (req: Request, res: Response) => {
+    const runId = String(req.params.runId);
+    const result = await executeDrainForRun(orch, runId);
+    res.status(result.status).json(result.body);
   });
 
   // Preflight check (2026-04-24): lets the SetupForm preview whether a
@@ -320,38 +330,11 @@ export function swarmRouter(orch: Orchestrator): Router {
       });
       return;
     }
-    try {
-      if (config.SWARM_DRAIN_ON_STOP) {
-        const decision = decideStopAction({
-          now: Date.now(),
-          lastStopAt: lastStopClickAtByRun.get(resolved.runId),
-        });
-        lastStopClickAtByRun.touch(resolved.runId);
-        if (decision.action === "drain") {
-          const result = await orch.drainRun(resolved.runId);
-          if (!result) {
-            res.status(404).json({ error: "runId not active" });
-            return;
-          }
-          res.json({
-            ok: true,
-            action: "drain",
-            mode: result.mode,
-            reason: decision.reason,
-          });
-          return;
-        }
-      }
-      const ok = await orch.stopRun(resolved.runId);
-      if (!ok) {
-        res.status(404).json({ error: "runId not active" });
-        return;
-      }
-      res.json({ ok: true, action: "kill" });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
-    }
+    const result = await executeStopForRun(orch, resolved.runId, {
+      drainOnStop: config.SWARM_DRAIN_ON_STOP,
+      debounce: lastStopClickAtByRun,
+    });
+    res.status(result.status).json(result.body);
   });
 
   // #299: mid-run directive amend. The user submits an addendum
@@ -403,8 +386,8 @@ export function swarmRouter(orch: Orchestrator): Router {
   // Task #167: soft-stop. Workers finish currently-claimed todos
   // (no in-flight commits get lost), no new claims, then escalate
   // to hard stop. Backstopped at 3 min — user can press hard /stop
-  // to escalate immediately. For non-blackboard presets, falls
-  // through to hard /stop (orchestrator handles the dispatch).
+  // to escalate immediately. Prefer per-run POST /runs/:runId/drain
+  // under multi-tenant concurrency.
   r.post("/drain", async (req: Request, res: Response) => {
     const bodyParsed = LegacyRunBody.safeParse(req.body ?? {});
     const runId = bodyParsed.success ? bodyParsed.data.runId : undefined;
@@ -416,27 +399,8 @@ export function swarmRouter(orch: Orchestrator): Router {
       });
       return;
     }
-    try {
-      const result = await orch.drainRun(resolved.runId);
-      if (!result) {
-        res.status(404).json({ error: "runId not active" });
-        return;
-      }
-      res.json({
-        ok: true,
-        mode: result.mode,
-        // Soft drain finishes current work; hard-fallback means runner has no drain().
-        message:
-          result.mode === "soft"
-            ? "Soft drain started — finish in-flight work, then stop."
-            : result.mode === "hard-fallback"
-              ? "Runner has no soft drain — hard-stopped instead."
-              : "Run already stopped.",
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      res.status(500).json({ error: msg });
-    }
+    const result = await executeDrainForRun(orch, resolved.runId);
+    res.status(result.status).json(result.body);
   });
 
   r.post("/say", (req: Request, res: Response) => {

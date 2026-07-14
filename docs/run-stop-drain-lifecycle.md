@@ -20,10 +20,14 @@ restore — not the other way around.
 | **Hard stop** | `POST /api/swarm/stop` | Stop now; abandon in-flight work after abort grace | `CouncilRunner.stop()` |
 | **Soft drain** | `POST /api/swarm/drain` | Finish the **current** in-flight todo per worker, then hard stop (3 min backstop) | `CouncilRunner.drain()` |
 
-**API honesty:** `POST /drain` returns `{ ok, mode, message }` where
-`mode` is `soft` | `hard-fallback` | `already-stopped`. Runners without `drain()`
-(e.g. baseline) report `hard-fallback` and the UI must not pretend soft-drain
-started. Failed drain must not force phase=`stopped`.
+**API honesty:** `POST /drain` and `POST /runs/:runId/drain` return
+`{ ok, mode, message }` where `mode` is `soft` | `hard-fallback` | `already-stopped`.
+Runners without `drain()` (e.g. baseline) report `hard-fallback` and the UI must
+not pretend soft-drain started. Failed drain must not force phase=`stopped`.
+
+**Multi-tenant parity:** `POST /runs/:runId/stop` shares `SWARM_DRAIN_ON_STOP`
+with legacy `POST /stop` (first click drain, second within 5s kill). Prefer
+per-run paths when more than one run is active.
 
 **Do not conflate them:**
 

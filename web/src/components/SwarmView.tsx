@@ -115,6 +115,9 @@ export const SwarmView = memo(function SwarmView() {
   const stopUrl = activeRunId
     ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/stop`
     : "/api/swarm/stop";
+  const drainUrl = activeRunId
+    ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/drain`
+    : "/api/swarm/drain";
   const sayUrl = activeRunId
     ? `/api/swarm/runs/${encodeURIComponent(activeRunId)}/say`
     : "/api/swarm/say";
@@ -290,12 +293,11 @@ export const SwarmView = memo(function SwarmView() {
     setPendingAction({ runId: targetRunId, kind: "drain" });
     setControlNotice(null);
     try {
-      const drainUrl = "/api/swarm/drain";
-      const body = JSON.stringify({ runId: viewRunId });
       const res = await apiFetch(drainUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body,
+        // Legacy /drain needs body.runId when multiple runs; per-run path ignores body.
+        body: JSON.stringify({ runId: targetRunId }),
       });
       const payload = (await res.json().catch(() => ({}))) as {
         error?: string;

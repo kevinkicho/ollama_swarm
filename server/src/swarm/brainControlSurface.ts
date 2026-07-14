@@ -123,6 +123,12 @@ export const BRAIN_CONTROL_SURFACE = {
     },
     {
       method: "POST",
+      path: "/api/swarm/runs/:runId/drain",
+      phase: "during",
+      purpose: "Per-run soft drain (multi-tenant; same modes as /drain)",
+    },
+    {
+      method: "POST",
       path: "/api/swarm/stop",
       phase: "during",
       purpose: "Hard stop (or drain-then-kill if SWARM_DRAIN_ON_STOP)",
@@ -132,7 +138,7 @@ export const BRAIN_CONTROL_SURFACE = {
       method: "POST",
       path: "/api/swarm/runs/:runId/stop",
       phase: "during",
-      purpose: "Per-run hard stop",
+      purpose: "Per-run stop (same SWARM_DRAIN_ON_STOP policy as /stop)",
     },
     {
       method: "GET",
