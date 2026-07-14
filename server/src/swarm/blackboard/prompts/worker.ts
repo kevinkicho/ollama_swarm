@@ -9,6 +9,7 @@ import type { RoundRobinDisposition } from "../../roundRobinPromptHelpers.js";
 import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { softCap } from "./lenientParse.js";
 import { buildResearchNotesBlock, buildResearchToolsNote } from "./planner.js";
+import { buildBlackboardDirectiveBlock } from "../../directivePromptHelpers.js";
 
 // ---------------------------------------------------------------------------
 // Worker response schema (v2). Shape: {"hunks": [ ...discriminated on op ]}.
@@ -385,12 +386,14 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     parts.push(seed.hunkRagBlock.trim());
     parts.push("");
   }
-  if (seed.directive && seed.directive.trim().length > 0) {
+  const directiveLines = buildBlackboardDirectiveBlock(seed.directive, {
+    labelSuffix: "(AUTHORITATIVE — your work MUST serve this directive. Never create mock/fake/placeholder data.)",
+    authoritative: true,
+    includeAuthoritativeFraming: false,
+  });
+  if (directiveLines.length > 0) {
     parts.push("");
-    parts.push("=== USER DIRECTIVE (AUTHORITATIVE — your work MUST serve this directive. Never create mock/fake/placeholder data.) ===");
-    parts.push(seed.directive.trim());
-    parts.push("=== end USER DIRECTIVE ===");
-    parts.push("");
+    parts.push(...directiveLines);
   }
   if (seed.userChatBlock && seed.userChatBlock.trim().length > 0) {
     parts.push(seed.userChatBlock.trim());

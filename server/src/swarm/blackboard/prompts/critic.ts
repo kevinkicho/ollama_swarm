@@ -21,6 +21,8 @@
 // firstPassContract's parser.
 
 import { z } from "zod";
+// Cross-role JSON-final wording lives in sharedSnippets.ts; critic keeps a
+// self-contained OUTPUT SHAPE (accept|reject) so the model sees one shape.
 import { extractJsonFromText as stripFences } from "../../extractJson.js";
 import { lenientPreprocess } from "./lenientParse.js";
 

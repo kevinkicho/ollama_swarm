@@ -5,7 +5,12 @@
 // Each entry has a version hash (update manually when the prompt changes)
 // so git blame shows what changed and when.
 //
+// sourceFile paths:
+//   - "prompts/<file>.ts" → relative to server/src/swarm/blackboard/
+//   - anything else        → relative to server/src/swarm/
+//
 // Usage: npx tsx eval/run-eval.mjs --drift-check
+//        (also wired from Orchestrator.start via driftGuard)
 
 export interface PromptSnapshot {
   /** Stable identifier: "planner-parse-todos", "worker-hunks", etc. */
@@ -24,10 +29,13 @@ export interface PromptSnapshot {
   lastValidatedAt: number;
 }
 
+/** Bumped when this registry's assertion set or coverage changes. */
+const REGISTRY_VERSION = "2026-07-14";
+
 export const promptRegistry: PromptSnapshot[] = [
   {
     name: "planner-todos",
-    version: "2026-05-09",
+    version: REGISTRY_VERSION,
     sourceFile: "prompts/planner.ts",
     expectedBehavior: [
       "prompt MUST mention 'description' as output field",
@@ -36,87 +44,159 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST NOT contain '<tool_call' (XML drift instruction — must remain prohibition)",
       "prompt MUST prohibit read-only TODOs (rule 5a: 'DO NOT emit read-only TODOs')",
       "prompt MUST require output is JSON array only (rule 1: 'Output ONLY a JSON array')",
+      "prompt MUST mention 'imperative' (description style)",
     ],
     lastValidatedModel: "glm-5.1:cloud",
-    lastValidatedAt: 0,
+    lastValidatedAt: Date.UTC(2026, 6, 14),
   },
   {
     name: "worker-hunks",
-    version: "2026-05-09",
+    version: REGISTRY_VERSION,
     sourceFile: "prompts/worker.ts",
     expectedBehavior: [
       "prompt MUST mention 'hunks' as output array",
       "prompt MUST mention 'skip' as optional output field",
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST require hunks use op field (replace|create|append)",
+      "prompt MUST mention 'replace_between'",
+      "prompt MUST mention 'replace'",
+      "prompt MUST mention 'write'",
+      "prompt MUST mention 'create'",
+      "prompt MUST mention 'append'",
       "prompt MUST limit hunks to MAX_HUNKS (16)",
     ],
     lastValidatedModel: "gemma4:31b-cloud",
-    lastValidatedAt: 0,
+    lastValidatedAt: Date.UTC(2026, 6, 14),
   },
   {
     name: "auditor-verdict",
-    version: "2026-05-09",
+    version: REGISTRY_VERSION,
     sourceFile: "prompts/auditor.ts",
     expectedBehavior: [
       "prompt MUST mention 'verdicts' as output array",
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST require verdicts exclude met/wont-do criteria (rule 3)",
-      "prompt MUST require verdicts reference criterion IDs (c1, c2, ...)",
+      "prompt MUST mention 'already met or wont-do'",
+      "prompt MUST mention 'c1, c2'",
+      "prompt MUST mention 'WORKER CAPABILITIES'",
+      "prompt MUST mention 'allowlisted'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
-    lastValidatedAt: 0,
+    lastValidatedAt: Date.UTC(2026, 6, 14),
   },
   {
     name: "contract-criteria",
-    version: "2026-05-09",
+    version: REGISTRY_VERSION,
     sourceFile: "prompts/firstPassContract.ts",
     expectedBehavior: [
-      "prompt MUST mention 'contract' as output object",
-      "prompt MUST mention 'dropped' as output array",
+      "prompt MUST mention 'missionStatement'",
+      "prompt MUST mention 'criteria'",
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST require criteria include 'description' field",
-      "prompt MUST require criteria include 'expectedFiles' field",
+      "prompt MUST mention 'description'",
+      "prompt MUST mention 'expectedFiles'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
-    lastValidatedAt: 0,
+    lastValidatedAt: Date.UTC(2026, 6, 14),
   },
   {
     name: "replanner-todos",
-    version: "2026-05-09",
+    version: REGISTRY_VERSION,
     sourceFile: "prompts/replanner.ts",
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST require output is valid JSON format",
+      "prompt MUST mention 'Output ONLY a JSON object'",
+      "prompt MUST mention 'revised'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
-    lastValidatedAt: 0,
+    lastValidatedAt: Date.UTC(2026, 6, 14),
   },
   {
     name: "verifier-review",
-    version: "2026-05-09",
+    version: REGISTRY_VERSION,
     sourceFile: "prompts/verifier.ts",
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
     ],
     lastValidatedModel: "glm-5.1:cloud",
-    lastValidatedAt: 0,
+    lastValidatedAt: Date.UTC(2026, 6, 14),
   },
   {
     name: "critic-review",
-    version: "2026-05-09",
+    version: REGISTRY_VERSION,
     sourceFile: "prompts/critic.ts",
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST require output is valid JSON format",
+      "prompt MUST mention 'Output ONLY a single JSON object'",
+      "prompt MUST mention 'accept'",
+      "prompt MUST mention 'reject'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
-    lastValidatedAt: 0,
+    lastValidatedAt: Date.UTC(2026, 6, 14),
+  },
+
+  // ── Discussion / control critical paths (source under server/src/swarm/) ──
+  {
+    name: "council-findings",
+    version: REGISTRY_VERSION,
+    sourceFile: "councilPromptHelpers.ts",
+    expectedBehavior: [
+      "prompt MUST mention 'severity'",
+      "prompt MUST NOT contain '```json'",
+      "prompt MUST mention 'OUTPUT FORMAT'",
+      "prompt MUST mention 'FIXING/ENHANCING'",
+    ],
+    lastValidatedModel: "deepseek-v4-flash:cloud",
+    lastValidatedAt: Date.UTC(2026, 6, 14),
+  },
+  {
+    name: "debate-judge-json",
+    version: REGISTRY_VERSION,
+    sourceFile: "debatePromptHelpers.ts",
+    expectedBehavior: [
+      "prompt MUST mention 'Output ONLY a JSON object'",
+      "prompt MUST NOT contain '<tool_call'",
+    ],
+    lastValidatedModel: "deepseek-v4-flash:cloud",
+    lastValidatedAt: Date.UTC(2026, 6, 14),
+  },
+  {
+    name: "ow-lead-plan",
+    version: REGISTRY_VERSION,
+    sourceFile: "orchestratorWorkerPromptHelpers.ts",
+    expectedBehavior: [
+      "prompt MUST mention 'assignments'",
+      "prompt MUST mention 'Output ONLY a JSON object'",
+      "prompt MUST mention 'no markdown fences'",
+    ],
+    lastValidatedModel: "deepseek-v4-flash:cloud",
+    lastValidatedAt: Date.UTC(2026, 6, 14),
+  },
+  {
+    name: "best-of-n-judge",
+    version: REGISTRY_VERSION,
+    sourceFile: "bestOfNTurn.ts",
+    expectedBehavior: [
+      "prompt MUST mention 'pickedIndex'",
+      "prompt MUST mention 'STRICT JSON'",
+    ],
+    lastValidatedModel: "deepseek-v4-flash:cloud",
+    lastValidatedAt: Date.UTC(2026, 6, 14),
+  },
+  {
+    name: "shared-json-snippets",
+    version: REGISTRY_VERSION,
+    sourceFile: "prompts/sharedSnippets.ts",
+    expectedBehavior: [
+      "prompt MUST mention 'Output ONLY valid JSON'",
+      "prompt MUST mention 'markdown fences'",
+      "prompt MUST mention 'MENTION_CONTRACT_NOTE'",
+      "prompt MUST mention 'JSON_ONLY_FINAL_RULES'",
+    ],
+    lastValidatedModel: "n/a-static",
+    lastValidatedAt: Date.UTC(2026, 6, 14),
   },
 ];

@@ -7,6 +7,7 @@ import { getModelBudget } from "../../modelContextBudget.js";
 import { buildPlannerGroundingBlocks } from "./plannerGrounding.js";
 import { buildExplorationCacheBlock } from "@ollama-swarm/shared/explorationCache";
 import type { ExplorationCacheEntry } from "@ollama-swarm/shared/explorationCache";
+import { buildBlackboardDirectiveBlock } from "../../directivePromptHelpers.js";
 
 // ---------------------------------------------------------------------------
 // Phase 11b: first-pass exit contract.
@@ -213,23 +214,19 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed, model?: stri
   // The system prompt's Rule 11 tells the planner this block is
   // authoritative. When the directive is absent, the prompt is
   // bit-for-bit identical to the pre-Unit-25 shape.
-  const directive = seed.userDirective?.trim();
-  const directiveBlock = directive
-    ? [
-        "=== USER DIRECTIVE (AUTHORITATIVE — see Rule 11) ===",
-        directive,
-        "=== end USER DIRECTIVE ===",
-        "",
-      ]
-    : [];
   // Unit 50: when this run is a resume on an existing clone AND a prior
   // summary was found on disk, render its contract distilled. Sits
   // BETWEEN directive and repo state so the planner reads "what did we
   // try last time" before "what's in the repo now" — the prior block
   // is shorter and primes the model on continuation framing.
   const grounding = buildPlannerGroundingBlocks(seed, model);
+  const hasDirective = Boolean(seed.userDirective?.trim());
   return [
-    ...directiveBlock,
+    ...buildBlackboardDirectiveBlock(seed.userDirective, {
+      labelSuffix: "(AUTHORITATIVE — see Rule 11)",
+      authoritative: true,
+      includeAuthoritativeFraming: false,
+    }),
     grounding.prefix,
     `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
@@ -247,7 +244,7 @@ export function buildFirstPassContractUserPrompt(seed: PlannerSeed, model?: stri
     grounding.researchToolsNote,
     grounding.researchNotesBlock,
     seed.webToolsEnabled ? "\n" : "",
-    directive
+    hasDirective
       ? "Output the exit contract JSON object now. Your missionStatement and criteria MUST address the USER DIRECTIVE above (Rule 11). Use the REPO FILE LIST to ground expectedFiles."
       : seed.priorRunSummary
         ? "Output the exit contract JSON object now. This is a RESUME — your criteria MUST build on the PRIOR RUN above (Rule 12), not re-attempt resolved criteria. Use the REPO FILE LIST to ground expectedFiles."
@@ -336,18 +333,14 @@ export function buildCouncilContractMergePrompt(
     : "(no README found at repo root)";
 
   const directive = seed.userDirective?.trim();
-  const directiveBlock = directive
-    ? [
-        "=== USER DIRECTIVE (AUTHORITATIVE — see Rule 11) ===",
-        directive,
-        "=== end USER DIRECTIVE ===",
-        "",
-      ]
-    : [];
   const grounding = buildPlannerGroundingBlocks(seed);
 
   return [
-    ...directiveBlock,
+    ...buildBlackboardDirectiveBlock(seed.userDirective, {
+      labelSuffix: "(AUTHORITATIVE — see Rule 11)",
+      authoritative: true,
+      includeAuthoritativeFraming: false,
+    }),
     grounding.prefix,
     `Repository: ${seed.repoUrl}`,
     `Clone path: ${seed.clonePath}`,
@@ -452,21 +445,17 @@ export function buildTierUpPrompt(seed: TierUpSeedInput): string {
     : "(no README found at repo root)";
 
   const directive = seed.userDirective?.trim();
-  const directiveBlock = directive
-    ? [
-        "=== USER DIRECTIVE (AUTHORITATIVE — applies at every tier) ===",
-        directive,
-        "=== end USER DIRECTIVE ===",
-        "",
-      ]
-    : [];
 
   const explorationCacheBlock = buildExplorationCacheBlock(
     seed.explorationCache ? [...seed.explorationCache] : undefined,
   );
 
   return [
-    ...directiveBlock,
+    ...buildBlackboardDirectiveBlock(seed.userDirective, {
+      labelSuffix: "(AUTHORITATIVE — applies at every tier)",
+      authoritative: true,
+      includeAuthoritativeFraming: false,
+    }),
     explorationCacheBlock,
     `You are the PLANNER. Tier ${seed.nextTier - 1} of this run is complete — every criterion is now met (or marked wont-do with a valid reason). You are now producing the TIER ${seed.nextTier} contract for this run (of at most ${seed.maxTiers} tiers).`,
     "",

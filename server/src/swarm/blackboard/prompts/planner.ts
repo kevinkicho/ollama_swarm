@@ -4,6 +4,7 @@ import { lenientPreprocess, softCap } from "./lenientParse.js";
 import { registerParserSchema } from "./brainIntegration.js";
 import { getModelBudget } from "../../modelContextBudget.js";
 import { buildPlannerGroundingBlocks } from "./plannerGrounding.js";
+import { buildBlackboardDirectiveBlock } from "../../directivePromptHelpers.js";
 
 // ---------------------------------------------------------------------------
 // Schema: what we expect back from the planner. Kept tight on purpose — small
@@ -268,7 +269,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "1. Output ONLY a JSON array. No prose. No markdown fences. No commentary before or after.",
   "1a. (2026-04-27) Output the JSON array as your FINAL response after using your tools. Do NOT emit raw XML tool-call syntax (e.g. `<read path='src/foo.ts' start_line='1' end_line='50'>` or `<grep pattern='...' />`) AS the response — that's the SDK's internal tool-call format and parsing it as JSON fails closed. Use the actual `read` / `grep` / `glob` / `list` tool functions you have access to; the SDK invokes them transparently. When you've finished gathering evidence, your VISIBLE response MUST be only the JSON array.",
   "2. Each element MUST be an object of shape: {\"description\": string, \"expectedFiles\": string[]}.",
-  "3. `description` is one imperitive sentence (e.g., \"Add a readme section explaining the API.\"). KEEP it brief (under 500 characters).",
+  "3. `description` is one imperative sentence (e.g., \"Add a readme section explaining the API.\"). KEEP it brief (under 500 characters).",
   "4. `expectedFiles` lists 1 or 2 repo-relative paths the agent will need to touch. NEVER more than 2.",
   "5. Each TODO must be independently completable without coordinating with another agent.",
   "5a. NEVER emit read-only TODOs. A TODO must describe a concrete CHANGE to one or more files (add content, modify code, create a new file). DO NOT emit TODOs that only ask an agent to \"read\", \"understand\", \"analyze\", \"review\", or \"explore\" a file — the worker already receives the file contents in its prompt. TODOs like \"Read ARCHITECTURE_REVIEW.md\" or \"Analyze the architecture\" will be declined by workers and skipped by the replanner, wasting an entire cycle.",
@@ -444,9 +445,17 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
   // explicit. Per HARD RULE 6 the planner returns [] only when there's
   // genuinely nothing to do; with directive + criteria visible it can
   // ground todos against them.
-  const directiveBlock = seed.userDirective && seed.userDirective.trim().length > 0
-    ? `=== USER DIRECTIVE (the work the user wants done) ===\n${seed.userDirective.trim()}\n=== end USER DIRECTIVE ===\n\n`
-    : `=== USER DIRECTIVE (no specific directive provided — default: improve the codebase) ===\nAudit this repository for code quality, correctness, and maintainability. Propose concrete improvements: fix bugs, reduce duplication, improve error handling, and add tests where coverage is weak. Each TODO should change or add specific files.\n=== end USER DIRECTIVE ===\n\n`;
+  // Prefer shared blackboard directive block when the user set one.
+  // When absent, keep the historical default "improve the codebase"
+  // seed so todos still have a target (empty-array failure mode).
+  const sharedDirective = buildBlackboardDirectiveBlock(seed.userDirective, {
+    labelSuffix: "(the work the user wants done)",
+    authoritative: true,
+  });
+  const directiveBlock =
+    sharedDirective.length > 0
+      ? sharedDirective.join("\n") + "\n"
+      : `=== USER DIRECTIVE (no specific directive provided — default: improve the codebase) ===\nAudit this repository for code quality, correctness, and maintainability. Propose concrete improvements: fix bugs, reduce duplication, improve error handling, and add tests where coverage is weak. Each TODO should change or add specific files.\n=== end USER DIRECTIVE ===\n\n`;
   const contractBlock = contract
     ? [
         "=== CONTRACT (just produced; your TODOs should make these criteria met) ===",

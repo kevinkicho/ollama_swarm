@@ -27,6 +27,7 @@ const TEST_FILES = [
   "src/swarm/blackboard/prompts/firstPassContract.test.ts",
   "src/swarm/blackboard/prompts/jsonSchemas.test.ts",
   "src/swarm/blackboard/prompts/auditor.test.ts",
+  "src/swarm/blackboard/prompts/driftGuard.test.ts",
   "src/swarm/blackboard/prompts/hunkReview.test.ts",
   "src/swarm/blackboard/boardRestore.test.ts",
   "src/swarm/blackboard/endpointCatalogContext.test.ts",
@@ -138,6 +139,7 @@ const TEST_FILES = [
   "src/swarm/roleDiffDeliverable.test.ts",
   // 2026-05-03 (Phase A): shared-layer helpers.
   "src/swarm/directivePromptHelpers.test.ts",
+  "src/swarm/listProjectTree.test.ts",
   "src/swarm/convergenceSignal.test.ts",
   // 2026-05-03 (Phase B): loop guard helpers.
   "src/swarm/loopGuards.test.ts",

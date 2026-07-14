@@ -256,12 +256,13 @@ describe("AUDITOR prompts", () => {
     assert.match(AUDITOR_SYSTEM_PROMPT, /unmet.*todos.*REQUIRED/i);
   });
 
-  it("system prompt steers shell-execution criteria to wont-do", () => {
-    // Auditor must recognize that criteria requiring shell execution (tsc,
-    // ESLint, tests) can't be satisfied via file diffs and should route to
-    // wont-do rather than emitting unmet verdicts with no file anchor.
-    assert.match(AUDITOR_SYSTEM_PROMPT, /CANNOT run shell commands/);
-    assert.match(AUDITOR_SYSTEM_PROMPT, /issue `wont-do`/);
+  it("system prompt distinguishes hunk workers vs allowlisted build commands", () => {
+    // Hunk workers edit via JSON diffs; build-style todos / build workers may
+    // run allowlisted project scripts. Only out-of-band needs → wont-do.
+    assert.match(AUDITOR_SYSTEM_PROMPT, /WORKER CAPABILITIES/i);
+    assert.match(AUDITOR_SYSTEM_PROMPT, /kind:\s*"build"/i);
+    assert.match(AUDITOR_SYSTEM_PROMPT, /allowlisted/i);
+    assert.match(AUDITOR_SYSTEM_PROMPT, /Issue `wont-do` ONLY/i);
   });
 
   it("system prompt forbids wont-do on first-attempt (Unit 11)", () => {

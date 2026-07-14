@@ -78,13 +78,20 @@ export interface DirectiveBlockOptions {
    *  `(the question this OW swarm is answering)`. When set, the open
    *  delimiter becomes `=== USER DIRECTIVE ${labelSuffix} ===`. */
   labelSuffix?: string;
-  /** Lines to append after the closing `=== END DIRECTIVE ===` and a
-   *  blank line. Each entry becomes its own line. Pass [] (or omit) for
-   *  no framing — used by Debate-judge which has no separate framing. */
+  /** Lines to append after the closing delimiter and a blank line.
+   *  Each entry becomes its own line. Pass [] (or omit) for no framing —
+   *  used by Debate-judge which has no separate framing. */
   framingLines?: readonly string[];
   /** When true, labels the directive as AUTHORITATIVE and adds a strict
    *  framing line telling agents they MUST follow it. Default false. */
   authoritative?: boolean;
+  /** Closing delimiter. Default `=== END DIRECTIVE ===`. Blackboard
+   *  prompts historically use `=== end USER DIRECTIVE ===`. */
+  closeDelim?: string;
+  /** When false, skip the automatic authoritative framing sentences
+   *  even if `authoritative` is true (label still gets the suffix).
+   *  Default true when authoritative. */
+  includeAuthoritativeFraming?: boolean;
 }
 
 /** Build a USER DIRECTIVE block as an array of lines. Returns `[]` when
@@ -111,12 +118,18 @@ export function buildDirectiveBlock(
   if (!ctx.hasDirective) return [];
   const labelSuffix = opts?.labelSuffix?.trim();
   const authoritative = opts?.authoritative ?? false;
-  const authSuffix = authoritative ? " (AUTHORITATIVE)" : "";
+  // If the caller already put AUTHORITATIVE inside labelSuffix, avoid
+  // doubling the token in the open delimiter.
+  const labelHasAuth = labelSuffix ? /authoritative/i.test(labelSuffix) : false;
+  const authSuffix = authoritative && !labelHasAuth ? " (AUTHORITATIVE)" : "";
   const openDelim = labelSuffix
     ? `=== USER DIRECTIVE ${labelSuffix}${authSuffix} ===`
     : `=== USER DIRECTIVE${authSuffix} ===`;
-  const out: string[] = [openDelim, ctx.directive, "=== END DIRECTIVE ===", ""];
-  if (authoritative) {
+  const closeDelim = opts?.closeDelim?.trim() || "=== END DIRECTIVE ===";
+  const out: string[] = [openDelim, ctx.directive, closeDelim, ""];
+  const includeFraming =
+    authoritative && (opts?.includeAuthoritativeFraming ?? true);
+  if (includeFraming) {
     out.push("This directive is AUTHORITATIVE. Every file you create or modify MUST serve this directive's intent.");
     out.push("Do NOT create mock/fake/placeholder data. Do NOT contradict or ignore the directive.");
     out.push("");
@@ -127,6 +140,26 @@ export function buildDirectiveBlock(
     out.push("");
   }
   return out;
+}
+
+/** Blackboard-style directive block: shared helper with the historical
+ *  `=== end USER DIRECTIVE ===` closer so parser/tests stay stable. */
+export function buildBlackboardDirectiveBlock(
+  userDirective: string | undefined,
+  opts?: {
+    labelSuffix?: string;
+    authoritative?: boolean;
+    framingLines?: readonly string[];
+    includeAuthoritativeFraming?: boolean;
+  },
+): readonly string[] {
+  return buildDirectiveBlock(readDirective({ userDirective }), {
+    labelSuffix: opts?.labelSuffix,
+    authoritative: opts?.authoritative ?? true,
+    framingLines: opts?.framingLines,
+    includeAuthoritativeFraming: opts?.includeAuthoritativeFraming,
+    closeDelim: "=== end USER DIRECTIVE ===",
+  });
 }
 
 /** Pick a deliverable doc title that branches on directive presence.

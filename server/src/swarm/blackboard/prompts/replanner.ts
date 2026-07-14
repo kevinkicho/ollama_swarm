@@ -4,6 +4,7 @@ import { lenientPreprocess } from "./lenientParse.js";
 import { windowFileWithAnchors, WORKER_FILE_WINDOW_THRESHOLD } from "../windowFile.js";
 import { buildExplorationCacheBlock } from "@ollama-swarm/shared/explorationCache";
 import type { ExplorationCacheEntry } from "@ollama-swarm/shared/explorationCache";
+import { buildBlackboardDirectiveBlock } from "../../directivePromptHelpers.js";
 
 // ---------------------------------------------------------------------------
 // Schema. The replanner is shown a stale TODO + current file state and must
@@ -178,13 +179,12 @@ export interface ReplannerSeed {
 
 export function buildReplannerUserPrompt(seed: ReplannerSeed): string {
   const parts: string[] = [];
-  if (seed.userDirective && seed.userDirective.trim().length > 0) {
-    parts.push(
-      "=== USER DIRECTIVE (includes any mid-run steer nudges) ===",
-      seed.userDirective.trim(),
-      "=== end USER DIRECTIVE ===",
-      "",
-    );
+  const directiveLines = buildBlackboardDirectiveBlock(seed.userDirective, {
+    labelSuffix: "(includes any mid-run steer nudges)",
+    authoritative: true,
+  });
+  if (directiveLines.length > 0) {
+    parts.push(...directiveLines);
   }
   if (seed.userChatBlock && seed.userChatBlock.trim().length > 0) {
     parts.push(seed.userChatBlock.trim(), "");

@@ -116,6 +116,51 @@ describe("buildDirectiveBlock", () => {
     const lines = buildDirectiveBlock(ctx, { labelSuffix: "   " });
     assert.equal(lines[0], "=== USER DIRECTIVE ===");
   });
+
+  it("supports custom closeDelim (blackboard style)", () => {
+    const ctx = readDirective({ userDirective: "Ship it." });
+    const lines = buildDirectiveBlock(ctx, {
+      labelSuffix: "(AUTHORITATIVE — see Rule 11)",
+      closeDelim: "=== end USER DIRECTIVE ===",
+      authoritative: true,
+      includeAuthoritativeFraming: false,
+    });
+    assert.equal(lines[0], "=== USER DIRECTIVE (AUTHORITATIVE — see Rule 11) ===");
+    assert.equal(lines[1], "Ship it.");
+    assert.equal(lines[2], "=== end USER DIRECTIVE ===");
+    assert.ok(!lines.some((l) => l.startsWith("This directive is AUTHORITATIVE")));
+  });
+
+  it("does not double AUTHORITATIVE when already in labelSuffix", () => {
+    const ctx = readDirective({ userDirective: "x" });
+    const lines = buildDirectiveBlock(ctx, {
+      labelSuffix: "(AUTHORITATIVE — applies at every tier)",
+      authoritative: true,
+      includeAuthoritativeFraming: false,
+    });
+    assert.equal(
+      lines[0],
+      "=== USER DIRECTIVE (AUTHORITATIVE — applies at every tier) ===",
+    );
+    assert.ok(!lines[0].includes("(AUTHORITATIVE) (AUTHORITATIVE)"));
+  });
+});
+
+describe("buildBlackboardDirectiveBlock", () => {
+  it("returns [] when directive absent", async () => {
+    const { buildBlackboardDirectiveBlock } = await import("./directivePromptHelpers.js");
+    assert.deepEqual(buildBlackboardDirectiveBlock(undefined), []);
+    assert.deepEqual(buildBlackboardDirectiveBlock("  "), []);
+  });
+
+  it("uses blackboard closer and authoritative framing by default", async () => {
+    const { buildBlackboardDirectiveBlock } = await import("./directivePromptHelpers.js");
+    const lines = buildBlackboardDirectiveBlock("Do the thing.");
+    assert.match(lines[0]!, /USER DIRECTIVE.*AUTHORITATIVE/);
+    assert.equal(lines[1], "Do the thing.");
+    assert.equal(lines[2], "=== end USER DIRECTIVE ===");
+    assert.ok(lines.some((l) => /This directive is AUTHORITATIVE/.test(l)));
+  });
 });
 
 describe("buildInlineDirectiveBlock", () => {

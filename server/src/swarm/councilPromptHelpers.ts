@@ -3,23 +3,88 @@ import {
   readDirective,
   buildDirectiveBlock,
 } from "./directivePromptHelpers.js";
-import { execSync } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { join, relative } from "node:path";
 import { getModelBudget } from "./modelContextBudget.js";
+
+const PROJECT_SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  "coverage",
+  "out",
+  ".turbo",
+  ".cache",
+]);
+
+const PROJECT_CODE_EXT = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".json",
+  ".css",
+  ".md",
+  ".mjs",
+  ".cjs",
+]);
+
+/**
+ * Cross-platform project tree for prompt context (replaces Unix find|grep).
+ * Pure sync walk; best-effort — empty string on failure.
+ */
+export function listProjectTreeSync(
+  root: string,
+  opts?: { maxDirs?: number; maxFiles?: number; maxDepth?: number },
+): { dirs: string[]; files: string[] } {
+  const maxDirs = opts?.maxDirs ?? 30;
+  const maxFiles = opts?.maxFiles ?? 50;
+  const maxDepth = opts?.maxDepth ?? 4;
+  const dirs: string[] = [];
+  const files: string[] = [];
+
+  const walk = (dir: string, depth: number) => {
+    if (dirs.length >= maxDirs && files.length >= maxFiles) return;
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    // Stable order for deterministic prompts
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const ent of entries) {
+      if (PROJECT_SKIP_DIRS.has(ent.name)) continue;
+      if (ent.name.startsWith(".") && ent.name !== ".env.example") continue;
+      const full = join(dir, ent.name);
+      const rel = relative(root, full).replace(/\\/g, "/");
+      if (ent.isDirectory()) {
+        if (dirs.length < maxDirs) dirs.push(`./${rel}`);
+        if (depth < maxDepth) walk(full, depth + 1);
+      } else if (ent.isFile() && files.length < maxFiles) {
+        if (ent.name === "package-lock.json" || ent.name === "pnpm-lock.yaml") continue;
+        const dot = ent.name.lastIndexOf(".");
+        const ext = dot >= 0 ? ent.name.slice(dot) : "";
+        if (PROJECT_CODE_EXT.has(ext)) {
+          files.push(`./${rel}`);
+        }
+      }
+    }
+  };
+
+  walk(root, 0);
+  return { dirs, files };
+}
 
 function buildProjectContext(localPath?: string): string {
   if (!localPath) return "";
   try {
-    const dirs = execSync(
-      'find . -type d | grep -v node_modules | grep -v .git | grep -v dist | sort | head -30',
-      { cwd: localPath, encoding: "utf8", timeout: 3000 }
-    ).toString().trim();
-    const files = execSync(
-      'find . -type f \\( -name "*.tsx" -o -name "*.ts" -o -name "*.js" -o -name "*.jsx" -o -name "*.json" -o -name "*.css" \\) | grep -v node_modules | grep -v .git | grep -v dist | grep -v package-lock.json | head -50',
-      { cwd: localPath, encoding: "utf8", timeout: 3000 }
-    ).toString().trim();
+    const { dirs, files } = listProjectTreeSync(localPath);
     const parts: string[] = [];
-    if (dirs) parts.push(`Project directories:\n${dirs}`);
-    if (files) parts.push(`Key files:\n${files}`);
+    if (dirs.length > 0) parts.push(`Project directories:\n${dirs.join("\n")}`);
+    if (files.length > 0) parts.push(`Key files:\n${files.join("\n")}`);
     return parts.length > 0 ? `\n${parts.join("\n\n")}\n` : "";
   } catch {
     return "";
@@ -221,13 +286,8 @@ export function buildStandupPrompt(
 
   let projectStructure = "";
   if (localPath) {
-    try {
-      const dirs = execSync(
-        'find . -type d | grep -v node_modules | grep -v .git | grep -v dist | sort | head -30',
-        { cwd: localPath, encoding: "utf8", timeout: 3000 }
-      ).toString().trim();
-      if (dirs) projectStructure = `\nProject directories:\n${dirs}`;
-    } catch { /* ignore */ }
+    const { dirs } = listProjectTreeSync(localPath, { maxDirs: 30, maxFiles: 0 });
+    if (dirs.length > 0) projectStructure = `\nProject directories:\n${dirs.join("\n")}`;
   }
 
   const dirCtx = readDirective({ userDirective });
