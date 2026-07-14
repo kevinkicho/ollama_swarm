@@ -6,6 +6,7 @@ import {
 import { readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { getModelBudget } from "./modelContextBudget.js";
+import { JSON_ONLY_FINAL_RULES } from "./blackboard/prompts/sharedSnippets.js";
 
 const PROJECT_SKIP_DIRS = new Set([
   "node_modules",
@@ -347,4 +348,65 @@ export function buildStandupSynthesisPrompt(
     "",
     "Prefer at most one todo per file path. Return ONLY the JSON array.",
   ].join("\n");
+}
+
+/** Council ambition tier-up after all criteria met. */
+export function buildCouncilAmbitionTierPrompt(args: {
+  directive: string;
+  missionStatement: string;
+  metCriteria: ReadonlyArray<{ description: string; expectedFiles: string[] }>;
+  nextTier: number;
+  currentTier: number;
+  readmeExcerpt?: string | null;
+  repoFiles: readonly string[];
+}): string {
+  const metBlock =
+    args.metCriteria.length > 0
+      ? args.metCriteria
+          .map(
+            (c) =>
+              `  [✓] ${c.description} — files: ${c.expectedFiles.join(", ") || "(none)"}`,
+          )
+          .join("\n")
+      : "  (none)";
+  const readme = args.readmeExcerpt?.trim()
+    ? `README excerpt:\n${args.readmeExcerpt}\n`
+    : "";
+  return [
+    "You are the planner for a council of AI engineers. All current criteria are met.",
+    "",
+    `User directive (the OVERALL goal): "${args.directive}"`,
+    "",
+    `Current contract mission: "${args.missionStatement}"`,
+    "",
+    `Met criteria (${args.metCriteria.length}):`,
+    metBlock,
+    "",
+    readme,
+    `Project files (${args.repoFiles.length} total):`,
+    args.repoFiles.slice(0, 100).join("\n"),
+    "",
+    `Your task: Propose a NEW set of criteria for tier ${args.nextTier} that ADVANCE the user's directive further.`,
+    "",
+    "RULES:",
+    "1. Every criterion MUST directly serve the user's directive. Do NOT propose unrelated features.",
+    "2. Every file path MUST appear in the PROJECT FILES list. Do NOT invent paths.",
+    `3. The tier must be MATERIALLY MORE AMBITIOUS than tier ${args.currentTier} — broader scope, deeper work, or capability the prior tier didn't touch.`,
+    "4. Do NOT redo what's already met. Focus on what's STILL MISSING from the directive.",
+    "5. Think about what gaps remain in the project that prevent the directive from being fully achieved.",
+    "6. If you've already added all the panels the directive asks for, broaden scope: code quality, performance, testing, documentation, error handling, accessibility, or other improvements that make the app MORE ROBUST and MORE COMPLETE.",
+    "",
+    JSON_ONLY_FINAL_RULES,
+    "Shape:",
+    "{",
+    '  "missionStatement": "one-sentence summary of how this tier advances the directive",',
+    '  "criteria": [',
+    '    {"description": "specific feature that advances the directive", "expectedFiles": ["path/to/file.tsx"]}',
+    "  ]",
+    "}",
+    "",
+    "Max 6 criteria. Each must be concrete, verifiable, and directly advance the user's directive.",
+  ]
+    .filter((line, i, arr) => !(line === "" && arr[i - 1] === ""))
+    .join("\n");
 }

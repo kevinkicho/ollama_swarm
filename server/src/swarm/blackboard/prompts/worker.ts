@@ -10,6 +10,7 @@ import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { softCap } from "./lenientParse.js";
 import { buildResearchNotesBlock, buildResearchToolsNote } from "./planner.js";
 import { buildBlackboardDirectiveBlock } from "../../directivePromptHelpers.js";
+import { JSON_ONLY_FINAL_RULE_LINES } from "./sharedSnippets.js";
 
 // ---------------------------------------------------------------------------
 // Worker response schema (v2). Shape: {"hunks": [ ...discriminated on op ]}.
@@ -212,7 +213,8 @@ export const WORKER_SYSTEM_PROMPT = [
   "You are a WORKER agent in a swarm. You are implementing a single TODO from the shared board.",
   "",
   "HARD RULES:",
-  "1. Output ONLY a JSON object. No prose. No markdown fences. No commentary before or after.",
+  "1. JSON final response:",
+  ...JSON_ONLY_FINAL_RULE_LINES.map((line) => `   ${line}`),
   "2. Shape: {\"hunks\": [ ...search/replace hunks ]}",
   "3. Each hunk has an `op` and a `file`. `file` MUST be one of the paths in the TODO's expectedFiles list — do not touch any other file.",
   "4. Ops — pick the right one for each change:",

@@ -8,6 +8,7 @@ import { buildPlannerGroundingBlocks } from "./plannerGrounding.js";
 import { buildExplorationCacheBlock } from "@ollama-swarm/shared/explorationCache";
 import type { ExplorationCacheEntry } from "@ollama-swarm/shared/explorationCache";
 import { buildBlackboardDirectiveBlock } from "../../directivePromptHelpers.js";
+import { JSON_ONLY_FINAL_RULE_LINES } from "./sharedSnippets.js";
 
 // ---------------------------------------------------------------------------
 // Phase 11b: first-pass exit contract.
@@ -159,8 +160,8 @@ export const FIRST_PASS_CONTRACT_SYSTEM_PROMPT = [
   "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` tools on the cloned repo. The user message includes a REPO FILE LIST, README, and often ENDPOINT CATALOG / PRE-FETCHED EXCERPTS / PROJECT MAP — use those FIRST. Only call tools to verify a specific uncertainty (a path, symbol, or panel wiring), not to re-scan the entire repository. When ENDPOINT CATALOG is present, do NOT web_search for routes already listed. Criteria should reflect what is ACTUALLY in the code and seed, NOT patterns imagined from file names alone.",
   "",
   "HARD RULES:",
-  "1. Output ONLY a single JSON object. No prose. No markdown fences. No commentary before or after.",
-  "1a. (2026-04-27) Do NOT emit raw XML tool-call syntax (e.g. `<read path='src/foo.ts' start_line='1' end_line='50'>`) AS the response — that's the SDK's internal tool-call format and parsing it as JSON fails closed. Use the actual tool functions you have access to; the SDK invokes them transparently. When you've finished gathering evidence, your VISIBLE response MUST be only the JSON object.",
+  "1. JSON final response:",
+  ...JSON_ONLY_FINAL_RULE_LINES.map((line) => `   ${line}`),
   "2. The object MUST have shape: {\"missionStatement\": string, \"criteria\": Array<{\"description\": string, \"expectedFiles\": string[]}>}.",
   "3. `missionStatement` is one sentence describing the purpose of this run (e.g., \"Document the public API and add a contributor guide.\").",
   "4. Each criterion's `description` is one imperative sentence naming an observable, checkable outcome (e.g., \"README has a Quick Start section with runnable example.\").",

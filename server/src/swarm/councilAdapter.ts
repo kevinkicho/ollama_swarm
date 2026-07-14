@@ -477,39 +477,16 @@ export async function runTierPromotion(
   const nextTier = state.currentTier + 1;
   const metCriteria = state.contract?.criteria.filter(c => c.status === "met") ?? [];
   const directive = state.cfg.userDirective ?? "(none provided)";
-  const prompt = `You are the planner for a council of AI engineers. All current criteria are met.
-
-User directive (the OVERALL goal): "${directive}"
-
-Current contract mission: "${state.contract?.missionStatement ?? "Build the project"}"
-
-Met criteria (${metCriteria.length}):
-${metCriteria.map(c => `  [✓] ${c.description} — files: ${c.expectedFiles.join(", ") || "(none)"}`).join("\n")}
-
-${seed.readmeExcerpt ? `README excerpt:\n${seed.readmeExcerpt}\n` : ""}
-
-Project files (${seed.repoFiles.length} total):
-${seed.repoFiles.slice(0, 100).join("\n")}
-
-Your task: Propose a NEW set of criteria for tier ${nextTier} that ADVANCE the user's directive further.
-
-RULES:
-1. Every criterion MUST directly serve the user's directive. Do NOT propose unrelated features.
-2. Every file path MUST appear in the PROJECT FILES list. Do NOT invent paths.
-3. The tier must be MATERIALLY MORE AMBITIOUS than tier ${state.currentTier} — broader scope, deeper work, or capability the prior tier didn't touch.
-4. Do NOT redo what's already met. Focus on what's STILL MISSING from the directive.
-5. Think about what gaps remain in the project that prevent the directive from being fully achieved.
-6. If you've already added all the panels the directive asks for, broaden scope: code quality, performance, testing, documentation, error handling, accessibility, or other improvements that make the app MORE ROBUST and MORE COMPLETE.
-
-Return ONLY a JSON object:
-{
-  "missionStatement": "one-sentence summary of how this tier advances the directive",
-  "criteria": [
-    {"description": "specific feature that advances the directive", "expectedFiles": ["path/to/file.tsx"]}
-  ]
-}
-
-Max 6 criteria. Each must be concrete, verifiable, and directly advance the user's directive.`;
+  const { buildCouncilAmbitionTierPrompt } = await import("./councilPromptHelpers.js");
+  const prompt = buildCouncilAmbitionTierPrompt({
+    directive,
+    missionStatement: state.contract?.missionStatement ?? "Build the project",
+    metCriteria,
+    nextTier,
+    currentTier: state.currentTier,
+    readmeExcerpt: seed.readmeExcerpt,
+    repoFiles: seed.repoFiles,
+  });
 
   const { response: raw, agentUsed } = await promptPlannerSafely(planner, prompt, "swarm", state.manager, state.cfg.providerFailover);
   if (state.stopping) return false;
