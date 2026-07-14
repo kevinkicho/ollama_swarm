@@ -259,6 +259,36 @@ export interface RoundRobinPromptContext {
   totalRounds: number;
   round: number;
   topology?: Topology;
+  /**
+   * Q6: when set (dynamicRolePicker), forces this disposition instead of
+   * vote/rotation. Only used in no-roles structured deliberation.
+   */
+  dispositionOverride?: RoundRobinDisposition | null;
+}
+
+/** Map a dynamicRolePicker id (critic, gap-finder, …) onto DISPOSITIONS. */
+export function dispositionFromPickerId(
+  id: string,
+): RoundRobinDisposition | null {
+  const norm = id.toLowerCase().replace(/[ _]+/g, "-").replace(/-+/g, "-");
+  return (
+    DISPOSITIONS.find(
+      (d) => d.name.toLowerCase().replace(/[ _]+/g, "-") === norm,
+    ) ?? null
+  );
+}
+
+/** RoleOptions catalog for dynamicRolePicker (disposition mode). */
+export function dispositionsAsRoleOptions(): Array<{
+  id: string;
+  label: string;
+  description: string;
+}> {
+  return DISPOSITIONS.map((d) => ({
+    id: d.name.toLowerCase().replace(/[ _]+/g, "-"),
+    label: d.name,
+    description: d.framing,
+  }));
 }
 
 export function buildRoundRobinTurnPrompt(ctx: RoundRobinPromptContext): string {
@@ -272,7 +302,7 @@ export function buildRoundRobinTurnPrompt(ctx: RoundRobinPromptContext): string 
     round,
   } = ctx;
   const disposition = !roles
-    ? pickNextDisposition(transcript, turnNumber)
+    ? (ctx.dispositionOverride ?? pickNextDisposition(transcript, turnNumber))
     : null;
   const transcriptText = transcript
     .map((e) => {

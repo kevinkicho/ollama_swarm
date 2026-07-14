@@ -118,6 +118,8 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [preflightDryRun, setPreflightDryRun] = useState(false);
   /** Blackboard: few-shot similar past hunks in worker prompts. */
   const [hunkRag, setHunkRag] = useState(false);
+  /** Round-robin: LLM picks next disposition vs fixed cycle. */
+  const [dynamicRolePicker, setDynamicRolePicker] = useState(false);
   const [busy, setBusy] = useState(false);
   /** Brain RECONFIG saved after a finished run — shown on setup until Start or dismiss. */
   const [deferredPending, setDeferredPending] = useState<DeferredReconfigRecord | null>(
@@ -312,6 +314,9 @@ export function useSetupForm(navigate: (path: string) => void) {
           ? { preflightDryRun: true }
           : {}),
         ...(preset.id === "blackboard" && hunkRag ? { hunkRag: true } : {}),
+        ...(preset.id === "round-robin" && dynamicRolePicker
+          ? { dynamicRolePicker: true }
+          : {}),
         mcpServers,
         // Per-agent provider/model from the Topology grid (including header
         // bulk-apply). Discussion presets spawn via resolveModelForTopologyIndex;
@@ -421,6 +426,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     verifyCommand, setVerifyCommand,
     preflightDryRun, setPreflightDryRun,
     hunkRag, setHunkRag,
+    dynamicRolePicker, setDynamicRolePicker,
     busy, setBusy,
     deferredPending,
     deferredPendingLabel,

@@ -38,7 +38,16 @@ import {
   pickNextDisposition,
   buildRoundRobinDeliverableSections,
   buildRoundRobinTurnPrompt,
+  dispositionsAsRoleOptions,
+  dispositionFromPickerId,
+  type RoundRobinDisposition,
 } from "./roundRobinPromptHelpers.js";
+import {
+  buildDynamicRolePickerPrompt,
+  parseDynamicRolePick,
+} from "./dynamicRolePicker.js";
+import { chatOnce } from "./chatOnce.js";
+import { extractProviderText } from "./councilUtils.js";
 import {
   MultiWriterState,
   DEFAULT_CONFLICT_POLICIES,
@@ -461,6 +470,13 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
   // natural completion path.
   private async runTurn(agent: Agent, round: number, totalRounds: number): Promise<void> {
     this.turnsTaken += 1;
+
+    // Q6: optional dynamic disposition pick (no-roles structured deliberation).
+    let dispositionOverride: RoundRobinDisposition | null | undefined;
+    if (!this.roles && this.active?.dynamicRolePicker && !this.stopping) {
+      dispositionOverride = await this.pickDispositionDynamically(agent);
+    }
+
     const prompt = buildRoundRobinTurnPrompt({
       turnsTaken: this.turnsTaken,
       transcript: this.transcript,
@@ -470,12 +486,15 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
       totalRounds,
       round,
       topology: this.active?.topology,
+      ...(dispositionOverride != null ? { dispositionOverride } : {}),
     });
     // T193: per-disposition model routing.
     let modelOverride: string | undefined;
     if (!this.roles && this.active?.dispositionModels) {
       const turnNumber = this.turnsTaken;
-      const disp = pickNextDisposition(this.transcript, turnNumber);
+      const disp =
+        dispositionOverride
+        ?? pickNextDisposition(this.transcript, turnNumber);
       const key = disp.name.toLowerCase().replace(/[ -]/g, "-") as
         | "critic"
         | "synthesizer"
@@ -502,6 +521,82 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
         }
       },
     });
+  }
+
+  /**
+   * Q6: planner-style meta-prompt picks the next disposition from
+   * Critic/Synthesizer/Gap-finder/Builder based on recent transcript.
+   * Falls back to null (caller uses vote/rotation) on any failure.
+   */
+  private async pickDispositionDynamically(
+    agent: Agent,
+  ): Promise<RoundRobinDisposition | null> {
+    const roles = dispositionsAsRoleOptions();
+    const validIds = roles.map((r) => r.id);
+    const recentAgent = this.transcript
+      .filter((e) => e.role === "agent")
+      .slice(-6);
+    const recentlyUsedRoleIds: string[] = [];
+    for (const e of recentAgent.slice(-3)) {
+      // Infer last disposition from NEXT-DISPOSITION VOTE lines or headers.
+      const vote = (e.text ?? "").match(
+        /NEXT[- ]DISPOSITION\s+VOTE\s*:\s*(critic|synthesizer|gap-?finder|builder)\b/i,
+      );
+      if (vote) {
+        recentlyUsedRoleIds.push(
+          vote[1]!.toLowerCase().replace(/-?finder/, "-finder"),
+        );
+      }
+    }
+    const pickerPrompt = buildDynamicRolePickerPrompt({
+      roles,
+      recentTurns: recentAgent.map((e) => ({
+        role: "agent",
+        text: e.text ?? "",
+        agentIndex: e.agentIndex,
+      })),
+      userDirective: this.active?.userDirective,
+      recentlyUsedRoleIds,
+    });
+    try {
+      const res = await chatOnce(agent, {
+        agentName: "swarm",
+        promptText: pickerPrompt,
+        manager: this.opts.manager,
+        runId: this.active?.runId,
+        clonePath: this.active?.localPath,
+        activity: { kind: "meta", label: "dynamic-role-picker" },
+        format: "json",
+      });
+      const raw =
+        extractProviderText(res)
+        ?? res?.data?.parts?.map((p) => p.text).join("")
+        ?? "";
+      const pick = parseDynamicRolePick(raw, validIds);
+      if (!pick) {
+        this.appendSystem(
+          `[dynamicRolePicker] parse failed — falling back to vote/rotation`,
+        );
+        return null;
+      }
+      const disp = dispositionFromPickerId(pick.pickedId);
+      if (!disp) {
+        this.appendSystem(
+          `[dynamicRolePicker] unknown id ${pick.pickedId} — fallback`,
+        );
+        return null;
+      }
+      this.appendSystem(
+        `[dynamicRolePicker] next disposition: ${disp.name}`
+        + (pick.rationale ? ` — ${pick.rationale.slice(0, 120)}` : ""),
+      );
+      return disp;
+    } catch (err) {
+      this.appendSystem(
+        `[dynamicRolePicker] failed: ${err instanceof Error ? err.message : String(err)} — fallback`,
+      );
+      return null;
+    }
   }
 
   private synthesisHost(): RoundRobinSynthesisHost {

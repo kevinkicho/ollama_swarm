@@ -63,6 +63,39 @@ describe("DISPOSITIONS — structured deliberation lenses", () => {
   });
 });
 
+describe("dispositionFromPickerId / dispositionsAsRoleOptions (Q6)", () => {
+  it("maps picker ids onto DISPOSITIONS", async () => {
+    const {
+      dispositionFromPickerId,
+      dispositionsAsRoleOptions,
+    } = await import("./roundRobinPromptHelpers.js");
+    assert.equal(dispositionFromPickerId("critic")?.name, "Critic");
+    assert.equal(dispositionFromPickerId("gap-finder")?.name, "Gap-finder");
+    assert.equal(dispositionFromPickerId("gap_finder")?.name, "Gap-finder");
+    assert.equal(dispositionFromPickerId("unknown"), null);
+    const opts = dispositionsAsRoleOptions();
+    assert.equal(opts.length, 4);
+    assert.ok(opts.every((o) => o.id && o.label && o.description));
+  });
+
+  it("buildRoundRobinTurnPrompt honors dispositionOverride", async () => {
+    const { buildRoundRobinTurnPrompt } = await import("./roundRobinPromptHelpers.js");
+    const p = buildRoundRobinTurnPrompt({
+      turnsTaken: 1,
+      transcript: [],
+      agentIndex: 1,
+      totalRounds: 3,
+      round: 1,
+      dispositionOverride: {
+        name: "Builder",
+        framing: "Propose ONE concrete next action.",
+      },
+    });
+    assert.match(p, /BUILDER disposition this turn/i);
+    assert.match(p, /Propose ONE concrete next action/);
+  });
+});
+
 describe("getDispositionForTurn", () => {
   it("turn 1 = Critic (first in cycle)", () => {
     assert.equal(getDispositionForTurn(1).name, "Critic");

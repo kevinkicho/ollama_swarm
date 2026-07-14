@@ -139,11 +139,11 @@ export interface RunConfigDiscussion {
    *  Library ready (`bestOfNTurn.ts`); not yet adopted by a runner. */
   bestOfNTurn?: number;
   /** Q6 (2026-05-04): dynamic role picker for round-robin / role-diff.
-   *  When set, the runner consults a planner-tier meta-prompt to pick
-   *  the next role based on what the conversation NEEDS (vs fixed
-   *  cycle). One extra prompt per turn. Default OFF — fixed-cycle
-   *  rotation preserves the legacy deterministic behavior. Library
-   *  ready (`dynamicRolePicker.ts`); not yet adopted by RR/role-diff. */
+   *  When set, the runner consults a meta-prompt to pick the next
+   *  disposition based on what the conversation NEEDS (vs fixed cycle
+   *  or vote). One extra prompt per turn. Default OFF.
+   *  **Wired** for round-robin no-roles (structured deliberation)
+   *  dispositions in `RoundRobinRunner.pickDispositionDynamically`. */
   dynamicRolePicker?: boolean;
   /** Q7 (2026-05-04): debate-judge swap-sides bias check. After the
    *  judge's verdict, run a SECOND verdict pass with PRO/CON labels
