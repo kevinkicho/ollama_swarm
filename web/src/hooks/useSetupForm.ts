@@ -116,6 +116,8 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [verifyCommand, setVerifyCommand] = useState("");
   /** Blackboard: apply+verify+revert before proposeCommit when verifyCommand set. */
   const [preflightDryRun, setPreflightDryRun] = useState(false);
+  /** Blackboard: few-shot similar past hunks in worker prompts. */
+  const [hunkRag, setHunkRag] = useState(false);
   const [busy, setBusy] = useState(false);
   /** Brain RECONFIG saved after a finished run — shown on setup until Start or dismiss. */
   const [deferredPending, setDeferredPending] = useState<DeferredReconfigRecord | null>(
@@ -309,6 +311,7 @@ export function useSetupForm(navigate: (path: string) => void) {
         ...(preset.id === "blackboard" && preflightDryRun && verifyCommand.trim()
           ? { preflightDryRun: true }
           : {}),
+        ...(preset.id === "blackboard" && hunkRag ? { hunkRag: true } : {}),
         mcpServers,
         // Per-agent provider/model from the Topology grid (including header
         // bulk-apply). Discussion presets spawn via resolveModelForTopologyIndex;
@@ -417,6 +420,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     conflictPolicy, setConflictPolicy,
     verifyCommand, setVerifyCommand,
     preflightDryRun, setPreflightDryRun,
+    hunkRag, setHunkRag,
     busy, setBusy,
     deferredPending,
     deferredPendingLabel,

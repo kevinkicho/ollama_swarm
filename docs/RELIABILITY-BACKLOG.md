@@ -41,6 +41,7 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | Active-runs list phase-blind | Multi-tenant panel showed "?" progress | **Done:** listActiveRuns phase/earlyStop/drainEligible + drain button + dark UI |
 | councilReconcile unused | Schema-only judge/vote | **Done:** judge + vote wired in synthesis + SetupForm (revise default) |
 | preflightDryRun unused | Schema-only | **Done:** worker dry-run apply+verify+revert before proposeCommit; SetupForm toggle |
+| hunkRag unused | Schema-only | **Done:** `.swarm-hunk-examples.jsonl` on approve; few-shot inject in workerTodoPrep |
 | Autonomous soft-done spun forever | Soft `"done"` cleared `earlyStopDetail` and re-cycled | **Done:** `councilSettlementPolicy` — soft done is terminal; autonomy continues only via `"retry"` |
 | No-op apply marked completed | Empty `filesWritten` treated as successful commit | **Done:** `WorkerPipeline` fail-closed + council worker zero-write retry |
 | Blackboard zero-write approve | Auditor/propose path could complete empty work | **Done:** auditor reject zero files; proposeCommit rejects empty hunks |

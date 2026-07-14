@@ -622,6 +622,20 @@ export function SetupForm() {
                   </span>
                 </span>
               </label>
+              <label className="flex items-start gap-2 text-xs text-ink-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={!!form.hunkRag}
+                  onChange={(e) => form.setHunkRag(e.target.checked)}
+                  className="mt-0.5 rounded border-ink-600 bg-ink-900 text-emerald-500 focus:ring-emerald-500/40"
+                />
+                <span>
+                  Hunk RAG few-shots
+                  <span className="text-ink-500 ml-1 block sm:inline">
+                    (inject similar past successful hunks into worker prompts; learns as commits land)
+                  </span>
+                </span>
+              </label>
             </div>
           )}
         </Section>

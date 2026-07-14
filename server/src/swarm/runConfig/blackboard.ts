@@ -268,11 +268,10 @@ export interface RunConfigBlackboard {
   preflightDryRun?: boolean;
   /** Q11 (2026-05-04): hunk placement RAG. When set, the worker's
    *  hunk-emit prompt includes top-3 most-similar past successful
-   *  (todo, hunk-response) pairs from `.swarm-memory.jsonl` as
-   *  few-shot examples. Specific to repos with prior runs.
-   *  Token-overlap (Jaccard) similarity; capped to keep prompts
-   *  bounded. Default OFF — biases the model toward historical
-   *  patterns; not always desirable in evolving repos. Blackboard only. */
+   *  (todo, hunk-response) pairs from `.swarm-hunk-examples.jsonl` as
+   *  few-shot examples. Examples are appended on successful auditor
+   *  batch commits. Token-overlap (Jaccard); **wired** in
+   *  `workerTodoPrep` + `auditorPendingCommits`. Default OFF. Blackboard only. */
   hunkRag?: boolean;
   /** Q2 (2026-05-04): failure-pattern memory at run start. When set,
    *  the runner reads `.swarm-memory.jsonl` from the clone path and

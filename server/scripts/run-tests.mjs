@@ -99,6 +99,7 @@ const TEST_FILES = [
   "src/swarm/midCycleBroadcast.test.ts",
   "src/swarm/preflightDryRun.test.ts",
   "src/swarm/hunkRag.test.ts",
+  "src/swarm/hunkRagStore.test.ts",
   "src/swarm/presetRouter.test.ts",
   "src/swarm/rubricGrading.test.ts",
   "src/swarm/outcomeScorer.test.ts",

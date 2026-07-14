@@ -187,6 +187,28 @@ export async function reviewPendingCommits(
         for (const id of todoIds) {
           ctx.wrappers.approveCommitQ(id);
         }
+        // Q11: record successful (todo, hunks) for future hunkRag few-shots.
+        if (ctx.getActive()?.hunkRag && localPath) {
+          try {
+            const {
+              appendHunkExample,
+              serializeHunksForRag,
+            } = await import("../hunkRagStore.js");
+            const runId = ctx.getActive()?.runId;
+            for (const item of approved) {
+              if (!item.hunks?.length) continue;
+              await appendHunkExample(localPath, {
+                todoDescription: item.todo.description,
+                expectedFiles: item.files,
+                hunkResponse: serializeHunksForRag(item.hunks),
+                runId,
+                ts: Date.now(),
+              });
+            }
+          } catch {
+            // best-effort — never fail the commit path on RAG store errors
+          }
+        }
         if (commitRes.skippedGit) {
           ctx.appendSystem(
             `[auditor-gate] ✓ Batch applied for ${approved.length} todo(s) (no git repo at ${localPath} — commit skipped)`,

@@ -306,6 +306,8 @@ export interface WorkerSeed {
   endpointCatalogBlock?: string;
   /** Cross-run project knowledge graph slice. */
   projectGraphSlice?: string;
+  /** Q11: few-shot similar past hunks from `.swarm-hunk-examples.jsonl`. */
+  hunkRagBlock?: string;
 }
 
 /** Repo tools available to hunk workers (builder profile). */
@@ -377,6 +379,10 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
   }
   if (seed.projectGraphSlice && seed.projectGraphSlice.trim().length > 0) {
     parts.push(seed.projectGraphSlice.trim());
+    parts.push("");
+  }
+  if (seed.hunkRagBlock && seed.hunkRagBlock.trim().length > 0) {
+    parts.push(seed.hunkRagBlock.trim());
     parts.push("");
   }
   if (seed.directive && seed.directive.trim().length > 0) {

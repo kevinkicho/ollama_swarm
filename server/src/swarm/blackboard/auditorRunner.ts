@@ -53,6 +53,9 @@ export interface AuditorContext {
     verifyCommand?: string;
     requireAuditorVerification?: boolean;
     auditorOnlyMutations?: boolean;
+    /** Q11: record successful hunks for few-shot store. */
+    hunkRag?: boolean;
+    runId?: string;
   } | undefined;
   cloneContract: (c: ExitContract) => ExitContract;
   emitContractUpdated: (contract: ExitContract) => void;

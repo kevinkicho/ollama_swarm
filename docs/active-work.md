@@ -28,9 +28,9 @@ See **`docs/RELEASE-1.0-PLAN.md`** and **`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`*
 - [x] Dead-code purge + `scripts/_dead-code-scan.mjs` / `_dead-code-report.md`
 - [x] God-file modularization extracts (runners / routes / loops)
 
-**Still library-only (schema accepted):** bestOfNTurn, dynamicRolePicker, mentionContracts, hunkRag.
+**Still library-only (schema accepted):** bestOfNTurn, dynamicRolePicker, mentionContracts.
 
-**Wired:** `councilReconcile: "judge" | "vote"`; `preflightDryRun` (+ `verifyCommand` on SetupForm for blackboard).
+**Wired:** `councilReconcile: "judge" | "vote"`; `preflightDryRun`; `hunkRag` (`.swarm-hunk-examples.jsonl` + worker few-shots).
 
 ---
 

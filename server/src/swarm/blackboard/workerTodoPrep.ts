@@ -136,6 +136,36 @@ export async function prepareWorkerTodoSeed(
     }
   }
 
+  let hunkRagBlock: string | undefined;
+  if (activeCfg?.hunkRag && workerCwd) {
+    try {
+      const { readHunkExamples } = await import("../hunkRagStore.js");
+      const {
+        selectSimilarHunks,
+        buildHunkRagPromptBlock,
+      } = await import("../hunkRag.js");
+      const candidates = await readHunkExamples(workerCwd);
+      if (candidates.length > 0) {
+        const selected = selectSimilarHunks({
+          query: {
+            description: todo.description,
+            expectedFiles: todo.expectedFiles,
+          },
+          candidates,
+        });
+        const block = buildHunkRagPromptBlock(selected);
+        if (block) {
+          hunkRagBlock = block;
+          ctx.appendSystem(
+            `[${agent.id}] [hunkRag] injected ${selected.length} similar past hunk example(s)`,
+          );
+        }
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
   const seed: WorkerSeed = {
     todoId: todo.id,
     description: todo.description,
@@ -151,6 +181,7 @@ export async function prepareWorkerTodoSeed(
     ...(promptExtras.userChatBlock ? { userChatBlock: promptExtras.userChatBlock } : {}),
     ...(endpointCatalogBlock ? { endpointCatalogBlock } : {}),
     ...(projectGraphSlice ? { projectGraphSlice } : {}),
+    ...(hunkRagBlock ? { hunkRagBlock } : {}),
   };
 
   if (ctx.getActive()?.stigmergyOnBlackboard && pheromoneHeatmap.size > 0) {
