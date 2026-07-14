@@ -194,6 +194,7 @@ const TEST_FILES = [
 
   // routes/
   "src/routes/swarm.test.ts",
+  "src/routes/runStopDrainHandlers.test.ts",
   "src/routes/v2.test.ts",
   "src/routes/smoke.test.ts",
 
