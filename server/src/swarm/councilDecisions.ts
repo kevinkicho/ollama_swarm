@@ -13,8 +13,83 @@ import { promises as fs } from "node:fs";
 import type { ExitContract } from "./blackboard/types.js";
 import { skipCoversCriterionFiles } from "./councilSkipReconcile.js";
 import { resolveCouncilToolProfile } from "./toolProfiles.js";
+import { JSON_ARRAY_ONLY_LINE } from "./blackboard/prompts/sharedSnippets.js";
 
 export { extractProviderText, createTimeoutController, parseJsonArrayFromResponse, gatherProjectContext, type RealManager } from "./councilUtils.js";
+
+/** Extract todos from council synthesis — shared shape for drift/tests. */
+export function buildCouncilTodoExtractPrompt(args: {
+  progressBlock: string;
+  synthesisText: string;
+  recentDrafts: string;
+  treeSection: string;
+  componentStructure: string;
+  serviceStructure: string;
+  projectFiles: string;
+  committedFilesSection: string;
+}): string {
+  return [
+    "You are extracting ACTIONABLE work items from a council discussion. The council agreed on specific changes. Extract each concrete change as a separate todo.",
+    args.progressBlock.trim() ? args.progressBlock.trim() : "",
+    "",
+    "Council synthesis:",
+    args.synthesisText.slice(0, 3000),
+    "",
+    "Recent discussion context:",
+    args.recentDrafts.slice(0, 1500),
+    args.treeSection,
+    args.componentStructure,
+    args.serviceStructure,
+    "",
+    "EXISTING FILES IN PROJECT (DO NOT create duplicates):",
+    args.projectFiles,
+    "",
+    "ALREADY COMMITTED (files changed this run):",
+    args.committedFilesSection,
+    "",
+    "CRITICAL: Use your read/grep tools to inspect the actual content of key files before generating todos. Read the current implementation of each panel and service. If a feature described in the synthesis already exists in the file, do NOT create a todo for it. If a panel exists but uses mock data, create a todo to wire real API data.",
+    "",
+    `${JSON_ARRAY_ONLY_LINE}`,
+    '[{"description": "specific actionable change description", "expectedFiles": ["path/to/file.ts"]}]',
+    "",
+    "Rules:",
+    "- Each item must be a CONCRETE, SPECIFIC file change the council agreed on.",
+    "- USE YOUR TOOLS to read existing files and verify what's actually implemented vs what's still needed.",
+    "- If a file already exists, READ IT to see if the work is already done. If it is, SKIP that todo.",
+    "- Use the project structure above to suggest realistic file paths. If unsure, use an empty array for expectedFiles.",
+    "- Max 8 items.",
+    "- PARTITIONING (critical): at most ONE todo per file path — never emit two todos with the same expectedFiles entry.",
+    "- Order items: (1) implementation/source files, (2) test files, (3) docs/markdown, (4) run/test commands (pytest, npm test) as the LAST item(s).",
+    "- AVOID creating duplicate files. If two panels serve similar purposes, merge them into one.",
+    "- If the synthesis mentions specific panels/features, each gets its own todo unless they share the same file.",
+    "- IMPORTANT: If creating a new component, also create a todo to integrate it into the app (e.g., add import and route in App.tsx).",
+    "- If modifying an existing panel, also create a todo to update any related imports or routes.",
+    '- Include a "type" field: "normal" for standard work, "contradiction" for cleanup/consolidation/merge tasks.',
+  ]
+    .filter((line, i, arr) => !(line === "" && arr[i - 1] === ""))
+    .join("\n");
+}
+
+/** Planner fallback when auditor stuck — unmet criteria → todos. */
+export function buildAuditorUnmetTodoFallbackPrompt(
+  unmetCriteria: ReadonlyArray<{ description: string; expectedFiles: string[] }>,
+): string {
+  return [
+    `You are the planner. The auditor found ${unmetCriteria.length} unmet criteria:`,
+    "",
+    ...unmetCriteria.map(
+      (c) => `- ${c.description} (files: ${c.expectedFiles.join(", ") || "none"})`,
+    ),
+    "",
+    "Your task: For EACH unmet criterion, produce 1-2 concrete, actionable todos that would satisfy it.",
+    "Each todo must have a specific description and list the files it would modify.",
+    "",
+    JSON_ARRAY_ONLY_LINE,
+    '[{"description": "specific change", "expectedFiles": ["path/to/file.ts"]}]',
+    "",
+    "Max 8 todos. Every file path MUST appear in the PROJECT FILES list.",
+  ].join("\n");
+}
 
 type CouncilRepos = {
   listTopLevel: (path: string) => Promise<string[]>;
@@ -119,41 +194,16 @@ export async function extractActionableTodos(
 
   const progressBlock = progressContext?.trim() ? `\n${progressContext}\n` : "";
 
-  const prompt = `You are extracting ACTIONABLE work items from a council discussion. The council agreed on specific changes. Extract each concrete change as a separate todo.
-${progressBlock}
-Council synthesis:
-${synthesisEntry.text.slice(0, 3000)}
-
-Recent discussion context:
-${recentDrafts.slice(0, 1500)}
-${ctx.treeSection}
-${ctx.componentStructure}
-${ctx.serviceStructure}
-
-EXISTING FILES IN PROJECT (DO NOT create duplicates):
-${ctx.projectFiles}
-
-ALREADY COMMITTED (files changed this run):
-${ctx.committedFilesSection}
-
-CRITICAL: Use your read/grep tools to inspect the actual content of key files before generating todos. Read the current implementation of each panel and service. If a feature described in the synthesis already exists in the file, do NOT create a todo for it. If a panel exists but uses mock data, create a todo to wire real API data.
-
-Return ONLY a JSON array. No markdown, no code fences, no explanation:
-[{"description": "specific actionable change description", "expectedFiles": ["path/to/file.ts"]}]
-
-Rules:
-- Each item must be a CONCRETE, SPECIFIC file change the council agreed on.
-- USE YOUR TOOLS to read existing files and verify what's actually implemented vs what's still needed.
-- If a file already exists, READ IT to see if the work is already done. If it is, SKIP that todo.
-- Use the project structure above to suggest realistic file paths. If unsure, use an empty array for expectedFiles.
-- Max 8 items.
-- PARTITIONING (critical): at most ONE todo per file path — never emit two todos with the same expectedFiles entry.
-- Order items: (1) implementation/source files, (2) test files, (3) docs/markdown, (4) run/test commands (pytest, npm test) as the LAST item(s).
-- AVOID creating duplicate files. If two panels serve similar purposes, merge them into one.
-- If the synthesis mentions specific panels/features, each gets its own todo unless they share the same file.
-- IMPORTANT: If creating a new component, also create a todo to integrate it into the app (e.g., add import and route in App.tsx).
-- If modifying an existing panel, also create a todo to update any related imports or routes.
-- Include a "type" field: "normal" for standard work, "contradiction" for cleanup/consolidation/merge tasks.`;
+  const prompt = buildCouncilTodoExtractPrompt({
+    progressBlock,
+    synthesisText: synthesisEntry.text,
+    recentDrafts,
+    treeSection: ctx.treeSection,
+    componentStructure: ctx.componentStructure,
+    serviceStructure: ctx.serviceStructure,
+    projectFiles: ctx.projectFiles,
+    committedFilesSection: ctx.committedFilesSection,
+  });
 
   try {
     const { controller, cleanup } = createTimeoutController();

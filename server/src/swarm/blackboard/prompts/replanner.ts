@@ -5,6 +5,7 @@ import { windowFileWithAnchors, WORKER_FILE_WINDOW_THRESHOLD } from "../windowFi
 import { buildExplorationCacheBlock } from "@ollama-swarm/shared/explorationCache";
 import type { ExplorationCacheEntry } from "@ollama-swarm/shared/explorationCache";
 import { buildBlackboardDirectiveBlock } from "../../directivePromptHelpers.js";
+import { JSON_ONLY_FINAL_RULE_LINES } from "./sharedSnippets.js";
 
 // ---------------------------------------------------------------------------
 // Schema. The replanner is shown a stale TODO + current file state and must
@@ -141,8 +142,8 @@ export const REPLANNER_SYSTEM_PROMPT = [
   "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` on the cloned repo. When the stale reason is 'CAS mismatch' or 'hunk apply failed', the current file state in the user prompt reflects what ANOTHER agent committed while this TODO was in flight. USE THE TOOLS to see what changed — read the related files, grep for the specific pattern the original TODO targeted. Your revised TODO needs to work against the NEW state, not the pre-drift state.",
   "",
   "HARD RULES:",
-  "1. Output ONLY a JSON object. No prose. No markdown fences. No commentary before or after.",
-  "1a. (2026-04-27) Do NOT emit raw XML tool-call syntax (e.g. `<read path='...' />`) AS the response — that's the SDK's internal tool-call format and parsing it as JSON fails closed. Use the actual tool functions; the SDK invokes them transparently. Visible response MUST be only the JSON object.",
+  "1. JSON final response:",
+  ...JSON_ONLY_FINAL_RULE_LINES.map((line) => `   ${line}`),
   "2. Shape A (revise): {\"revised\": {\"description\": string, \"expectedFiles\": string[]}}",
   "3. Shape B (skip):   {\"skip\": true, \"reason\": string}",
   "4. Choose exactly one shape. Never include both `revised` and `skip` keys in the same response.",

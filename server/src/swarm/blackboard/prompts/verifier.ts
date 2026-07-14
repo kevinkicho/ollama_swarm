@@ -49,6 +49,7 @@
 import { z } from "zod";
 import { extractJsonFromText as stripFences } from "../../extractJson.js";
 import { lenientPreprocess } from "./lenientParse.js";
+import { JSON_ONLY_FINAL_RULE_LINES } from "./sharedSnippets.js";
 
 export const VERIFIER_VERDICTS = ["verified", "partial", "false", "unverifiable"] as const;
 export type VerifierVerdict = (typeof VERIFIER_VERDICTS)[number];
@@ -140,9 +141,9 @@ export const VERIFIER_SYSTEM_PROMPT = [
   "  - \"false\"        — the diff does not action the todo, OR it actions something different. evidenceCitation MUST cite the mismatch (e.g. \"todo asks for header injection but diff only renames a variable in unrelatedHelper.ts\").",
   "  - \"unverifiable\" — the todo description is too vague to evaluate, OR the diff is too generic to map back to the todo. evidenceCitation MUST cite WHICH (so the planner can refine).",
   "",
-  "OUTPUT SHAPE:",
-  "Output ONLY a single JSON object: {\"verdict\": \"verified\" | \"partial\" | \"false\" | \"unverifiable\", \"evidenceCitation\": \"<required, see above>\", \"rationale\": \"<optional one sentence>\"}.",
-  "No prose outside the JSON. No fences.",
+  "HARD RULES (JSON final):",
+  ...JSON_ONLY_FINAL_RULE_LINES,
+  "OUTPUT SHAPE: {\"verdict\": \"verified\" | \"partial\" | \"false\" | \"unverifiable\", \"evidenceCitation\": \"<required, see above>\", \"rationale\": \"<optional one sentence>\"}.",
   "",
   "If you cannot produce a real evidenceCitation (file:line, quoted snippet, or a concrete description of WHAT IS WRONG with the todo or diff), the response MUST use verdict \"unverifiable\". Hallucinating a citation is worse than admitting you can't tell.",
 ].join("\n");

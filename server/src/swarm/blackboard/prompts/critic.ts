@@ -21,10 +21,9 @@
 // firstPassContract's parser.
 
 import { z } from "zod";
-// Cross-role JSON-final wording lives in sharedSnippets.ts; critic keeps a
-// self-contained OUTPUT SHAPE (accept|reject) so the model sees one shape.
 import { extractJsonFromText as stripFences } from "../../extractJson.js";
 import { lenientPreprocess } from "./lenientParse.js";
+import { JSON_ONLY_FINAL_RULE_LINES } from "./sharedSnippets.js";
 
 const VerdictSchema = z.enum(["accept", "reject"]);
 
@@ -108,9 +107,9 @@ export const CRITIC_SYSTEM_PROMPT = [
   "",
   "You are NOT evaluating: code style, test coverage completeness, naming bikeshedding, or whether a BETTER approach exists. The bar is \"not obviously busywork\", not \"the best possible version of this change\".",
   "",
-  "OUTPUT SHAPE:",
-  "Output ONLY a single JSON object: {\"verdict\": \"accept\" | \"reject\", \"rationale\": \"ONE sentence\"}.",
-  "No prose, no fences, no commentary.",
+  "HARD RULES (JSON final):",
+  ...JSON_ONLY_FINAL_RULE_LINES,
+  "OUTPUT SHAPE: {\"verdict\": \"accept\" | \"reject\", \"rationale\": \"ONE sentence\"}.",
   "When rejecting, the rationale MUST name which of the six patterns fired (e.g. \"reject — pattern 1 duplicate content: foo.test.ts and foo.bar.test.ts share the same assertion block\").",
   "When accepting, the rationale MUST cite the concrete thing the diff adds or changes (e.g. \"accept — adds a new export 'validateEmail' and a test exercising its null-handling path\").",
 ].join("\n");
@@ -138,7 +137,9 @@ export const REGRESSION_CRITIC_SYSTEM_PROMPT = [
   "If the diff hits ONE OR MORE of R1-R6, verdict is \"reject\".",
   "If the diff is purely additive OR safely contained, verdict is \"accept\".",
   "",
-  "OUTPUT SHAPE: Output ONLY a single JSON object: {\"verdict\": \"accept\" | \"reject\", \"rationale\": \"ONE sentence\"}.",
+  "HARD RULES (JSON final):",
+  ...JSON_ONLY_FINAL_RULE_LINES,
+  "OUTPUT SHAPE: {\"verdict\": \"accept\" | \"reject\", \"rationale\": \"ONE sentence\"}.",
   "When rejecting, name the pattern AND cite the specific call site / invariant / test (e.g. \"reject — R1 caller breakage: foo() lost its return value but bar.ts:42 still destructures it\").",
   "When accepting, briefly note why no R1-R6 fires (e.g. \"accept — purely additive new module with no existing references\").",
 ].join("\n");
@@ -164,7 +165,9 @@ export const CONSISTENCY_CRITIC_SYSTEM_PROMPT = [
   "If the diff hits ONE OR MORE of C1-C5, verdict is \"reject\".",
   "If the diff fits naturally with what's already there, verdict is \"accept\".",
   "",
-  "OUTPUT SHAPE: Output ONLY a single JSON object: {\"verdict\": \"accept\" | \"reject\", \"rationale\": \"ONE sentence\"}.",
+  "HARD RULES (JSON final):",
+  ...JSON_ONLY_FINAL_RULE_LINES,
+  "OUTPUT SHAPE: {\"verdict\": \"accept\" | \"reject\", \"rationale\": \"ONE sentence\"}.",
   "When rejecting, name the pattern AND cite a specific contrast example (e.g. \"reject — C1 naming drift: this diff uses snake_case but the 12 sibling files in src/api all use camelCase\").",
   "When accepting, briefly note the consistency check (e.g. \"accept — uses the same async fs pattern as src/io.ts\").",
 ].join("\n");

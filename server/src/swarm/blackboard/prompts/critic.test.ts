@@ -155,7 +155,7 @@ describe("CRITIC_SYSTEM_PROMPT", () => {
   });
 
   it("forbids prose / fences", () => {
-    assert.match(CRITIC_SYSTEM_PROMPT, /No prose, no fences/);
+    assert.match(CRITIC_SYSTEM_PROMPT, /No prose\. No markdown fences/i);
   });
 });
 

@@ -140,6 +140,7 @@ const TEST_FILES = [
   // 2026-05-03 (Phase A): shared-layer helpers.
   "src/swarm/directivePromptHelpers.test.ts",
   "src/swarm/listProjectTree.test.ts",
+  "src/swarm/councilDecisions.prompt.test.ts",
   "src/swarm/convergenceSignal.test.ts",
   // 2026-05-03 (Phase B): loop guard helpers.
   "src/swarm/loopGuards.test.ts",

@@ -106,7 +106,7 @@ export const promptRegistry: PromptSnapshot[] = [
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'Output ONLY a JSON object'",
+      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
       "prompt MUST mention 'revised'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
@@ -119,6 +119,9 @@ export const promptRegistry: PromptSnapshot[] = [
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
+      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
+      "prompt MUST mention 'verified'",
+      "prompt MUST mention 'evidenceCitation'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
     lastValidatedAt: Date.UTC(2026, 6, 14),
@@ -130,7 +133,7 @@ export const promptRegistry: PromptSnapshot[] = [
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'Output ONLY a single JSON object'",
+      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
       "prompt MUST mention 'accept'",
       "prompt MUST mention 'reject'",
     ],
@@ -195,8 +198,55 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'markdown fences'",
       "prompt MUST mention 'MENTION_CONTRACT_NOTE'",
       "prompt MUST mention 'JSON_ONLY_FINAL_RULES'",
+      "prompt MUST mention 'JSON_ARRAY_ONLY_LINE'",
     ],
     lastValidatedModel: "n/a-static",
+    lastValidatedAt: Date.UTC(2026, 6, 14),
+  },
+  {
+    name: "stigmergy-territory",
+    version: REGISTRY_VERSION,
+    sourceFile: "stigmergyPromptHelpers.ts",
+    expectedBehavior: [
+      "prompt MUST mention 'STRICT JSON'",
+      "prompt MUST mention 'TERRITORY'",
+      "prompt MUST mention 'no markdown fences'",
+    ],
+    lastValidatedModel: "deepseek-v4-flash:cloud",
+    lastValidatedAt: Date.UTC(2026, 6, 14),
+  },
+  {
+    name: "moa-aggregator",
+    version: REGISTRY_VERSION,
+    sourceFile: "moaPromptHelpers.ts",
+    expectedBehavior: [
+      "prompt MUST mention 'aggregator'",
+      "prompt MUST mention 'proposers'",
+    ],
+    lastValidatedModel: "deepseek-v4-flash:cloud",
+    lastValidatedAt: Date.UTC(2026, 6, 14),
+  },
+  {
+    name: "map-reduce-mapper",
+    version: REGISTRY_VERSION,
+    sourceFile: "mapReducePromptHelpers.ts",
+    expectedBehavior: [
+      "prompt MUST mention 'slice'",
+      "prompt MUST mention 'USER DIRECTIVE'",
+    ],
+    lastValidatedModel: "deepseek-v4-flash:cloud",
+    lastValidatedAt: Date.UTC(2026, 6, 14),
+  },
+  {
+    name: "council-todo-extract",
+    version: REGISTRY_VERSION,
+    sourceFile: "councilDecisions.ts",
+    expectedBehavior: [
+      "prompt MUST mention 'JSON_ARRAY_ONLY_LINE'",
+      "prompt MUST mention 'ACTIONABLE'",
+      "prompt MUST mention 'PARTITIONING'",
+    ],
+    lastValidatedModel: "deepseek-v4-flash:cloud",
     lastValidatedAt: Date.UTC(2026, 6, 14),
   },
 ];

@@ -60,8 +60,10 @@ Update `version` / `lastValidatedAt` when you change a registered prompt’s con
 | dynamicRolePicker / dynamicRoleCatalog | Next-role pick |
 | brainDuringRun / brainRoutes | Brain assistant |
 | councilReconcile | Vote / judge pick |
+| councilDecisions | Todo extract + auditor unmet fallback builders |
 | thinkGuardReferee (shared) | Think-stream triage |
 | agentMentionContract | Freeform ```mention parsing (not a system prompt) |
+| sharedSnippets | JSON_ONLY_FINAL_RULE_LINES, JSON_ARRAY_ONLY_LINE, mention note |
 
 ## Capability truth (auditor / workers)
 

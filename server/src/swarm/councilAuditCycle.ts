@@ -475,17 +475,10 @@ export async function runCouncilAuditCycle(
         const unmetCriteria =
           host.state.contract?.criteria.filter((c) => c.status === "unmet") ?? [];
         if (unmetCriteria.length > 0) {
-          const prompt = `You are the planner. The auditor found ${unmetCriteria.length} unmet criteria:
-
-${unmetCriteria.map((c) => `- ${c.description} (files: ${c.expectedFiles.join(", ") || "none"})`).join("\n")}
-
-Your task: For EACH unmet criterion, produce 1-2 concrete, actionable todos that would satisfy it.
-Each todo must have a specific description and list the files it would modify.
-
-Output a JSON array:
-[{"description": "specific change", "expectedFiles": ["path/to/file.ts"]}]
-
-Max 8 todos. Every file path MUST appear in the PROJECT FILES list.`;
+          const { buildAuditorUnmetTodoFallbackPrompt } = await import(
+            "./councilDecisions.js"
+          );
+          const prompt = buildAuditorUnmetTodoFallbackPrompt(unmetCriteria);
 
           try {
             const { controller, cleanup } = createTimeoutController();
