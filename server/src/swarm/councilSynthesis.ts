@@ -23,7 +23,16 @@ import {
   parseDissentSynthesis,
   renderDissentSynthesisMarkdown,
 } from "./dissentPreservation.js";
-import { buildJudgePickPrompt } from "./councilReconcile.js";
+import {
+  buildJudgePickPrompt,
+  buildVotePrompt,
+  buildVoteWinnerPresentPrompt,
+  formatVoteTallySummary,
+  latestDraftsByAgent,
+  parseVoteResponse,
+  tallyVotes,
+  type VoteRecord,
+} from "./councilReconcile.js";
 
 
 export interface SynthesisContext {
@@ -72,8 +81,7 @@ export async function runSynthesisPass(
   ctx.appendSystem(`Synthesizing council consensus (agent-${lead.index})…`);
 
   // Q5: opt-in three-section synthesis (majority / minority / open Qs).
-  // councilReconcile: "judge" picks one draft as canonical (vs merge).
-  // "vote" remains multi-drafter ballots (library; not yet cycle-wired).
+  // councilReconcile: "judge" = lead picks one; "vote" = ballots then present winner.
   let prompt: string;
   const recentDrafts = () =>
     transcript
@@ -96,9 +104,192 @@ export async function runSynthesisPass(
       userDirective: cfg.userDirective,
     });
     ctx.appendSystem("[councilReconcile=judge] Lead picks ONE draft as canonical (not merge).");
+  } else if (cfg.councilReconcile === "vote" && !stopping) {
+    const drafts = latestDraftsByAgent(recentDrafts());
+    const validIndexes = drafts.map((d) => d.agentIndex);
+    if (drafts.length < 2) {
+      ctx.appendSystem(
+        "[councilReconcile=vote] Fewer than 2 drafts — falling back to revise+merge synthesis.",
+      );
+      prompt = buildCouncilSynthesisPrompt(
+        cfg.rounds,
+        transcript,
+        cfg.userDirective,
+        committedFiles,
+        ambitionTier,
+        cfg.localPath,
+        repoFiles,
+        codeContextExcerpts,
+        cfg.model,
+      );
+    } else {
+      ctx.appendSystem(
+        `[councilReconcile=vote] Collecting ballots from ${drafts.length} drafter(s)…`,
+      );
+      const votes: VoteRecord[] = [];
+      for (const voter of agents) {
+        if (stopping) break;
+        // Only agents who produced a draft cast a ballot.
+        if (!validIndexes.includes(voter.index)) continue;
+        const votePrompt = buildVotePrompt({
+          voterIndex: voter.index,
+          drafts,
+          userDirective: cfg.userDirective,
+        });
+        ctx.manager.markStatus(voter.id, "thinking");
+        ctx.emit({
+          type: "agent_state",
+          id: voter.id,
+          index: voter.index,
+          sessionId: voter.sessionId,
+          status: "thinking",
+          thinkingSince: Date.now(),
+        });
+        stats.countTurn(voter.id);
+        try {
+          const voteCtrl = new AbortController();
+          const voteRes = await promptWithFailoverAuto(voter, votePrompt, {
+            signal: voteCtrl.signal,
+            manager: ctx.manager as any,
+            agentName: resolveCouncilToolProfile(cfg),
+            webToolsConfig: cfg,
+            activity: { kind: "council", label: "vote" },
+            promptAddendum: "",
+            describeError: describeSdkError,
+            runId: cfg.runId,
+            onTokens: ({
+              promptTokens,
+              responseTokens,
+            }: {
+              promptTokens: number;
+              responseTokens: number;
+            }) => stats.recordTokens(voter.id, promptTokens, responseTokens),
+            onTiming: ({
+              attempt,
+              elapsedMs,
+              success,
+            }: {
+              attempt: number;
+              elapsedMs: number;
+              success: boolean;
+            }) => {
+              stats.onTiming(voter.id, success, elapsedMs);
+              ctx.manager.recordPromptComplete(voter.id, {
+                attempt,
+                elapsedMs,
+                success,
+              });
+            },
+            onRetry: () => stats.onRetry(voter.id),
+          });
+          const raw =
+            extractProviderText(voteRes)
+            || extractTextWithDiag(voteRes, {
+              runner: "council",
+              agentId: voter.id,
+              agentIndex: voter.index,
+              logDiag: ctx.logDiag,
+            }).text;
+          const parsed = parseVoteResponse(raw, voter.index);
+          votes.push({
+            voterIndex: voter.index,
+            votedForIndex: parsed.votedForIndex,
+            rationale: parsed.rationale,
+          });
+          ctx.appendSystem(
+            parsed.votedForIndex != null
+              ? `[vote] agent-${voter.index} → agent-${parsed.votedForIndex}${
+                  parsed.rationale ? ` (${parsed.rationale.slice(0, 80)})` : ""
+                }`
+              : `[vote] agent-${voter.index} abstained (parse fail or self-vote)`,
+          );
+        } catch (err) {
+          votes.push({
+            voterIndex: voter.index,
+            votedForIndex: null,
+            rationale: "",
+          });
+          ctx.appendSystem(
+            `[vote] agent-${voter.index} failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        } finally {
+          ctx.manager.markStatus(voter.id, "idle");
+          ctx.emit({
+            type: "agent_state",
+            id: voter.id,
+            index: voter.index,
+            sessionId: voter.sessionId,
+            status: "idle",
+          });
+        }
+      }
+
+      const tally = tallyVotes(votes, validIndexes);
+      const tallySummary = formatVoteTallySummary(tally);
+      ctx.appendSystem(`[councilReconcile=vote] Tally: ${tallySummary}`);
+
+      if (tally.winnerIndex != null) {
+        const winnerDraft = drafts.find((d) => d.agentIndex === tally.winnerIndex);
+        if (winnerDraft) {
+          prompt = buildVoteWinnerPresentPrompt({
+            winnerIndex: tally.winnerIndex,
+            winnerText: winnerDraft.text,
+            tallySummary,
+            userDirective: cfg.userDirective,
+          });
+          ctx.appendSystem(
+            `[councilReconcile=vote] Winner agent-${tally.winnerIndex} — lead presents winning draft.`,
+          );
+        } else {
+          prompt = buildCouncilSynthesisPrompt(
+            cfg.rounds,
+            transcript,
+            cfg.userDirective,
+            committedFiles,
+            ambitionTier,
+            cfg.localPath,
+            repoFiles,
+            codeContextExcerpts,
+            cfg.model,
+          );
+          ctx.appendSystem(
+            "[councilReconcile=vote] Winner draft missing — falling back to revise+merge.",
+          );
+        }
+      } else {
+        prompt = buildCouncilSynthesisPrompt(
+          cfg.rounds,
+          transcript,
+          cfg.userDirective,
+          committedFiles,
+          ambitionTier,
+          cfg.localPath,
+          repoFiles,
+          codeContextExcerpts,
+          cfg.model,
+        );
+        ctx.appendSystem(
+          "[councilReconcile=vote] No decisive winner — falling back to revise+merge synthesis.",
+        );
+      }
+    }
   } else {
     prompt = buildCouncilSynthesisPrompt(cfg.rounds, transcript, cfg.userDirective, committedFiles, ambitionTier, cfg.localPath, repoFiles, codeContextExcerpts, cfg.model);
   }
+
+  // Vote ballots may have left the lead idle — restore synthesis status.
+  ctx.manager.markStatus(lead.id, "thinking");
+  ctx.emit({
+    type: "agent_state",
+    id: lead.id,
+    index: lead.index,
+    sessionId: lead.sessionId,
+    status: "thinking",
+    thinkingSince: Date.now(),
+  });
+
   const controller = new AbortController();
   const watchdog = startSseAwareTurnWatchdog({
     manager: ctx.manager as any,
@@ -115,7 +306,10 @@ export async function runSynthesisPass(
       manager: ctx.manager as any,
       agentName: resolveCouncilToolProfile(cfg),
       webToolsConfig: cfg,
-      activity: { kind: "council", label: "synthesis" },
+      activity: {
+        kind: "council",
+        label: cfg.councilReconcile === "vote" ? "synthesis-vote-winner" : "synthesis",
+      },
       promptAddendum: "",
       describeError: describeSdkError,
       onToolResultHook: buildCouncilToolCoachHook(lead, {

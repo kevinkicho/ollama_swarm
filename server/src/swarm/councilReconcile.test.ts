@@ -8,6 +8,9 @@ import {
   buildVotePrompt,
   parseVoteResponse,
   buildJudgePickPrompt,
+  latestDraftsByAgent,
+  formatVoteTallySummary,
+  buildVoteWinnerPresentPrompt,
 } from "./councilReconcile.js";
 
 test("tallyVotes — empty input → null winner", () => {
@@ -148,6 +151,45 @@ test("buildJudgePickPrompt — requires WINNER header + includes drafts", () => 
   assert.match(out, /draft A/);
   assert.match(out, /draft B/);
   assert.match(out, /Ship a plan/);
+});
+
+test("latestDraftsByAgent — keeps last non-empty per index", () => {
+  const got = latestDraftsByAgent([
+    { agentIndex: 2, text: "old-2" },
+    { agentIndex: 1, text: "a" },
+    { agentIndex: 2, text: "new-2" },
+    { agentIndex: 3, text: "   " },
+  ]);
+  assert.deepEqual(got, [
+    { agentIndex: 1, text: "a" },
+    { agentIndex: 2, text: "new-2" },
+  ]);
+});
+
+test("formatVoteTallySummary — sorts by count then index", () => {
+  const tally = tallyVotes(
+    [
+      { voterIndex: 1, votedForIndex: 3, rationale: "" },
+      { voterIndex: 2, votedForIndex: 3, rationale: "" },
+      { voterIndex: 3, votedForIndex: 1, rationale: "" },
+    ],
+    [1, 2, 3],
+  );
+  const s = formatVoteTallySummary(tally);
+  assert.match(s, /agent-3:2/);
+  assert.match(s, /total=3/);
+});
+
+test("buildVoteWinnerPresentPrompt — embeds winner draft", () => {
+  const out = buildVoteWinnerPresentPrompt({
+    winnerIndex: 2,
+    winnerText: "do the thing",
+    tallySummary: "agent-2:2",
+    userDirective: "fix auth",
+  });
+  assert.match(out, /WINNER: agent-2/);
+  assert.match(out, /do the thing/);
+  assert.match(out, /fix auth/);
 });
 
 test("parseVoteResponse — JSON embedded in surrounding prose", () => {

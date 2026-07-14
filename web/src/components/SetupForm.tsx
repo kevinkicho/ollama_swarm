@@ -480,9 +480,7 @@ export function SetupForm() {
                     >
                       <option value="revise">Revise + merge (default)</option>
                       <option value="judge">Judge picks one draft</option>
-                      <option value="vote" disabled>
-                        Vote (library — not cycle-wired yet)
-                      </option>
+                      <option value="vote">Vote (each drafter ballots; winner presented)</option>
                     </select>
                   </label>
                 </>

@@ -219,10 +219,9 @@ export interface RunConfigDiscussion {
    *  Picks how the council settles on a final answer:
    *  - "revise" (default): existing behavior — agents see peer drafts
    *    starting Round 2 and revise; lead synthesizes at end.
-   *  - "vote": after final round, each drafter casts ONE vote for the
-   *    BEST OTHER draft (no self-votes). Most-voted draft wins; tied
-   *    votes broken by lowest agent index. Cheap (N small prompts).
-   *    **Helpers ready; cycle wiring still library-only.**
+   *  - "vote": after discussion, each drafter casts ONE vote for the
+   *    BEST OTHER draft (no self-votes). Most-voted draft wins; lead
+   *    presents the winner. **Wired** in `councilSynthesis`.
    *  - "judge": synthesis uses `buildJudgePickPrompt` — lead PICKS ONE
    *    draft as canonical (not merge). **Wired** in `councilSynthesis`.
    *  Each policy is opt-in; default keeps the legacy revise+merge flow.

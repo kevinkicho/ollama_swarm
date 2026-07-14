@@ -28,9 +28,9 @@ See **`docs/RELEASE-1.0-PLAN.md`** and **`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`*
 - [x] Dead-code purge + `scripts/_dead-code-scan.mjs` / `_dead-code-report.md`
 - [x] God-file modularization extracts (runners / routes / loops)
 
-**Still library-only (schema accepted):** bestOfNTurn, dynamicRolePicker, mentionContracts, preflightDryRun, hunkRag, `councilReconcile: "vote"`.
+**Still library-only (schema accepted):** bestOfNTurn, dynamicRolePicker, mentionContracts, preflightDryRun, hunkRag.
 
-**Partially wired:** `councilReconcile: "judge"` (synthesis pick-one; SetupForm + payload).
+**Wired:** `councilReconcile: "judge" | "vote"` (synthesis + SetupForm; default remains revise+merge).
 
 ---
 

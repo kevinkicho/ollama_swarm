@@ -160,3 +160,55 @@ export function buildJudgePickPrompt(args: {
     `Then the full canonical answer (clear, actionable, grounded in the winner).`,
   ].join("\n");
 }
+
+/** Keep the latest non-empty draft per agentIndex (sorted by index). */
+export function latestDraftsByAgent(
+  drafts: readonly { agentIndex: number; text: string }[],
+): { agentIndex: number; text: string }[] {
+  const map = new Map<number, string>();
+  for (const d of drafts) {
+    const t = (d.text ?? "").trim();
+    if (!t) continue;
+    map.set(d.agentIndex, t);
+  }
+  return [...map.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([agentIndex, text]) => ({ agentIndex, text }));
+}
+
+/** Compact tally for system lines / lead present prompt. */
+export function formatVoteTallySummary(tally: VoteTally): string {
+  const parts = [...tally.countsByIndex.entries()]
+    .filter(([, c]) => c > 0)
+    .sort((a, b) => b[1] - a[1] || a[0] - b[0])
+    .map(([idx, c]) => `agent-${idx}:${c}`);
+  const body = parts.length > 0 ? parts.join(" ") : "no votes";
+  return `${body} (total=${tally.totalVotes}, abstain=${tally.abstentions})`;
+}
+
+/**
+ * After ballots, lead presents the winning draft as the council answer
+ * (does not re-merge peers). Used when cfg.councilReconcile === "vote".
+ */
+export function buildVoteWinnerPresentPrompt(args: {
+  winnerIndex: number;
+  winnerText: string;
+  tallySummary: string;
+  userDirective?: string;
+}): string {
+  const directive = args.userDirective?.trim();
+  return [
+    `The council vote selected agent-${args.winnerIndex} as the winning draft.`,
+    `Tally: ${args.tallySummary}`,
+    `Present that draft as the FINAL council output.`,
+    `You may polish clarity and structure, but do NOT invent new claims or`,
+    `merge rejected drafts. Stay faithful to the winner.`,
+    ...(directive ? [``, `Directive: ${directive}`, ``] : [``]),
+    `=== WINNING DRAFT (agent-${args.winnerIndex}) ===`,
+    args.winnerText.trim(),
+    `=== END WINNING DRAFT ===`,
+    ``,
+    `Start with: WINNER: agent-${args.winnerIndex}`,
+    `Then the full canonical answer.`,
+  ].join("\n");
+}
