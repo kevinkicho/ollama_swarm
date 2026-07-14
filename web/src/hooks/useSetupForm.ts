@@ -112,6 +112,10 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [conflictPolicy, setConflictPolicy] = useState<
     "merge" | "sequential" | "vote" | "judge" | "pick"
   >("vote");
+  /** Blackboard: shell command run before commit (and optional worker preflight). */
+  const [verifyCommand, setVerifyCommand] = useState("");
+  /** Blackboard: apply+verify+revert before proposeCommit when verifyCommand set. */
+  const [preflightDryRun, setPreflightDryRun] = useState(false);
   const [busy, setBusy] = useState(false);
   /** Brain RECONFIG saved after a finished run — shown on setup until Start or dismiss. */
   const [deferredPending, setDeferredPending] = useState<DeferredReconfigRecord | null>(
@@ -299,6 +303,12 @@ export function useSetupForm(navigate: (path: string) => void) {
         ...(preset.id === "council" && councilReconcile && councilReconcile !== "revise"
           ? { councilReconcile }
           : {}),
+        ...(preset.id === "blackboard" && verifyCommand.trim()
+          ? { verifyCommand: verifyCommand.trim() }
+          : {}),
+        ...(preset.id === "blackboard" && preflightDryRun && verifyCommand.trim()
+          ? { preflightDryRun: true }
+          : {}),
         mcpServers,
         // Per-agent provider/model from the Topology grid (including header
         // bulk-apply). Discussion presets spawn via resolveModelForTopologyIndex;
@@ -405,6 +415,8 @@ export function useSetupForm(navigate: (path: string) => void) {
     ambitionTiers, setAmbitionTiers,
     writeMode, setWriteMode,
     conflictPolicy, setConflictPolicy,
+    verifyCommand, setVerifyCommand,
+    preflightDryRun, setPreflightDryRun,
     busy, setBusy,
     deferredPending,
     deferredPendingLabel,

@@ -365,6 +365,57 @@ describe("applyAndCommit — verification gate (#296)", () => {
     assert.equal(gitState.commits.length, 1);
   });
 
+  it("dryRunOnly reverts writes and never commits when verify ok", async () => {
+    const { fs, state: fsState } = makeFakeFs({ "a.ts": "hello world" });
+    const { git, state: gitState } = makeFakeGit();
+    let verifyCalled = 0;
+    const out = await applyAndCommit({
+      todoId: "t1",
+      workerId: "worker-1",
+      expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "world", replace: "kevin" }],
+      fs,
+      git,
+      dryRunOnly: true,
+      verify: {
+        async run() {
+          verifyCalled++;
+          return { ok: true };
+        },
+      },
+    });
+    assert.equal(verifyCalled, 1);
+    assert.equal(out.ok, true);
+    if (!out.ok) return;
+    assert.equal(fsState.files.get("a.ts"), "hello world", "tree restored after dry-run");
+    assert.equal(gitState.commits.length, 0, "no commit on dry-run");
+    assert.deepEqual(out.filesWritten, ["a.ts"]);
+  });
+
+  it("dryRunOnly on verify fail reverts and reports verifyFailed", async () => {
+    const { fs, state: fsState } = makeFakeFs({ "a.ts": "hello world" });
+    const { git, state: gitState } = makeFakeGit();
+    const out = await applyAndCommit({
+      todoId: "t1",
+      workerId: "worker-1",
+      expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "world", replace: "broken" }],
+      fs,
+      git,
+      dryRunOnly: true,
+      verify: {
+        async run() {
+          return { ok: false, reason: "npm test failed" };
+        },
+      },
+    });
+    assert.equal(out.ok, false);
+    if (out.ok) return;
+    assert.equal(out.verifyFailed, true);
+    assert.equal(fsState.files.get("a.ts"), "hello world");
+    assert.equal(gitState.commits.length, 0);
+  });
+
   it("reverts writes + skips commit when verify fails", async () => {
     const { fs, state: fsState } = makeFakeFs({ "a.ts": "hello world" });
     const { git, state: gitState } = makeFakeGit();

@@ -21,6 +21,12 @@ import { WORKER_HUNKS_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { voteOnHunksWithJudge, type HunkVote, type JudgeFn } from "./hunkVoting.js";
 import { buildJudgePrompt } from "./hunkJudgePrompt.js";
 import { isPromptHaltError } from "./lifecycleState.js";
+import { applyAndCommit } from "./WorkerPipeline.js";
+import { realFilesystemAdapter, realGitAdapter, realVerifyAdapter } from "./v2Adapters.js";
+import {
+  buildDryRunFailurePromptAddendum,
+  decideDryRunOutcome,
+} from "../preflightDryRun.js";
 
 export type SelfConsistencyOutcome = {
   outcome: "stale" | "aborted" | "pending-commit";
@@ -261,6 +267,84 @@ export async function finalizeWorkerHunks(
       return { outcome: "stale" };
     }
     hunksToCommit = verdict.winner;
+  }
+
+  // Q10: optional pre-flight verify dry-run before proposeCommit.
+  // Requires cfg.preflightDryRun + cfg.verifyCommand. Applies hunks,
+  // runs verify, reverts always — never leaves dirty tree or commits.
+  const cfg = ctx.getActive();
+  const verifyCommand = cfg?.verifyCommand?.trim();
+  if (cfg?.preflightDryRun && verifyCommand) {
+    const clonePath = cfg.localPath ?? "";
+    ctx.appendSystem(
+      `[${agent.id}] [preflightDryRun] applying ${hunksToCommit.length} hunk(s) + \`${verifyCommand}\` (revert after)`,
+    );
+    try {
+      const dry = await applyAndCommit({
+        todoId: todo.id,
+        workerId: agent.id,
+        expectedFiles: todo.expectedFiles,
+        hunks: hunksToCommit,
+        fs: realFilesystemAdapter(clonePath),
+        git: realGitAdapter(clonePath),
+        verify: realVerifyAdapter(clonePath, verifyCommand),
+        auditorApproved: true,
+        dryRunOnly: true,
+        expectedAnchors: todo.expectedAnchors,
+      });
+      if (!dry.ok) {
+        const reason = dry.reason;
+        const retriesSoFar = Number((todo as unknown as { retries?: number }).retries) || 0;
+        const exitMatch = /exited (?:with code |non-zero:?\s*)(-?\d+)/i.exec(reason);
+        const exitCode = exitMatch ? Number(exitMatch[1]) : NaN;
+        const outcome = decideDryRunOutcome({
+          result: {
+            ok: false,
+            exitCode: Number.isFinite(exitCode) ? exitCode : 1,
+            stderr: reason,
+          },
+          retriesSoFar,
+        });
+        const addendum = buildDryRunFailurePromptAddendum({
+          exitCode: Number.isFinite(exitCode) ? exitCode : 1,
+          stderr: reason,
+          retriesSoFar,
+        });
+        if (outcome === "skip") {
+          ctx.getWrappers().skipTodoQ(
+            todo.id,
+            `[preflightDryRun] verify exhausted retries — ${reason.slice(0, 400)}`,
+          );
+          ctx.appendSystem(
+            `[${agent.id}] [preflightDryRun] skip after ${retriesSoFar} retries: ${reason.slice(0, 200)}`,
+          );
+        } else {
+          ctx.getWrappers().failTodoQ(
+            todo.id,
+            `[preflightDryRun] verify failed — replan\n${addendum}`,
+            "hunk-fail",
+          );
+          ctx.appendSystem(
+            `[${agent.id}] [preflightDryRun] replan (${retriesSoFar} prior): ${reason.slice(0, 200)}`,
+          );
+        }
+        ctx.bumpRejectedAttempts(agent.id);
+        return { outcome: "stale" };
+      }
+      ctx.appendSystem(
+        `[${agent.id}] [preflightDryRun] verify ok (${dry.filesWritten.length} file(s) would change) — proposing for auditor`,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.appendSystem(`[${agent.id}] [preflightDryRun] exception: ${msg}`);
+      ctx.getWrappers().failTodoQ(
+        todo.id,
+        `[preflightDryRun] exception: ${msg}`,
+        "hunk-fail",
+      );
+      ctx.bumpRejectedAttempts(agent.id);
+      return { outcome: "stale" };
+    }
   }
 
   try {

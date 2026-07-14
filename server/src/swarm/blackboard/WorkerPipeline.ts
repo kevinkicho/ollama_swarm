@@ -101,6 +101,13 @@ export interface WorkerPipelineInput {
   /** NEW for batching: if true, perform apply + verify but skip the git commit.
    *  Caller will do a single commit after all batch applies. */
   skipCommit?: boolean;
+  /**
+   * Q10 preflight dry-run: apply + verify, then ALWAYS revert writes and
+   * never git-commit. Success means "would pass verify"; failure is
+   * verifyFailed (already reverted). Use before proposeCommit so workers
+   * catch breakage without polluting the tree for peers.
+   */
+  dryRunOnly?: boolean;
   /** When true, a failed git commit after a successful apply is treated as success
    *  (non-git local workspaces). */
   gitCommitOptional?: boolean;
@@ -254,6 +261,34 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
         verifyFailed: true,
       };
     }
+  }
+
+  // 5a. Q10 dry-run: verify already passed (or was skipped). Revert the
+  //     tree so peers never see uncommitted dry-run writes, then return ok.
+  if (input.dryRunOnly) {
+    for (const file of filesWritten) {
+      const before = contents[file];
+      try {
+        if (before === null) {
+          if (typeof input.fs.delete === "function") {
+            await input.fs.delete(file);
+          } else {
+            await input.fs.write(file, "");
+          }
+        } else {
+          await input.fs.write(file, before);
+        }
+      } catch {
+        // best-effort revert
+      }
+    }
+    return {
+      ok: true,
+      commitSha: "",
+      filesWritten,
+      linesAdded,
+      linesRemoved,
+    };
   }
 
   // 5. Commit the changes (unless skipCommit for batching).

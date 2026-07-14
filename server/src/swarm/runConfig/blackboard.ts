@@ -259,11 +259,11 @@ export interface RunConfigBlackboard {
    *  generator is days of work). Blackboard only. */
   testDrivenTodos?: boolean;
   /** Q10 (2026-05-04): pre-flight verify dry-run for blackboard. When
-   *  set + cfg.verifyCommand is configured, workers stage their hunks
-   *  in a temp branch + run verifyCommand BEFORE committing. Failed
-   *  verify triggers a re-prompt with the verify error in context;
-   *  exhausted retries → todo skipped. Catches breakage at the worker
-   *  turn, not post-commit. Default OFF — 2× wall-clock per todo.
+   *  set + cfg.verifyCommand is configured, workers apply hunks + run
+   *  verifyCommand BEFORE proposeCommit (always revert; never leave
+   *  dirty tree). Failed verify → replan with error context; exhausted
+   *  retries → skip. **Wired** in `workerSelfConsistency.finalizeWorkerHunks`
+   *  via `WorkerPipeline.dryRunOnly`. Default OFF — 2× wall-clock per todo.
    *  Blackboard only. */
   preflightDryRun?: boolean;
   /** Q11 (2026-05-04): hunk placement RAG. When set, the worker's

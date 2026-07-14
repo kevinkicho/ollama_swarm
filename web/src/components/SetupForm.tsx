@@ -6,7 +6,11 @@ import { useSetupForm } from "../hooks/useSetupForm";
 import { PRESETS } from "./setup/presets";
 import type { PresetMaturity } from "./setup/PresetExtras";
 import { TopologyGrid } from "./setup/TopologyGrid";
-import { BlackboardWallClockCap, BlackboardAmbitionTiers } from "./setup/BlackboardSettings";
+import {
+  BlackboardWallClockCap,
+  BlackboardAmbitionTiers,
+  BlackboardVerifyCommand,
+} from "./setup/BlackboardSettings";
 import { Field } from "./setup/SharedFields";
 import { InfoTip } from "./setup/InfoTip";
 import { FormattedTipContent, TipParagraph, TipSection } from "./setup/FormattedTipContent";
@@ -599,6 +603,25 @@ export function SetupForm() {
                 setAmbitionTiers={form.setAmbitionTiers}
                 wallClockCapMin={form.wallClockCapMin}
               />
+              <BlackboardVerifyCommand
+                verifyCommand={form.verifyCommand ?? ""}
+                setVerifyCommand={form.setVerifyCommand}
+              />
+              <label className="flex items-start gap-2 text-xs text-ink-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={!!form.preflightDryRun}
+                  onChange={(e) => form.setPreflightDryRun(e.target.checked)}
+                  disabled={!(form.verifyCommand ?? "").trim()}
+                  className="mt-0.5 rounded border-ink-600 bg-ink-900 text-emerald-500 focus:ring-emerald-500/40 disabled:opacity-40"
+                />
+                <span>
+                  Preflight dry-run before propose
+                  <span className="text-ink-500 ml-1 block sm:inline">
+                    (apply + verify + always revert; needs verify command. Failed verify → replan, then skip)
+                  </span>
+                </span>
+              </label>
             </div>
           )}
         </Section>
