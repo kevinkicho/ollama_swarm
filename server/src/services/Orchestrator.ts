@@ -486,6 +486,10 @@ export class Orchestrator {
     createdBy: string;
     brainInitiated?: boolean;
     brainProposalId?: string;
+    /** Live runner phase for multi-tenant ActiveRunsPanel honesty. */
+    phase?: string;
+    earlyStopDetail?: string;
+    drainEligible?: boolean;
   }> {
     const out: Array<{
       runId: string;
@@ -495,9 +499,27 @@ export class Orchestrator {
       createdBy: string;
       brainInitiated?: boolean;
       brainProposalId?: string;
+      phase?: string;
+      earlyStopDetail?: string;
+      drainEligible?: boolean;
     }> = [];
     for (const r of this.runs.values()) {
       if (!r.runner.isRunning()) continue; // only truly active runs
+      let phase: string | undefined;
+      let earlyStopDetail: string | undefined;
+      let drainEligible: boolean | undefined;
+      try {
+        const st = r.runner.status() as {
+          phase?: string;
+          earlyStopDetail?: string;
+          drainEligible?: boolean;
+        };
+        phase = st.phase;
+        earlyStopDetail = st.earlyStopDetail;
+        drainEligible = st.drainEligible;
+      } catch {
+        /* status() best-effort — list still works */
+      }
       out.push({
         runId: r.runId,
         runConfig: r.runConfig,
@@ -506,6 +528,9 @@ export class Orchestrator {
         createdBy: r.cfg.createdBy ?? "default",
         brainInitiated: !!r.cfg.brainInitiated,
         brainProposalId: r.cfg.brainProposalId,
+        phase,
+        earlyStopDetail,
+        drainEligible,
       } as any);
     }
     return out;

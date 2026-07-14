@@ -2,14 +2,10 @@
 // active runs (server-wide, not parent-dir-scoped). Polls
 // /api/swarm/active-runs every 5s. Surfaces runs the user may not be
 // directly watching (e.g. a forward-chain that fired in a different
-// tab) so they can navigate to them or stop them.
+// tab) so they can navigate to them, soft-drain, or stop them.
 //
-// Renders inline (no routing required). Per-run actions wired to the
-// per-run REST routes (/api/swarm/runs/:id/stop) so stopping one run
-// doesn't affect the others.
-//
-// When fewer than 2 runs are active OR the cap is 1, the panel
-// renders nothing — single-run users keep the existing UI shape.
+// Per-run actions use /api/swarm/runs/:id/{stop,drain} so concurrent
+// runs stay isolated. Stop shares SWARM_DRAIN_ON_STOP with SwarmView.
 
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -27,6 +23,9 @@ interface ActiveRun {
   };
   startedAt: number;
   isRunning: boolean;
+  phase?: string;
+  earlyStopDetail?: string;
+  drainEligible?: boolean;
   currentAgentIndex?: number;
   brainInitiated?: boolean;
   brainProposalId?: string;
@@ -63,80 +62,120 @@ async function fetchActiveRuns(signal?: AbortSignal): Promise<ActiveRun[]> {
   }
 }
 
-async function stopRun(runId: string): Promise<boolean> {
+async function stopRun(runId: string): Promise<{ ok: boolean; action?: string }> {
   try {
     const res = await apiFetch(`/api/swarm/runs/${encodeURIComponent(runId)}/stop`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId }),
     });
-    return res.ok;
+    const body = (await res.json().catch(() => ({}))) as { action?: string };
+    return { ok: res.ok, action: body.action };
   } catch {
-    return false;
+    return { ok: false };
   }
 }
+
+async function drainRun(runId: string): Promise<{ ok: boolean; mode?: string }> {
+  try {
+    const res = await apiFetch(`/api/swarm/runs/${encodeURIComponent(runId)}/drain`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId }),
+    });
+    const body = (await res.json().catch(() => ({}))) as { mode?: string };
+    return { ok: res.ok, mode: body.mode };
+  } catch {
+    return { ok: false };
+  }
+}
+
+type BusyKind = "stop" | "drain";
 
 const ActiveRunRow = memo(function ActiveRunRow({
   run,
   now,
-  stoppingId,
+  busy,
   onNavigate,
   onStop,
+  onDrain,
 }: {
   run: ActiveRun;
   now: number;
-  stoppingId: string | null;
+  busy: { runId: string; kind: BusyKind } | null;
   onNavigate: (runId: string) => void;
   onStop: (runId: string) => void;
+  onDrain: (runId: string) => void;
 }) {
   const elapsed = now - run.startedAt;
+  const isBusy = busy?.runId === run.runId;
+  const phase = run.phase ?? (run.isRunning ? "running" : "terminated");
+  const progress =
+    run.earlyStopDetail
+      ? run.earlyStopDetail.length > 40
+        ? `${run.earlyStopDetail.slice(0, 38)}…`
+        : run.earlyStopDetail
+      : run.currentAgentIndex != null
+        ? `agent ${run.currentAgentIndex}/${run.runConfig.agentCount ?? "?"}`
+        : "—";
+
   return (
-    <tr>
-      <td
-        style={{
-          padding: "2px 8px 2px 0",
-          fontFamily: "monospace",
-        }}
-        title={run.runId}
-      >
+    <tr className="border-t border-ink-700/60">
+      <td className="py-1.5 pr-2 font-mono text-[11px] text-ink-200" title={run.runId}>
         {shortRunId(run.runId)}
-        {run.brainInitiated && (
-          <span style={{ marginLeft: 4, fontSize: 10, background: "#6366f1", color: "white", padding: "0 3px", borderRadius: 2 }}>Brain</span>
-        )}
+        {run.brainInitiated ? (
+          <span className="ml-1 text-[9px] px-1 rounded bg-violet-900/70 text-violet-200">
+            Brain
+          </span>
+        ) : null}
       </td>
-      <td style={{ padding: "2px 8px" }}>{run.runConfig.preset}</td>
-      <td style={{ padding: "2px 8px" }}>
+      <td className="py-1.5 px-2 text-[11px] text-ink-300">{run.runConfig.preset}</td>
+      <td className="py-1.5 px-2 text-[11px] text-ink-400 tabular-nums">
         {run.runConfig.agentCount ?? "?"}
       </td>
-      <td style={{ padding: "2px 8px" }}>
-        {run.currentAgentIndex != null
-          ? `Agent ${run.currentAgentIndex}/${run.runConfig.agentCount ?? '?'}: thinking...`
-          : "?"}
+      <td className="py-1.5 px-2 text-[11px] text-ink-400 max-w-[10rem] truncate" title={progress}>
+        {progress}
       </td>
-      <td style={{ padding: "2px 8px" }}>{formatElapsed(elapsed)}</td>
-      <td style={{ padding: "2px 8px" }}>
-        {run.isRunning ? "running" : "terminated"}
+      <td className="py-1.5 px-2 text-[11px] text-ink-400 tabular-nums">{formatElapsed(elapsed)}</td>
+      <td className="py-1.5 px-2 text-[11px] font-mono text-sky-300/90" title={run.phase}>
+        {phase}
       </td>
-      <td style={{ padding: "2px 0", display: "flex", gap: 4 }}>
-        <button
-          type="button"
-          onClick={() => onNavigate(run.runId)}
-          style={{ fontSize: 11, padding: "1px 6px", cursor: "pointer" }}
-        >
-          view
-        </button>
-        {run.isRunning && (
+      <td className="py-1.5 pl-2">
+        <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"
-            disabled={stoppingId === run.runId}
-            onClick={() => onStop(run.runId)}
-            style={{
-              fontSize: 11,
-              padding: "1px 6px",
-              cursor: stoppingId === run.runId ? "wait" : "pointer",
-            }}
+            onClick={() => onNavigate(run.runId)}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-ink-600 bg-ink-800 text-ink-300 hover:text-ink-100 hover:border-ink-500"
           >
-            {stoppingId === run.runId ? "stopping…" : "stop"}
+            view
           </button>
-        )}
+          {run.isRunning ? (
+            <>
+              <button
+                type="button"
+                disabled={isBusy || run.drainEligible === false}
+                onClick={() => onDrain(run.runId)}
+                title={
+                  run.drainEligible === false
+                    ? "Soft drain not eligible for this phase"
+                    : "Soft drain: finish in-flight work, then stop"
+                }
+                className="text-[10px] px-1.5 py-0.5 rounded border border-amber-800/70 bg-amber-950/40 text-amber-200 hover:bg-amber-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {busy?.runId === run.runId && busy.kind === "drain" ? "draining…" : "drain"}
+              </button>
+              <button
+                type="button"
+                disabled={isBusy}
+                onClick={() => onStop(run.runId)}
+                title="Hard stop (or soft-drain first if SWARM_DRAIN_ON_STOP)"
+                className="text-[10px] px-1.5 py-0.5 rounded border border-rose-800/70 bg-rose-950/40 text-rose-200 hover:bg-rose-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {busy?.runId === run.runId && busy.kind === "stop" ? "stopping…" : "stop"}
+              </button>
+            </>
+          ) : null}
+        </div>
       </td>
     </tr>
   );
@@ -146,22 +185,37 @@ export const ActiveRunsPanel = memo(function ActiveRunsPanel() {
   const navigate = useNavigate();
   const [runs, setRuns] = useState<ActiveRun[]>([]);
   const [now, setNow] = useState(Date.now());
-  const [stoppingId, setStoppingId] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{ runId: string; kind: BusyKind } | null>(null);
   const pollRef = useRef<AbortController | null>(null);
 
   const onNavigate = useCallback((runId: string) => {
     navigate(`/runs/${encodeURIComponent(runId)}`);
   }, [navigate]);
 
-  const handleStop = useCallback(async (runId: string) => {
-    setStoppingId(runId);
-    await stopRun(runId);
-    // Refetch so the row's status updates without
-    // waiting for the next 5s poll.
+  const refresh = useCallback(async () => {
     const next = await fetchActiveRuns(pollRef.current?.signal);
     setRuns(next);
-    setStoppingId(null);
   }, []);
+
+  const handleStop = useCallback(async (runId: string) => {
+    setBusy({ runId, kind: "stop" });
+    try {
+      await stopRun(runId);
+      await refresh();
+    } finally {
+      setBusy(null);
+    }
+  }, [refresh]);
+
+  const handleDrain = useCallback(async (runId: string) => {
+    setBusy({ runId, kind: "drain" });
+    try {
+      await drainRun(runId);
+      await refresh();
+    } finally {
+      setBusy(null);
+    }
+  }, [refresh]);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -182,55 +236,49 @@ export const ActiveRunsPanel = memo(function ActiveRunsPanel() {
     };
   }, []);
 
-  // Tick a separate state so the elapsed-time display updates per second
-  // without forcing a re-fetch every second.
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  // Hide when no active runs.
   if (runs.length < 1) return null;
 
   return (
-    <div
-      style={{
-        border: "1px solid #ccc",
-        borderRadius: 4,
-        padding: "8px 12px",
-        margin: "8px 0",
-        background: "#f8f8f8",
-        fontSize: 13,
-      }}
-    >
-      <div style={{ fontWeight: 600, marginBottom: 6 }}>
-        Active runs ({runs.length})
+    <div className="mx-3 my-2 rounded border border-ink-600 bg-ink-900/80 px-3 py-2 text-xs text-ink-200 shadow-sm">
+      <div className="font-semibold text-ink-100 mb-1.5 flex items-center gap-2">
+        <span>Active runs ({runs.length})</span>
+        <span className="text-[10px] font-normal text-ink-500">
+          multi-tenant · per-run drain/stop
+        </span>
       </div>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ textAlign: "left", color: "#666" }}>
-            <th style={{ padding: "2px 8px 2px 0" }}>Run</th>
-            <th style={{ padding: "2px 8px" }}>Preset</th>
-            <th style={{ padding: "2px 8px" }}>Agents</th>
-            <th style={{ padding: "2px 8px" }}>Progress</th>
-            <th style={{ padding: "2px 8px" }}>Elapsed</th>
-            <th style={{ padding: "2px 8px" }}>Status</th>
-            <th style={{ padding: "2px 0" }}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((run) => (
-            <ActiveRunRow
-              key={run.runId}
-              run={run}
-              now={now}
-              stoppingId={stoppingId}
-              onNavigate={onNavigate}
-              onStop={handleStop}
-            />
-          ))}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-left">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-wide text-ink-500">
+              <th className="py-1 pr-2 font-medium">Run</th>
+              <th className="py-1 px-2 font-medium">Preset</th>
+              <th className="py-1 px-2 font-medium">Agents</th>
+              <th className="py-1 px-2 font-medium">Progress</th>
+              <th className="py-1 px-2 font-medium">Elapsed</th>
+              <th className="py-1 px-2 font-medium">Phase</th>
+              <th className="py-1 pl-2 font-medium"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((run) => (
+              <ActiveRunRow
+                key={run.runId}
+                run={run}
+                now={now}
+                busy={busy}
+                onNavigate={onNavigate}
+                onStop={handleStop}
+                onDrain={handleDrain}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 });

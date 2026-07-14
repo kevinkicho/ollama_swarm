@@ -23,6 +23,7 @@ import {
   parseDissentSynthesis,
   renderDissentSynthesisMarkdown,
 } from "./dissentPreservation.js";
+import { buildJudgePickPrompt } from "./councilReconcile.js";
 
 
 export interface SynthesisContext {
@@ -71,18 +72,30 @@ export async function runSynthesisPass(
   ctx.appendSystem(`Synthesizing council consensus (agent-${lead.index})…`);
 
   // Q5: opt-in three-section synthesis (majority / minority / open Qs).
+  // councilReconcile: "judge" picks one draft as canonical (vs merge).
+  // "vote" remains multi-drafter ballots (library; not yet cycle-wired).
   let prompt: string;
-  if (cfg.preserveDissent) {
-    const drafts = transcript
+  const recentDrafts = () =>
+    transcript
       .filter((e) => e.role === "agent" && typeof e.agentIndex === "number")
       .slice(-Math.max(3, cfg.agentCount * 2))
       .map((e) => ({ agentIndex: e.agentIndex as number, text: e.text }));
+
+  if (cfg.preserveDissent) {
+    const drafts = recentDrafts();
     prompt = buildDissentSynthesisPrompt({
       question: cfg.userDirective?.trim() || "Synthesize the council discussion.",
       drafts,
       userDirective: cfg.userDirective,
     });
     ctx.appendSystem("[Q5] Dissent-preserving synthesis prompt (majority + minority + open questions).");
+  } else if (cfg.councilReconcile === "judge") {
+    const drafts = recentDrafts();
+    prompt = buildJudgePickPrompt({
+      drafts,
+      userDirective: cfg.userDirective,
+    });
+    ctx.appendSystem("[councilReconcile=judge] Lead picks ONE draft as canonical (not merge).");
   } else {
     prompt = buildCouncilSynthesisPrompt(cfg.rounds, transcript, cfg.userDirective, committedFiles, ambitionTier, cfg.localPath, repoFiles, codeContextExcerpts, cfg.model);
   }

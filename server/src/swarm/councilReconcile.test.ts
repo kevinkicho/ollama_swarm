@@ -7,6 +7,7 @@ import {
   tallyVotes,
   buildVotePrompt,
   parseVoteResponse,
+  buildJudgePickPrompt,
 } from "./councilReconcile.js";
 
 test("tallyVotes — empty input → null winner", () => {
@@ -132,6 +133,21 @@ test("parseVoteResponse — non-integer rejected", () => {
 test("parseVoteResponse — garbage input returns null", () => {
   assert.equal(parseVoteResponse("blah blah", 1).votedForIndex, null);
   assert.equal(parseVoteResponse("", 1).votedForIndex, null);
+});
+
+test("buildJudgePickPrompt — requires WINNER header + includes drafts", () => {
+  const out = buildJudgePickPrompt({
+    drafts: [
+      { agentIndex: 1, text: "draft A" },
+      { agentIndex: 2, text: "draft B" },
+    ],
+    userDirective: "Ship a plan",
+  });
+  assert.match(out, /WINNER: agent-/);
+  assert.match(out, /PICK ONE/);
+  assert.match(out, /draft A/);
+  assert.match(out, /draft B/);
+  assert.match(out, /Ship a plan/);
 });
 
 test("parseVoteResponse — JSON embedded in surrounding prose", () => {

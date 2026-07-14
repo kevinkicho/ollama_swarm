@@ -222,9 +222,9 @@ export interface RunConfigDiscussion {
    *  - "vote": after final round, each drafter casts ONE vote for the
    *    BEST OTHER draft (no self-votes). Most-voted draft wins; tied
    *    votes broken by lowest agent index. Cheap (N small prompts).
-   *  - "judge": after final round, an extra synthesis prompt explicitly
-   *    asks the lead agent to PICK ONE draft as canonical (vs.
-   *    "merge" which the existing synthesis already does).
+   *    **Helpers ready; cycle wiring still library-only.**
+   *  - "judge": synthesis uses `buildJudgePickPrompt` — lead PICKS ONE
+   *    draft as canonical (not merge). **Wired** in `councilSynthesis`.
    *  Each policy is opt-in; default keeps the legacy revise+merge flow.
    *  Council only. */
   councilReconcile?: "revise" | "vote" | "judge";

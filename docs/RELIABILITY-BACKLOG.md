@@ -38,6 +38,8 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | Historical token totals wrong | 1d / all-time misleading | **Done:** live + summary `estimated` flags; UI callout for approximate totals |
 | Soft-drain vs hard-stop confusion | Wrong button behavior | **Done:** Drain/Stop UI + `/drain` `mode` (`soft`/`hard-fallback`); failed drain no longer fakes stopped; control notice banner |
 | Per-run stop skipped drain-on-stop | UI always hit hard `/runs/:id/stop` | **Done:** shared stop/drain handlers; per-run `/stop` + `/drain` parity with legacy |
+| Active-runs list phase-blind | Multi-tenant panel showed "?" progress | **Done:** listActiveRuns phase/earlyStop/drainEligible + drain button + dark UI |
+| councilReconcile unused | Schema-only judge/vote | **Partial:** judge wired in synthesis + SetupForm; vote still library-only |
 | Autonomous soft-done spun forever | Soft `"done"` cleared `earlyStopDetail` and re-cycled | **Done:** `councilSettlementPolicy` — soft done is terminal; autonomy continues only via `"retry"` |
 | No-op apply marked completed | Empty `filesWritten` treated as successful commit | **Done:** `WorkerPipeline` fail-closed + council worker zero-write retry |
 | Blackboard zero-write approve | Auditor/propose path could complete empty work | **Done:** auditor reject zero files; proposeCommit rejects empty hunks |

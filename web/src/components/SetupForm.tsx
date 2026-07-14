@@ -446,21 +446,46 @@ export function SetupForm() {
                 </span>
               </label>
               {form.preset.id === "council" ? (
-                <label className="flex items-center gap-2 text-xs text-ink-300 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={form.councilSharedResearch}
-                    onChange={(e) => form.setCouncilSharedResearch(e.target.checked)}
-                    disabled={!form.webTools}
-                    className="rounded border-ink-600 bg-ink-900 text-emerald-500 focus:ring-emerald-500/40 disabled:opacity-40"
-                  />
-                  <span>
-                    Shared research standup each cycle
-                    <span className="text-ink-500 ml-1">
-                      (default off — independent literature research per todo; needs web tools)
+                <>
+                  <label className="flex items-center gap-2 text-xs text-ink-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={form.councilSharedResearch}
+                      onChange={(e) => form.setCouncilSharedResearch(e.target.checked)}
+                      disabled={!form.webTools}
+                      className="rounded border-ink-600 bg-ink-900 text-emerald-500 focus:ring-emerald-500/40 disabled:opacity-40"
+                    />
+                    <span>
+                      Shared research standup each cycle
+                      <span className="text-ink-500 ml-1">
+                        (default off — independent literature research per todo; needs web tools)
+                      </span>
                     </span>
-                  </span>
-                </label>
+                  </label>
+                  <label className="flex flex-col gap-1 text-xs text-ink-300">
+                    <span>
+                      Reconcile policy
+                      <span className="text-ink-500 ml-1">
+                        (how the lead settles after discussion rounds)
+                      </span>
+                    </span>
+                    <select
+                      value={form.councilReconcile ?? "revise"}
+                      onChange={(e) =>
+                        form.setCouncilReconcile(
+                          e.target.value as "revise" | "vote" | "judge",
+                        )
+                      }
+                      className="max-w-xs rounded border border-ink-600 bg-ink-900 text-ink-200 text-xs px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500/40"
+                    >
+                      <option value="revise">Revise + merge (default)</option>
+                      <option value="judge">Judge picks one draft</option>
+                      <option value="vote" disabled>
+                        Vote (library — not cycle-wired yet)
+                      </option>
+                    </select>
+                  </label>
+                </>
               ) : null}
             </div>
           ) : null}

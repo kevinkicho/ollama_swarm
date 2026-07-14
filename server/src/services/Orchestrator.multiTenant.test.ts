@@ -125,6 +125,8 @@ test("Orchestrator: natural completion reaps run without re-stop", () => {
 test("Orchestrator: listActiveRuns returns shape with runId/config/startedAt/isRunning", () => {
   assert.match(SRC, /listActiveRuns\(\): Array<\{/);
   assert.match(SRC, /isRunning: boolean/);
+  assert.match(SRC, /phase\?: string/);
+  assert.match(SRC, /drainEligible\?: boolean/);
 });
 
 test("Orchestrator: statusForRun falls back to persister for unknown runId", () => {

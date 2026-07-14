@@ -100,6 +100,10 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [councilSharedExplore, setCouncilSharedExplore] = useState(false);
   /** Council: collective research standup each cycle (default off). */
   const [councilSharedResearch, setCouncilSharedResearch] = useState(false);
+  /** Council: how synthesis settles (revise=merge default; judge=pick one). */
+  const [councilReconcile, setCouncilReconcile] = useState<"revise" | "vote" | "judge">(
+    "revise",
+  );
   const [mcpServers, setMcpServers] = useState("");
   const [wallClockCapMin, setWallClockCapMin] = useState("0");
   const [ambitionTiers, setAmbitionTiers] = useState("");
@@ -292,6 +296,9 @@ export function useSetupForm(navigate: (path: string) => void) {
                 preset.id === "council" && councilSharedResearch ? true : undefined,
             }
           : {}),
+        ...(preset.id === "council" && councilReconcile && councilReconcile !== "revise"
+          ? { councilReconcile }
+          : {}),
         mcpServers,
         // Per-agent provider/model from the Topology grid (including header
         // bulk-apply). Discussion presets spawn via resolveModelForTopologyIndex;
@@ -392,6 +399,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     webTools, setWebTools,
     councilSharedExplore, setCouncilSharedExplore,
     councilSharedResearch, setCouncilSharedResearch,
+    councilReconcile, setCouncilReconcile,
     mcpServers, setMcpServers,
     wallClockCapMin, setWallClockCapMin,
     ambitionTiers, setAmbitionTiers,

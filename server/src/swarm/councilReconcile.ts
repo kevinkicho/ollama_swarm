@@ -132,3 +132,31 @@ export function parseVoteResponse(
   }
   return { votedForIndex: null, rationale: "" };
 }
+
+/**
+ * Lead-agent "judge" reconcile prompt: pick ONE draft as canonical
+ * (vs. revise+merge synthesis). Used when cfg.councilReconcile === "judge".
+ */
+export function buildJudgePickPrompt(args: {
+  drafts: readonly { agentIndex: number; text: string }[];
+  userDirective?: string;
+}): string {
+  const { drafts, userDirective } = args;
+  const directive = userDirective?.trim();
+  const draftBlocks = drafts.map(
+    (d) =>
+      `=== DRAFT FROM AGENT ${d.agentIndex} ===\n${d.text.trim()}\n=== END ===`,
+  );
+  return [
+    `You are the council lead reconciling peer drafts.`,
+    `Read every draft below. PICK ONE as the canonical answer — do not merge`,
+    `conflicting claims into a compromise unless they genuinely agree.`,
+    `You may briefly cite why the winner is strongest, then present that draft's`,
+    `substance as the final council output (paraphrase or quote key points).`,
+    ...(directive ? [``, `Directive: ${directive}`, ``] : [``]),
+    ...draftBlocks,
+    ``,
+    `Start with a one-line header: WINNER: agent-<index>`,
+    `Then the full canonical answer (clear, actionable, grounded in the winner).`,
+  ].join("\n");
+}
