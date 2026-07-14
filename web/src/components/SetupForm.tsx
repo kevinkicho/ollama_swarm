@@ -657,6 +657,35 @@ export function SetupForm() {
               </label>
             </div>
           ) : null}
+
+          {[
+            "round-robin",
+            "role-diff",
+            "council",
+            "debate-judge",
+            "map-reduce",
+            "moa",
+            "stigmergy",
+            "orchestrator-worker",
+            "orchestrator-worker-deep",
+          ].includes(form.preset.id) ? (
+            <div className="mt-3 space-y-2 border-t border-ink-700/50 pt-3">
+              <label className="flex items-start gap-2 text-xs text-ink-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={!!form.mentionContracts}
+                  onChange={(e) => form.setMentionContracts(e.target.checked)}
+                  className="mt-0.5 rounded border-ink-600 bg-ink-900 text-emerald-500 focus:ring-emerald-500/40"
+                />
+                <span>
+                  @-mention contracts
+                  <span className="text-ink-500 ml-1 block sm:inline">
+                    (agents can assign structured asks via ```mention``` fences; targets see pending asks next turn)
+                  </span>
+                </span>
+              </label>
+            </div>
+          ) : null}
         </Section>
 
         <Section title="Run">

@@ -197,9 +197,9 @@ export interface RunConfigDiscussion {
    *  runner extracts ```mention``` envelopes from agent output +
    *  surfaces them in the targeted agent's next prompt as "Pending
    *  contracts you have to address". Per-pair cooldown
-   *  (MENTION_COOLDOWN_TURNS=3) prevents A→B→A loops. Default OFF —
-   *  adds prompt-shape complexity. Honored by all multi-agent
-   *  presets via the shared `agentMentionContract.ts` helper. */
+   *  (MENTION_COOLDOWN_TURNS=3) prevents A→B→A loops. Default OFF.
+   *  **Wired** in `discussionRunAgent.runDiscussionAgentCore` for all
+   *  discussion presets that use DiscussionRunnerBase. */
   mentionContracts?: boolean;
   /** Q1 (2026-05-04): self-critique pass. When set, the runner sends
    *  high-stakes turns BACK to the same agent with a critique prompt

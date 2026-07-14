@@ -162,7 +162,7 @@ export function isMentionAddressed(args: {
   return false;
 }
 
-function resolveTarget(
+export function resolveMentionTarget(
   to: string,
   resolveRole: ((role: string) => number | null) | undefined,
 ): number | null {
@@ -176,4 +176,116 @@ function resolveTarget(
   // Role label
   if (resolveRole) return resolveRole(toNorm.toLowerCase());
   return null;
+}
+
+function resolveTarget(
+  to: string,
+  resolveRole: ((role: string) => number | null) | undefined,
+): number | null {
+  return resolveMentionTarget(to, resolveRole);
+}
+
+export type PendingMention = MentionContract & { emittedTs: number };
+
+/**
+ * Collect unaddressed mention contracts targeted at `agentIndex` from the
+ * transcript. Used when cfg.mentionContracts is on.
+ */
+export function collectPendingMentionsForAgent(args: {
+  transcript: readonly TranscriptEntry[];
+  agentIndex: number;
+  resolveRole?: (role: string) => number | null;
+}): PendingMention[] {
+  const { transcript, agentIndex, resolveRole } = args;
+  const pending: PendingMention[] = [];
+
+  for (const e of transcript) {
+    if (e.role !== "agent" || typeof e.agentIndex !== "number") continue;
+    const text = e.text ?? "";
+    for (const m of parseMentionContracts(text)) {
+      const target = resolveMentionTarget(m.to, resolveRole);
+      if (target !== agentIndex) continue;
+      pending.push({
+        ...m,
+        fromAgentIndex: e.agentIndex,
+        emittedTs: e.ts,
+      });
+    }
+  }
+
+  return pending.filter(
+    (m) =>
+      !isMentionAddressed({
+        mention: m,
+        laterEntries: transcript,
+        resolveRole,
+      }),
+  );
+}
+
+/** Short instruction block so agents learn the envelope when the feature is on. */
+export function buildMentionContractsInstructionBlock(): string {
+  return [
+    "=== @-mention contracts (optional) ===",
+    "To assign a concrete ask to another agent, emit a fenced block:",
+    "```mention",
+    "to: agent-2   # or planner | auditor | judge | agent-N",
+    "ask: <one sentence>",
+    "why: <optional>",
+    "urgency: should-do | nice-to-have | blocker",
+    "```",
+    "The target agent will see pending asks in their next prompt.",
+    "=== end mention contracts ===",
+  ].join("\n");
+}
+
+/**
+ * Prepend pending mentions (+ instruction) to a discussion prompt.
+ * Empty pending still includes the instruction when `includeInstruction` is true.
+ */
+export function injectMentionContractsIntoPrompt(args: {
+  prompt: string;
+  pending: readonly MentionContract[];
+  includeInstruction?: boolean;
+}): string {
+  const parts: string[] = [];
+  if (args.includeInstruction !== false) {
+    parts.push(buildMentionContractsInstructionBlock());
+    parts.push("");
+  }
+  const block = buildPendingMentionsBlock(args.pending);
+  if (block) {
+    parts.push(block);
+    parts.push("");
+  }
+  if (parts.length === 0) return args.prompt;
+  parts.push(args.prompt);
+  return parts.join("\n");
+}
+
+/** Default role → index map for discussion swarms (best-effort). */
+export function defaultDiscussionRoleResolver(
+  agents: ReadonlyArray<{ index: number; id?: string }>,
+): (role: string) => number | null {
+  const byIndex = new Map(agents.map((a) => [a.index, a.index]));
+  const first = agents.reduce(
+    (min, a) => (a.index < min ? a.index : min),
+    agents[0]?.index ?? 1,
+  );
+  return (role: string) => {
+    const r = role.toLowerCase().trim();
+    if (r === "planner" || r === "lead" || r === "synthesizer" || r === "brain") {
+      return byIndex.get(first) ?? first;
+    }
+    if (r === "auditor" || r === "judge") {
+      const max = Math.max(...agents.map((a) => a.index));
+      return byIndex.get(max) ?? max;
+    }
+    const m = /^agent-?(\d+)$/i.exec(r);
+    if (m) {
+      const n = Number.parseInt(m[1]!, 10);
+      return byIndex.has(n) ? n : null;
+    }
+    return null;
+  };
 }

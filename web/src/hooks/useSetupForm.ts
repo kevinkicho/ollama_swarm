@@ -120,6 +120,8 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [hunkRag, setHunkRag] = useState(false);
   /** Round-robin: LLM picks next disposition vs fixed cycle. */
   const [dynamicRolePicker, setDynamicRolePicker] = useState(false);
+  /** Discussion: structured @-mention contracts between agents. */
+  const [mentionContracts, setMentionContracts] = useState(false);
   const [busy, setBusy] = useState(false);
   /** Brain RECONFIG saved after a finished run — shown on setup until Start or dismiss. */
   const [deferredPending, setDeferredPending] = useState<DeferredReconfigRecord | null>(
@@ -317,6 +319,21 @@ export function useSetupForm(navigate: (path: string) => void) {
         ...(preset.id === "round-robin" && dynamicRolePicker
           ? { dynamicRolePicker: true }
           : {}),
+        ...((
+          [
+            "round-robin",
+            "role-diff",
+            "council",
+            "debate-judge",
+            "map-reduce",
+            "moa",
+            "stigmergy",
+            "orchestrator-worker",
+            "orchestrator-worker-deep",
+          ].includes(preset.id) && mentionContracts
+        )
+          ? { mentionContracts: true }
+          : {}),
         mcpServers,
         // Per-agent provider/model from the Topology grid (including header
         // bulk-apply). Discussion presets spawn via resolveModelForTopologyIndex;
@@ -427,6 +444,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     preflightDryRun, setPreflightDryRun,
     hunkRag, setHunkRag,
     dynamicRolePicker, setDynamicRolePicker,
+    mentionContracts, setMentionContracts,
     busy, setBusy,
     deferredPending,
     deferredPendingLabel,

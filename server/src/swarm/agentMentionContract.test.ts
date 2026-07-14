@@ -7,6 +7,9 @@ import {
   buildPendingMentionsBlock,
   filterMentionsByCooldown,
   isMentionAddressed,
+  collectPendingMentionsForAgent,
+  injectMentionContractsIntoPrompt,
+  resolveMentionTarget,
   MENTION_COOLDOWN_TURNS,
   type MentionContract,
 } from "./agentMentionContract.js";
@@ -232,4 +235,60 @@ test("isMentionAddressed â€” role-label resolves via resolveRole", () => {
     resolveRole: (r) => (r === "planner" ? 1 : null),
   });
   assert.equal(got, true);
+});
+
+test("resolveMentionTarget — agent-N form", () => {
+  assert.equal(resolveMentionTarget("agent-3", undefined), 3);
+  assert.equal(resolveMentionTarget("Agent-2", undefined), 2);
+});
+
+test("collectPendingMentionsForAgent — unaddressed only", () => {
+  const transcript: TranscriptEntry[] = [
+    {
+      id: "1",
+      role: "agent",
+      agentIndex: 1,
+      text: "```mention\nto: agent-2\nask: review the patch\n```",
+      ts: 100,
+    },
+    {
+      id: "2",
+      role: "agent",
+      agentIndex: 2,
+      text: "I will review later",
+      ts: 200,
+    },
+  ];
+  // agent-2 already spoke after mention ? addressed
+  const afterSpeak = collectPendingMentionsForAgent({
+    transcript,
+    agentIndex: 2,
+  });
+  assert.equal(afterSpeak.length, 0);
+
+  const onlyEmit: TranscriptEntry[] = [transcript[0]!];
+  const pending = collectPendingMentionsForAgent({
+    transcript: onlyEmit,
+    agentIndex: 2,
+  });
+  assert.equal(pending.length, 1);
+  assert.match(pending[0]!.ask, /review the patch/);
+});
+
+test("injectMentionContractsIntoPrompt — prepends instruction + pending", () => {
+  const out = injectMentionContractsIntoPrompt({
+    prompt: "Do the turn.",
+    pending: [
+      {
+        to: "agent-2",
+        ask: "fix tests",
+        why: "",
+        urgency: "blocker",
+        fromAgentIndex: 1,
+      },
+    ],
+  });
+  assert.match(out, /mention contracts/i);
+  assert.match(out, /fix tests/);
+  assert.match(out, /Do the turn/);
 });

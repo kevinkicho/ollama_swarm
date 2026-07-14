@@ -34,6 +34,13 @@ import {
 import type { ToolResultHook } from "../tools/ToolDispatcher.js";
 import { config as appConfig } from "../config.js";
 import { createThinkGuardHandler } from "./blackboard/thinkGuardHandler.js";
+import {
+  collectPendingMentionsForAgent,
+  defaultDiscussionRoleResolver,
+  filterMentionsByCooldown,
+  injectMentionContractsIntoPrompt,
+  parseMentionContracts,
+} from "./agentMentionContract.js";
 
 export interface DiscussionRunAgentHost {
   manager: AgentManager;
@@ -151,6 +158,32 @@ export async function runDiscussionAgentCore(
     mode: opts.activity?.mode ?? (draftMode ? ("explore" as const) : undefined),
   };
 
+  // Q3: inject pending @-mention contracts when enabled.
+  let effectivePrompt = prompt;
+  if (host.active?.mentionContracts) {
+    try {
+      const agents = host.manager.list();
+      const resolveRole = defaultDiscussionRoleResolver(agents);
+      const pending = collectPendingMentionsForAgent({
+        transcript: host.transcript,
+        agentIndex: agent.index,
+        resolveRole,
+      });
+      effectivePrompt = injectMentionContractsIntoPrompt({
+        prompt,
+        pending,
+        includeInstruction: true,
+      });
+      if (pending.length > 0) {
+        host.appendSystem(
+          `[mentionContracts] agent-${agent.index} has ${pending.length} pending ask(s)`,
+        );
+      }
+    } catch {
+      // best-effort — never block the turn
+    }
+  }
+
   // markStatus is the single control-plane write (state + activity waiting).
   // Do not follow with a partial emitAgentState — that used to wipe labels.
   host.manager.markStatus(agent.id, "thinking", {
@@ -185,12 +218,12 @@ export async function runDiscussionAgentCore(
         label: activity.label,
         mode: activity.mode ?? "explore",
       },
-      promptExcerpt: prompt.slice(0, 2000),
+      promptExcerpt: effectivePrompt.slice(0, 2000),
       signal: controller.signal,
       clonePath: host.active?.localPath,
     });
 
-    const res = await promptWithFailoverAuto(agent, prompt, {
+    const res = await promptWithFailoverAuto(agent, effectivePrompt, {
       onTokens: ({ promptTokens, responseTokens }) =>
         opts.stats.recordTokens(agent.id, promptTokens, responseTokens),
       signal: controller.signal,
@@ -288,7 +321,7 @@ export async function runDiscussionAgentCore(
     const extracted = extractTextWithDiag(res, diagCtx);
     let text = extracted.text;
     if ((extracted.isEmpty || looksLikeJunk(text)) && !host.getStopping()) {
-      const retryText = await retryEmptyResponse(agent, prompt, agentName, diagCtx);
+      const retryText = await retryEmptyResponse(agent, effectivePrompt, agentName, diagCtx);
       if (retryText !== null) text = retryText;
     }
     trackPostRetryJunk(text, {
@@ -297,7 +330,38 @@ export async function runDiscussionAgentCore(
       appendSystem: (msg) => host.appendSystem(msg),
     });
 
-    return pushDiscussionEntry(host, agent, opts, text);
+    const finalText = pushDiscussionEntry(host, agent, opts, text);
+
+    // Q3: surface newly emitted mention contracts (cooldown-gated noise).
+    if (host.active?.mentionContracts) {
+      try {
+        const emitted = parseMentionContracts(finalText).map((m) => ({
+          ...m,
+          fromAgentIndex: agent.index,
+        }));
+        if (emitted.length > 0) {
+          const recentPairs: Array<{ fromIndex: number; to: string }> = [];
+          for (const e of host.transcript) {
+            if (e.role !== "agent" || typeof e.agentIndex !== "number") continue;
+            if (e.agentIndex === agent.index && e.text === finalText) continue;
+            for (const m of parseMentionContracts(e.text ?? "")) {
+              recentPairs.push({ fromIndex: e.agentIndex, to: m.to });
+            }
+          }
+          const gated = filterMentionsByCooldown(emitted, recentPairs);
+          if (gated.length > 0) {
+            host.appendSystem(
+              `[mentionContracts] agent-${agent.index} filed ${gated.length} ask(s): `
+              + gated.map((m) => `→${m.to}`).join(", "),
+            );
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return finalText;
   } catch (err) {
     const msg = watchdog.getAbortReason() ?? describeSdkError(err);
     host.appendSystem(`[${agent.id}] error: ${msg}`);
