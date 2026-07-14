@@ -28,9 +28,9 @@ See **`docs/RELEASE-1.0-PLAN.md`** and **`docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`*
 - [x] Dead-code purge + `scripts/_dead-code-scan.mjs` / `_dead-code-report.md`
 - [x] God-file modularization extracts (runners / routes / loops)
 
-**Still library-only (schema accepted):** bestOfNTurn.
+**Still library-only (schema accepted):** _(none of the former Q-lever backlog — bestOfNTurn wired for council synthesis)_.
 
-**Wired:** `councilReconcile`; `preflightDryRun`; `hunkRag`; `dynamicRolePicker`; `mentionContracts` (discussion agents).
+**Wired quality levers:** `councilReconcile`; `preflightDryRun`; `hunkRag`; `dynamicRolePicker`; `mentionContracts`; `bestOfNTurn` (council synthesis K-sample).
 
 ---
 

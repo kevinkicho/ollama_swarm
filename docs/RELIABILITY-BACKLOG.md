@@ -44,6 +44,7 @@ conditions. Absolute prompt walls and caps remain as **local fail-closed safety 
 | hunkRag unused | Schema-only | **Done:** `.swarm-hunk-examples.jsonl` on approve; few-shot inject in workerTodoPrep |
 | dynamicRolePicker unused | Schema-only | **Done:** RR no-roles meta-prompt picks next disposition; SetupForm toggle |
 | mentionContracts unused | Schema-only | **Done:** discussionRunAgent injects pending ```mention``` asks; SetupForm toggle |
+| bestOfNTurn unused | Schema-only | **Done:** council synthesis K parallel samples + judge pick; SetupForm 1–5 |
 | Autonomous soft-done spun forever | Soft `"done"` cleared `earlyStopDetail` and re-cycled | **Done:** `councilSettlementPolicy` — soft done is terminal; autonomy continues only via `"retry"` |
 | No-op apply marked completed | Empty `filesWritten` treated as successful commit | **Done:** `WorkerPipeline` fail-closed + council worker zero-write retry |
 | Blackboard zero-write approve | Auditor/propose path could complete empty work | **Done:** auditor reject zero files; proposeCommit rejects empty hunks |

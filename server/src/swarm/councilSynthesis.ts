@@ -33,6 +33,10 @@ import {
   tallyVotes,
   type VoteRecord,
 } from "./councilReconcile.js";
+import {
+  pickBestOfNSample,
+  type BestOfNSample,
+} from "./bestOfNTurn.js";
 
 
 export interface SynthesisContext {
@@ -300,67 +304,194 @@ export async function runSynthesisPass(
 
   try {
     const onTokens = ({ promptTokens, responseTokens }: { promptTokens: number; responseTokens: number }) => stats.recordTokens(lead.id, promptTokens, responseTokens);
-    const res = await promptWithFailoverAuto(lead, prompt, {
-      onTokens,
-      signal: controller.signal,
-      manager: ctx.manager as any,
-      agentName: resolveCouncilToolProfile(cfg),
-      webToolsConfig: cfg,
-      activity: {
-        kind: "council",
-        label: cfg.councilReconcile === "vote" ? "synthesis-vote-winner" : "synthesis",
-      },
-      promptAddendum: "",
-      describeError: describeSdkError,
-      onToolResultHook: buildCouncilToolCoachHook(lead, {
-        getSwarmControl: ctx.getSwarmControl,
-        getCoachAgent: ctx.getCoachAgent,
-        clonePath: cfg.localPath,
-        runId: cfg.runId,
-        manager: ctx.manager as any,
-        appendSystem: ctx.appendSystem,
-        emit: ctx.emit as (e: import("../types.js").SwarmEvent) => void,
-      }),
+    const coachHook = buildCouncilToolCoachHook(lead, {
+      getSwarmControl: ctx.getSwarmControl,
+      getCoachAgent: ctx.getCoachAgent,
+      clonePath: cfg.localPath,
       runId: cfg.runId,
-      onTiming: ({ attempt, elapsedMs, success }: { attempt: number; elapsedMs: number; success: boolean }) => {
-        stats.onTiming(lead.id, success, elapsedMs);
-        ctx.manager.recordPromptComplete(lead.id, { attempt, elapsedMs, success });
-        ctx.emit({
-          type: "agent_latency_sample",
-          agentId: lead.id,
-          agentIndex: lead.index,
-          attempt,
-          elapsedMs,
-          success,
-          ts: Date.now(),
-        });
-      },
-      onRetry: ({ attempt, max, reasonShort, delayMs }: { attempt: number; max: number; reasonShort: string; delayMs: number }) => {
-        stats.onRetry(lead.id);
-        ctx.appendSystem(
-          `[${lead.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
-        );
-      },
+      manager: ctx.manager as any,
+      appendSystem: ctx.appendSystem,
+      emit: ctx.emit as (e: import("../types.js").SwarmEvent) => void,
     });
+    const baseActivityLabel =
+      cfg.councilReconcile === "vote" ? "synthesis-vote-winner" : "synthesis";
+    const k = Math.max(1, Math.min(5, Math.floor(Number(cfg.bestOfNTurn) || 1)));
 
-    const diagCtx = {
-      runner: "council",
-      agentId: lead.id,
-      agentIndex: lead.index,
-      logDiag: ctx.logDiag,
-      manager: ctx.manager as import("../services/AgentManager.js").AgentManager,
-      signal: controller.signal,
+    const fireOneSample = async (sampleIndex: number): Promise<string> => {
+      const res = await promptWithFailoverAuto(lead, prompt, {
+        onTokens,
+        signal: controller.signal,
+        manager: ctx.manager as any,
+        agentName: resolveCouncilToolProfile(cfg),
+        webToolsConfig: cfg,
+        activity: {
+          kind: "council",
+          label: k > 1 ? `${baseActivityLabel}-k${sampleIndex + 1}` : baseActivityLabel,
+        },
+        promptAddendum: "",
+        describeError: describeSdkError,
+        onToolResultHook: coachHook,
+        runId: cfg.runId,
+        onTiming: ({ attempt, elapsedMs, success }: { attempt: number; elapsedMs: number; success: boolean }) => {
+          stats.onTiming(lead.id, success, elapsedMs);
+          ctx.manager.recordPromptComplete(lead.id, { attempt, elapsedMs, success });
+          ctx.emit({
+            type: "agent_latency_sample",
+            agentId: lead.id,
+            agentIndex: lead.index,
+            attempt,
+            elapsedMs,
+            success,
+            ts: Date.now(),
+          });
+        },
+        onRetry: ({ attempt, max, reasonShort, delayMs }: { attempt: number; max: number; reasonShort: string; delayMs: number }) => {
+          stats.onRetry(lead.id);
+          ctx.appendSystem(
+            `[${lead.id}] transport error (${reasonShort}) — retry ${attempt}/${max} in ${Math.round(delayMs / 1000)}s`,
+          );
+        },
+      });
+
+      const diagCtx = {
+        runner: "council",
+        agentId: lead.id,
+        agentIndex: lead.index,
+        logDiag: ctx.logDiag,
+        manager: ctx.manager as import("../services/AgentManager.js").AgentManager,
+        signal: controller.signal,
+      };
+      const extracted = extractTextWithDiag(res, diagCtx);
+      let sampleText = extracted.text;
+      if ((extracted.isEmpty || looksLikeJunk(sampleText)) && !stopping) {
+        const retryText = await retryEmptyResponse(
+          lead,
+          prompt,
+          resolveCouncilToolProfile(cfg),
+          diagCtx,
+        );
+        if (retryText !== null) sampleText = retryText;
+      }
+      return sampleText;
     };
-    const extracted = extractTextWithDiag(res, diagCtx);
-    let text = extracted.text;
-    if ((extracted.isEmpty || looksLikeJunk(text)) && !stopping) {
-      const retryText = await retryEmptyResponse(
-        lead,
-        prompt,
-        resolveCouncilToolProfile(cfg),
-        diagCtx,
+
+    let text: string;
+    let emptyAfterExtract = false;
+    if (k <= 1 || stopping) {
+      text = await fireOneSample(0);
+      emptyAfterExtract = !text || looksLikeJunk(text);
+    } else {
+      ctx.appendSystem(
+        `[bestOfNTurn] sampling K=${k} council synthesis candidates in parallel…`,
       );
-      if (retryText !== null) text = retryText;
+      const settled = await Promise.all(
+        Array.from({ length: k }, async (_, i) => {
+          try {
+            const t = await fireOneSample(i);
+            return { id: `sample-${i + 1}`, text: t } satisfies BestOfNSample;
+          } catch (err) {
+            ctx.appendSystem(
+              `[bestOfNTurn] sample-${i + 1} failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            return { id: `sample-${i + 1}`, text: "" } satisfies BestOfNSample;
+          }
+        }),
+      );
+      const usable = settled.filter(
+        (s) => s.text.trim().length > 0 && !looksLikeJunk(s.text),
+      );
+      const pool = usable.length > 0 ? usable : settled;
+      const judgeAgent =
+        agents.find((a) => a.index !== lead.index) ?? lead;
+      const pick = await pickBestOfNSample({
+        samples: pool,
+        taskBrief:
+          "Produce the best council synthesis of the multi-agent discussion — answer the directive, be specific and actionable, and reflect peer agreement and dissent honestly.",
+        rubric: [
+          "Answers the user directive directly",
+          "Specific and actionable (files/decisions when relevant)",
+          "Honest about agreement vs open dissent",
+          "Clear structure; not empty or junk",
+        ],
+        judgePicker: async (judgePrompt) => {
+          ctx.manager.markStatus(judgeAgent.id, "thinking");
+          ctx.emit({
+            type: "agent_state",
+            id: judgeAgent.id,
+            index: judgeAgent.index,
+            sessionId: judgeAgent.sessionId,
+            status: "thinking",
+            thinkingSince: Date.now(),
+          });
+          stats.countTurn(judgeAgent.id);
+          try {
+            const jr = await promptWithFailoverAuto(judgeAgent, judgePrompt, {
+              signal: controller.signal,
+              manager: ctx.manager as any,
+              agentName: resolveCouncilToolProfile(cfg),
+              webToolsConfig: cfg,
+              activity: { kind: "council", label: "best-of-n-judge" },
+              promptAddendum: "",
+              describeError: describeSdkError,
+              runId: cfg.runId,
+              onTokens: ({
+                promptTokens,
+                responseTokens,
+              }: {
+                promptTokens: number;
+                responseTokens: number;
+              }) => stats.recordTokens(judgeAgent.id, promptTokens, responseTokens),
+              onTiming: ({
+                attempt,
+                elapsedMs,
+                success,
+              }: {
+                attempt: number;
+                elapsedMs: number;
+                success: boolean;
+              }) => {
+                stats.onTiming(judgeAgent.id, success, elapsedMs);
+                ctx.manager.recordPromptComplete(judgeAgent.id, {
+                  attempt,
+                  elapsedMs,
+                  success,
+                });
+              },
+              onRetry: () => stats.onRetry(judgeAgent.id),
+            });
+            return (
+              extractProviderText(jr)
+              || extractTextWithDiag(jr, {
+                runner: "council",
+                agentId: judgeAgent.id,
+                agentIndex: judgeAgent.index,
+                logDiag: ctx.logDiag,
+              }).text
+              || ""
+            );
+          } finally {
+            ctx.manager.markStatus(judgeAgent.id, "idle");
+            ctx.emit({
+              type: "agent_state",
+              id: judgeAgent.id,
+              index: judgeAgent.index,
+              sessionId: judgeAgent.sessionId,
+              status: "idle",
+            });
+          }
+        },
+      });
+      const picked =
+        pool.find((s) => s.id === pick?.pickedId)
+        ?? pool[0]
+        ?? settled[0];
+      text = picked?.text ?? "";
+      emptyAfterExtract = !text || looksLikeJunk(text);
+      ctx.appendSystem(
+        `[bestOfNTurn] picked ${pick?.pickedId ?? "first-usable"}`
+        + (pick?.rationale ? ` — ${pick.rationale.slice(0, 120)}` : "")
+        + ` (${usable.length}/${k} non-junk samples)`,
+      );
     }
 
     trackPostRetryJunk(text, {
@@ -377,7 +508,7 @@ export async function runSynthesisPass(
       }
     }
 
-    const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
+    const isJunkSynthesis = looksLikeJunk(text) || emptyAfterExtract;
     if (cfg.postSynthesisCritique && !isJunkSynthesis && text.length > 0) {
       const proposals = transcript
         .filter(e => e.role === "agent")

@@ -487,6 +487,25 @@ export function SetupForm() {
                       <option value="vote">Vote (each drafter ballots; winner presented)</option>
                     </select>
                   </label>
+                  <label className="flex flex-col gap-1 text-xs text-ink-300">
+                    <span>
+                      Best-of-N synthesis
+                      <span className="text-ink-500 ml-1">
+                        (K parallel synthesis samples + judge pick; 1 = single shot)
+                      </span>
+                    </span>
+                    <select
+                      value={String(form.bestOfNTurn ?? 1)}
+                      onChange={(e) => form.setBestOfNTurn(Number(e.target.value))}
+                      className="max-w-xs rounded border border-ink-600 bg-ink-900 text-ink-200 text-xs px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500/40"
+                    >
+                      <option value="1">1 (default)</option>
+                      <option value="2">2 samples</option>
+                      <option value="3">3 samples</option>
+                      <option value="4">4 samples</option>
+                      <option value="5">5 samples</option>
+                    </select>
+                  </label>
                 </>
               ) : null}
             </div>

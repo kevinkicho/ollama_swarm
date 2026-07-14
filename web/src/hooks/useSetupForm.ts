@@ -122,6 +122,8 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [dynamicRolePicker, setDynamicRolePicker] = useState(false);
   /** Discussion: structured @-mention contracts between agents. */
   const [mentionContracts, setMentionContracts] = useState(false);
+  /** Council: K parallel synthesis samples + judge pick (1 = off). */
+  const [bestOfNTurn, setBestOfNTurn] = useState(1);
   const [busy, setBusy] = useState(false);
   /** Brain RECONFIG saved after a finished run — shown on setup until Start or dismiss. */
   const [deferredPending, setDeferredPending] = useState<DeferredReconfigRecord | null>(
@@ -334,6 +336,9 @@ export function useSetupForm(navigate: (path: string) => void) {
         )
           ? { mentionContracts: true }
           : {}),
+        ...(preset.id === "council" && bestOfNTurn > 1
+          ? { bestOfNTurn: Math.min(5, Math.max(2, Math.floor(bestOfNTurn))) }
+          : {}),
         mcpServers,
         // Per-agent provider/model from the Topology grid (including header
         // bulk-apply). Discussion presets spawn via resolveModelForTopologyIndex;
@@ -445,6 +450,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     hunkRag, setHunkRag,
     dynamicRolePicker, setDynamicRolePicker,
     mentionContracts, setMentionContracts,
+    bestOfNTurn, setBestOfNTurn,
     busy, setBusy,
     deferredPending,
     deferredPendingLabel,

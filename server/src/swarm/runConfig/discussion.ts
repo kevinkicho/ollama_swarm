@@ -131,12 +131,11 @@ export interface RunConfigDiscussion {
    *  First-cut: sequential, not parallel (parallel would need a
    *  parallel-runner harness — deferred). Caps at 5. Baseline only. */
   baselineAttempts?: number;
-  /** Q4 (2026-05-04): best-of-N at the turn level. When set, the
+  /** Q4 (2026-05-04): best-of-N at the turn level. When set (>1), the
    *  runner fires K samples for high-stakes turns + a judge picks
-   *  (length heuristic when no judge available). Generalizes T199's
-   *  self-consistency-on-hunks pattern. K cap = 5 (matching the
-   *  existing self-consistency cap). Default 1 (no fan-out). Honored
-   *  Library ready (`bestOfNTurn.ts`); not yet adopted by a runner. */
+   *  (length heuristic when no judge available). K cap = 5. Default 1
+   *  (no fan-out). **Wired** for council synthesis in `councilSynthesis`
+   *  (`runSynthesisPass`). */
   bestOfNTurn?: number;
   /** Q6 (2026-05-04): dynamic role picker for round-robin / role-diff.
    *  When set, the runner consults a meta-prompt to pick the next
