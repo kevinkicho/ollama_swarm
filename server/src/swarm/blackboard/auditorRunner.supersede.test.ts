@@ -95,4 +95,47 @@ describe("applyAuditorResult supersede", () => {
     assert.equal(pending.length, 1);
     assert.equal(pending[0].description, "revised attempt");
   });
+
+  it("posts kind:build todos with command onto the queue", () => {
+    const contract: ExitContract = {
+      missionStatement: "test",
+      criteria: [
+        {
+          id: "c1",
+          description: "regen docs",
+          expectedFiles: ["docs/api.md"],
+          status: "unmet",
+          addedAt: 1,
+        },
+      ],
+    };
+    const { ctx, todoQueue } = makeCtx(contract);
+    applyAuditorResult(
+      ctx,
+      {
+        verdicts: [
+          {
+            id: "c1",
+            status: "unmet",
+            rationale: "docs stale",
+            todos: [
+              {
+                kind: "build",
+                description: "Regenerate API docs",
+                expectedFiles: ["docs/api.md"],
+                command: "npm run docs:api",
+              },
+            ],
+          },
+        ],
+        newCriteria: [],
+      },
+      { id: "agent-1", index: 1 } as any,
+    );
+    const pending = todoQueue.list().filter((t) => t.status === "pending");
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]?.kind, "build");
+    assert.equal(pending[0]?.command, "npm run docs:api");
+    assert.equal(pending[0]?.description, "Regenerate API docs");
+  });
 });

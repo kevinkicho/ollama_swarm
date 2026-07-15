@@ -210,6 +210,37 @@ We need to update the docs.
     assert.equal(actions.filter((a) => a.text.toLowerCase().includes("add tests")).length, 1);
   });
 
+  it("dedupes re-ingested Next actions section with _(from:)_ suffix", () => {
+    const md = `
+## Findings
+
+- Refactor into separate modules and remove all duplicate definitions
+
+## Next actions
+
+**MEDIUM priority:**
+- Refactor into separate modules and remove all duplicate definitions _(from: Agent 1)_
+`;
+    const actions = extractNextActions(md);
+    const hits = actions.filter((a) =>
+      a.text.toLowerCase().includes("refactor into separate modules"),
+    );
+    assert.equal(hits.length, 1, "must not double-count original + formatted next-actions");
+    assert.ok(!hits[0]!.text.includes("_(from:"), "cleaned text drops source annotation");
+  });
+
+  it("strips JSON suggestion wrappers from council findings", () => {
+    const md = `
+## Recommendations
+
+- "suggestion": "Consolidate all FastAPI endpoints into app.py only."
+`;
+    const actions = extractNextActions(md);
+    assert.equal(actions.length, 1);
+    assert.match(actions[0]!.text, /^Consolidate all FastAPI/);
+    assert.doesNotMatch(actions[0]!.text, /suggestion/i);
+  });
+
   it("caps total actions at 10 to keep section readable", () => {
     const bullets = Array.from({ length: 20 }, (_, i) => `- Add feature ${i}`).join("\n");
     const md = `## Recommendations\n\n${bullets}`;

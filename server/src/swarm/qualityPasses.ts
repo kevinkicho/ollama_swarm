@@ -187,13 +187,43 @@ const ACTION_HEADER_PATTERNS = [
   /^#+\s*(suggested|recommended)/i,
 ];
 
+/**
+ * Normalize action text for dedup keys so re-ingesting the formatted
+ * "Next actions" section (with `_(from: …)_` suffixes) does not double-count.
+ * Also strips common JSON-field wrappers from council findings.
+ */
+export function normalizeNextActionKey(text: string): string {
+  let t = text.trim();
+  // Drop trailing source annotations from formatNextActionsMarkdown
+  t = t.replace(/\s*_\(from:\s*[^)]+\)_\s*$/i, "");
+  // Drop JSON field wrappers: "suggestion": "..." or suggestion: ...
+  t = t.replace(/^["']?(?:suggestion|issue|recommendation|action)["']?\s*:\s*/i, "");
+  // Strip surrounding quotes / escaped quotes
+  t = t.replace(/^["']+|["']+$/g, "");
+  t = t.replace(/\\"/g, '"').replace(/\\'/g, "'");
+  // Collapse whitespace
+  t = t.replace(/\s+/g, " ").trim();
+  return t.toLowerCase();
+}
+
+/** Clean display text after extraction (without lowercasing). */
+export function cleanNextActionText(text: string): string {
+  let t = text.trim();
+  t = t.replace(/\s*_\(from:\s*[^)]+\)_\s*$/i, "");
+  t = t.replace(/^["']?(?:suggestion|issue|recommendation|action)["']?\s*:\s*/i, "");
+  t = t.replace(/^["']+|["']+$/g, "");
+  t = t.replace(/\\"/g, '"').replace(/\\'/g, "'");
+  t = t.replace(/\s+/g, " ").trim();
+  return t;
+}
+
 /** Pure extractor — exported for tests. Walks the deliverable
  *  markdown looking for action lines via heuristics:
  *    1. Lines under a "Next actions" / "Recommendations" header
  *    2. Bullet lines starting with action verbs anywhere
  *    3. Lines containing "should" / "need to" / "action:"
- *  Deduplicates by lowercase text. Caps at 10 to keep the section
- *  readable. */
+ *  Deduplicates by normalized key (strips source suffixes + JSON wrappers).
+ *  Caps at 10 to keep the section readable. */
 export function extractNextActions(deliverable: string): NextAction[] {
   if (!deliverable || deliverable.trim().length === 0) return [];
   const lines = deliverable.split(/\r?\n/);
@@ -201,10 +231,14 @@ export function extractNextActions(deliverable: string): NextAction[] {
   const seen = new Set<string>();
   let currentSection: string | undefined;
   let inActionHeader = false;
+  // Skip priority-bucket subheaders emitted by formatNextActionsMarkdown
+  // so re-extraction of our own section stays clean.
+  const priorityBucket = /^\*\*(high|medium|low)\s+priority:\*\*$/i;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (line.length === 0) continue;
+    if (priorityBucket.test(line)) continue;
     // Section tracking via H2/H3.
     const headerMatch = line.match(/^#+\s+(.+)$/);
     if (headerMatch) {
@@ -219,10 +253,11 @@ export function extractNextActions(deliverable: string): NextAction[] {
     let priority: NextAction["priority"] = "medium";
 
     if (candidate) {
-      const lower = candidate.toLowerCase();
+      const cleaned = cleanNextActionText(candidate);
+      const lower = cleaned.toLowerCase();
       // Inside an action-shaped header: every bullet is an action.
       if (inActionHeader) {
-        actionText = candidate;
+        actionText = cleaned;
         priority = HIGH_PRIORITY_VERBS.some((v) => lower.startsWith(v))
           ? "high"
           : LOW_PRIORITY_VERBS.some((v) => lower.startsWith(v))
@@ -231,13 +266,13 @@ export function extractNextActions(deliverable: string): NextAction[] {
       }
       // Bullet starts with an action verb.
       else if (NORMAL_VERBS.some((v) => lower.startsWith(v + " "))) {
-        actionText = candidate;
+        actionText = cleaned;
         priority = "medium";
       } else if (HIGH_PRIORITY_VERBS.some((v) => lower.startsWith(v + " "))) {
-        actionText = candidate;
+        actionText = cleaned;
         priority = "high";
       } else if (LOW_PRIORITY_VERBS.some((v) => lower.startsWith(v + " "))) {
-        actionText = candidate;
+        actionText = cleaned;
         priority = "low";
       }
     } else if (!inActionHeader) {
@@ -246,14 +281,14 @@ export function extractNextActions(deliverable: string): NextAction[] {
       // action header (otherwise headers' prose would dominate).
       const lower = line.toLowerCase();
       if (lower.includes("should ") || lower.includes("need to ") || lower.startsWith("action:")) {
-        actionText = line.replace(/^action:\s*/i, "");
+        actionText = cleanNextActionText(line.replace(/^action:\s*/i, ""));
         priority = "medium";
       }
     }
 
     if (actionText && actionText.length >= 8 && actionText.length <= 300) {
-      const key = actionText.toLowerCase();
-      if (!seen.has(key)) {
+      const key = normalizeNextActionKey(actionText);
+      if (!seen.has(key) && key.length >= 8) {
         seen.add(key);
         actions.push({
           priority,

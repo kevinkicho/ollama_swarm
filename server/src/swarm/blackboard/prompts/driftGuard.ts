@@ -21,6 +21,8 @@ export interface DriftCheckResult {
   totalAssertions: number;
   failedAssertions: number;
   failures: Array<{ prompt: string; assertion: string }>;
+  /** Entries where expanded SYSTEM_PROMPT import failed (content needles rely on source text only). */
+  expandFailures: Array<{ prompt: string; sourceFile: string; reason: string }>;
 }
 
 function isPathInsideRoot(root: string, candidate: string): boolean {
@@ -102,28 +104,40 @@ function assertionNeedles(assertion: string): string[] {
  * Concatenate long string exports from a module so drift checks can see
  * expanded SYSTEM_PROMPT text (including spread shared snippets), not only
  * import identifiers in source.
+ * Tries the path as-is first (tsx can load `.ts`), then sibling `.js`.
  */
-async function loadExpandedExportText(absTsPath: string): Promise<string> {
-  const asJs = absTsPath.replace(/\.ts$/, ".js");
-  try {
-    const mod = await import(pathToFileURL(asJs).href);
-    const parts: string[] = [];
-    for (const v of Object.values(mod as Record<string, unknown>)) {
-      if (typeof v === "string" && v.length >= 40) {
-        parts.push(v);
-      } else if (
-        Array.isArray(v) &&
-        v.length > 0 &&
-        v.every((x) => typeof x === "string")
-      ) {
-        const joined = (v as string[]).join("\n");
-        if (joined.length >= 40) parts.push(joined);
+async function loadExpandedExportText(
+  absTsPath: string,
+): Promise<{ text: string; error?: string }> {
+  const candidates = [
+    absTsPath,
+    absTsPath.replace(/\.ts$/, ".js"),
+  ];
+  const errors: string[] = [];
+  for (const candidate of candidates) {
+    try {
+      const mod = await import(pathToFileURL(candidate).href);
+      const parts: string[] = [];
+      for (const v of Object.values(mod as Record<string, unknown>)) {
+        if (typeof v === "string" && v.length >= 40) {
+          parts.push(v);
+        } else if (
+          Array.isArray(v) &&
+          v.length > 0 &&
+          v.every((x) => typeof x === "string")
+        ) {
+          const joined = (v as string[]).join("\n");
+          if (joined.length >= 40) parts.push(joined);
+        }
       }
+      return { text: parts.join("\n") };
+    } catch (err) {
+      errors.push(
+        `${path.basename(candidate)}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-    return parts.join("\n");
-  } catch {
-    return "";
   }
+  return { text: "", error: errors.join(" | ") };
 }
 
 export async function checkPromptDrift(): Promise<DriftCheckResult> {
@@ -133,6 +147,7 @@ export async function checkPromptDrift(): Promise<DriftCheckResult> {
   let totalAssertions = 0;
   let failedAssertions = 0;
   const failures: Array<{ prompt: string; assertion: string }> = [];
+  const expandFailures: Array<{ prompt: string; sourceFile: string; reason: string }> = [];
 
   for (const entry of entries) {
     let promptPath = "";
@@ -161,7 +176,15 @@ export async function checkPromptDrift(): Promise<DriftCheckResult> {
       continue;
     }
 
-    const expanded = await loadExpandedExportText(promptPath);
+    const expandedResult = await loadExpandedExportText(promptPath);
+    if (expandedResult.error) {
+      expandFailures.push({
+        prompt: entry.name,
+        sourceFile: entry.sourceFile,
+        reason: expandedResult.error,
+      });
+    }
+    const expanded = expandedResult.text;
     // Prefer expanded runtime strings for "MUST mention" content checks;
     // keep full source for identifiers / structure.
     const mentionCorpus = (promptText + "\n" + expanded).toLowerCase();
@@ -243,5 +266,6 @@ export async function checkPromptDrift(): Promise<DriftCheckResult> {
     totalAssertions,
     failedAssertions,
     failures,
+    expandFailures,
   };
 }

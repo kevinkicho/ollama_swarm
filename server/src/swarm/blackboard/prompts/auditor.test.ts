@@ -430,11 +430,13 @@ describe("AUDITOR prompts", () => {
     assert.ok(!/additional file\(s\) omitted/.test(p));
   });
 
-  it("repair prompt echoes the parser error and prior response", () => {
+  it("repair prompt echoes the parser error and includes build todo shape", () => {
     const p = buildAuditorRepairPrompt("broken output", "JSON parse failed: xyz");
     assert.match(p, /broken output/);
     assert.match(p, /JSON parse failed: xyz/);
     assert.match(p, /verdicts/);
+    assert.match(p, /kind.*build/i);
+    assert.match(p, /command is REQUIRED/i);
   });
 
   // ---- Unit 5b: system prompt now teaches "read the file first" ----

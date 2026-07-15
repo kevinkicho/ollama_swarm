@@ -4,7 +4,7 @@ import {
   buildDirectiveBlock,
 } from "./directivePromptHelpers.js";
 import { readdirSync, realpathSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { getModelBudget } from "./modelContextBudget.js";
 import { JSON_ONLY_FINAL_RULES } from "./blackboard/prompts/sharedSnippets.js";
 
@@ -32,7 +32,8 @@ const PROJECT_CODE_EXT = new Set([
   ".cjs",
 ]);
 
-function pathStaysUnderRoot(rootReal: string, candidate: string): boolean {
+/** Exported for unit tests — same containment rule as driftGuard/resolveSafe. */
+export function pathStaysUnderRoot(rootReal: string, candidate: string): boolean {
   let candReal: string;
   try {
     candReal = realpathSync(candidate);
@@ -43,7 +44,9 @@ function pathStaysUnderRoot(rootReal: string, candidate: string): boolean {
   const rootNorm = resolve(rootReal);
   const candNorm = resolve(candReal);
   const rel = relative(rootNorm, candNorm);
-  return rel === "" || (!rel.startsWith("..") && !rel.startsWith(`..${sep}`));
+  // Match driftGuard/resolveSafe: reject ".." and absolute relatives
+  // (Windows cross-drive yields an absolute path from path.relative).
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /**

@@ -308,6 +308,30 @@ export async function writeRunSummary(
   // reading the newest per-run file.
   await writeJsonAtomic(perRunPath, json);
   await writeJsonAtomic(latestPath, json);
+
+  // Also mirror under app-level logs/{runId}/ so postmortems find summary
+  // next to debug.jsonl / next-actions even when the clone is elsewhere.
+  // Best-effort — never fail the clone write if app logs are unwritable.
+  try {
+    const runId = summary.runId?.trim();
+    if (runId) {
+      const appRunDir = path.join(process.cwd(), "logs", runId);
+      const appServerDir = path.join(process.cwd(), "server", "logs", runId);
+      for (const dir of [appRunDir, appServerDir]) {
+        await import("node:fs/promises")
+          .then((fs) => fs.mkdir(dir, { recursive: true }))
+          .catch(() => {});
+        await writeJsonAtomic(path.join(dir, "summary.json"), json).catch(() => {});
+        await writeJsonAtomic(
+          path.join(dir, buildPerRunSummaryFileName(summary.startedAt, summary.runId)),
+          json,
+        ).catch(() => {});
+      }
+    }
+  } catch {
+    // ignore mirror failures
+  }
+
   return { perRunPath, latestPath };
 }
 

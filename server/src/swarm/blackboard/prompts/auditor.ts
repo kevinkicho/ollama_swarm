@@ -671,7 +671,8 @@ export function buildAuditorUserPrompt(seed: AuditorSeed, model?: string): strin
     findings.length > 0 ? findings : "(no findings recorded)",
     "",
     "Respond now with ONLY the JSON envelope. No prose, no fences.",
-    "Shape reminder: {\"verdicts\": [...], \"newCriteria\"?: [...]}.",
+    "Shape reminder: {\"verdicts\": [{\"id\", \"status\", \"rationale\", \"todos\"?: [{\"description\", \"expectedFiles\", \"kind\"?: \"hunks\"|\"build\", \"command\"?: string}]}], \"newCriteria\"?: [...]}.",
+    "For kind:\"build\" todos, `command` is REQUIRED (allowlisted project script).",
   ].join("\n");
 }
 
@@ -686,7 +687,8 @@ export function buildAuditorRepairPrompt(previousResponse: string, parseError: s
     "--- END PREVIOUS RESPONSE ---",
     "",
     "Respond now with ONLY a JSON object matching the schema:",
-    '{"verdicts":[{"id":"c1","status":"met|wont-do|unmet","rationale":"...","todos":[{"description":"...","expectedFiles":["..."]}]}],"newCriteria":[{"description":"...","expectedFiles":["..."]}]}',
+    '{"verdicts":[{"id":"c1","status":"met|wont-do|unmet","rationale":"...","todos":[{"description":"...","expectedFiles":["..."],"kind":"hunks|build","command":"...only when kind is build"}]}],"newCriteria":[{"description":"...","expectedFiles":["..."]}]}',
+    "Todo fields: description + expectedFiles required. Optional kind (default hunks). When kind is \"build\", command is REQUIRED.",
     "",
     "No prose. No markdown fences. No commentary. Just the JSON object.",
   ].join("\n");

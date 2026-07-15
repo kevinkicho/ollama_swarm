@@ -9,7 +9,11 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { listProjectTreeSync } from "./councilPromptHelpers.js";
+import {
+  listProjectTreeSync,
+  pathStaysUnderRoot,
+} from "./councilPromptHelpers.js";
+import { realpathSync } from "node:fs";
 
 describe("listProjectTreeSync", () => {
   it("lists dirs and code files without Unix find", () => {
@@ -74,6 +78,21 @@ describe("listProjectTreeSync", () => {
       assert.ok(!files.some((f) => f.includes("deep.ts")));
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("pathStaysUnderRoot accepts children and rejects siblings", () => {
+    const root = mkdtempSync(join(tmpdir(), "proj-contain-"));
+    const sibling = mkdtempSync(join(tmpdir(), "proj-sibling-"));
+    try {
+      writeFileSync(join(root, "a.ts"), "export {};\n");
+      writeFileSync(join(sibling, "b.ts"), "export {};\n");
+      const rootReal = realpathSync(root);
+      assert.equal(pathStaysUnderRoot(rootReal, join(root, "a.ts")), true);
+      assert.equal(pathStaysUnderRoot(rootReal, join(sibling, "b.ts")), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(sibling, { recursive: true, force: true });
     }
   });
 });
