@@ -33,7 +33,7 @@ export interface PromptSnapshot {
 }
 
 /** Bumped when this registry's assertion set or coverage changes. */
-const REGISTRY_VERSION = "2026-07-15";
+const REGISTRY_VERSION = "2026-07-15b";
 
 export const promptRegistry: PromptSnapshot[] = [
   {
@@ -46,7 +46,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST NOT contain '```json' (markdown fence — would cause format failure)",
       "prompt MUST NOT contain '<tool_call' (XML drift instruction — must remain prohibition)",
       "prompt MUST prohibit read-only TODOs (rule 5a: 'DO NOT emit read-only TODOs')",
-      "prompt MUST mention 'Output ONLY valid JSON'",
+      "prompt MUST mention 'valid JSON only'",
       "prompt MUST mention 'JSON array of todos'",
       "prompt MUST mention 'imperative'",
     ],
@@ -62,7 +62,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'skip'",
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'Output ONLY valid JSON'",
+      "prompt MUST mention 'valid JSON only'",
       "prompt MUST mention 'replace_between'",
       "prompt MUST mention 'replace'",
       "prompt MUST mention 'write'",
@@ -81,13 +81,13 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'verdicts'",
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'already met or wont-do'",
+      "prompt MUST mention 'met or wont-do'",
       "prompt MUST mention 'c1, c2'",
       "prompt MUST mention 'WORKER CAPABILITIES'",
       "prompt MUST mention 'allowlisted'",
       "prompt MUST mention 'build'",
       "prompt MUST mention 'command'",
-      "prompt MUST mention 'Output ONLY valid JSON'",
+      "prompt MUST mention 'valid JSON only'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
     lastValidatedAt: Date.UTC(2026, 6, 15),
@@ -101,7 +101,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'criteria'",
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'Output ONLY valid JSON'",
+      "prompt MUST mention 'valid JSON only'",
       "prompt MUST mention 'description'",
       "prompt MUST mention 'expectedFiles'",
     ],
@@ -115,7 +115,7 @@ export const promptRegistry: PromptSnapshot[] = [
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'Output ONLY valid JSON'",
+      "prompt MUST mention 'valid JSON only'",
       "prompt MUST mention 'revised'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
@@ -128,7 +128,7 @@ export const promptRegistry: PromptSnapshot[] = [
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'Output ONLY valid JSON'",
+      "prompt MUST mention 'valid JSON only'",
       "prompt MUST mention 'verified'",
       "prompt MUST mention 'evidenceCitation'",
     ],
@@ -142,7 +142,7 @@ export const promptRegistry: PromptSnapshot[] = [
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'Output ONLY valid JSON'",
+      "prompt MUST mention 'valid JSON only'",
       "prompt MUST mention 'accept'",
       "prompt MUST mention 'reject'",
     ],
@@ -203,7 +203,7 @@ export const promptRegistry: PromptSnapshot[] = [
     version: REGISTRY_VERSION,
     sourceFile: "prompts/sharedSnippets.ts",
     expectedBehavior: [
-      "prompt MUST mention 'Output ONLY valid JSON'",
+      "prompt MUST mention 'valid JSON only'",
       "prompt MUST mention 'markdown fences'",
       "prompt MUST mention 'MENTION_CONTRACT_NOTE'",
       "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",

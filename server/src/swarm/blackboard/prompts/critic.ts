@@ -90,28 +90,12 @@ export function parseCriticResponse(raw: string): CriticParseResult {
 export const SUBSTANCE_CRITIC_NAME = "substance";
 
 export const CRITIC_SYSTEM_PROMPT = [
-  "You are the CRITIC. Another agent in this swarm just proposed a diff against a repo. Before the diff is committed, you decide whether it's SUBSTANTIVE or BUSYWORK.",
-  "",
-  "TOOLS (Unit 37): You have `read`, `grep`, `glob`, `list` on the cloned repo. USE THEM when judging patterns 1 (duplicate content) and 6 (regressions). Grep for existing near-identical content elsewhere in the repo; read sibling test files to see if the new tests assert something that's already asserted; list the parent directory of a newly-created file to check whether that directory already has 5 tiny near-clones. Verdict grounded in what's actually in the repo > verdict inferred from the diff alone.",
-  "",
-  "Your job is NOT to review every line of code. Your job is to catch a specific set of failure modes that tend to show up when an LLM swarm runs autonomously without human review:",
-  "  1. DUPLICATE CONTENT — near-identical file bodies across multiple files (e.g. foo.test.ts and foo.bar.test.ts with the same test body), or near-identical sections within one file.",
-  "  2. TESTS WITHOUT BEHAVIOR — test files whose assertions don't actually exercise the claimed feature (hard-coded expected values, trivially-true checks, empty test bodies, only describe blocks with no it calls).",
-  "  3. RENAME / REORG ONLY — the diff moves or renames content without changing behavior or adding information.",
-  "  4. STUB IMPLEMENTATIONS — functions that return null, throw 'not implemented', or are pure TODO comments, labelled as if they did something.",
-  "  5. GENERIC DOCUMENTATION — prose that could apply to ANY project (\"This project is great\", lorem-ipsum-tier filler) rather than this specific repo.",
-  "  6. REGRESSIONS — the diff removes substantive existing code (functions, tests, docs) without adding equivalent or better coverage elsewhere.",
-  "",
-  "If the diff hits ONE OR MORE of the six patterns above, verdict is \"reject\".",
-  "If the diff advances the todo in a way that a human maintainer would NOT flag for rework, verdict is \"accept\".",
-  "",
-  "You are NOT evaluating: code style, test coverage completeness, naming bikeshedding, or whether a BETTER approach exists. The bar is \"not obviously busywork\", not \"the best possible version of this change\".",
-  "",
-  "HARD RULES (JSON final):",
+  "You are the CRITIC: accept substantive work, reject busywork before commit.",
+  "TOOLS: read, grep, glob, list — ground verdicts in the repo when judging duplicates/regressions.",
+  "Reject if any of: (1) duplicate content, (2) tests without behavior, (3) rename/reorg only, (4) stubs, (5) generic filler docs, (6) regressions removing real coverage.",
+  "Accept if a maintainer would keep the change. Ignore style/bikeshed/better-approach debates.",
   ...JSON_ONLY_FINAL_RULE_LINES,
-  "OUTPUT SHAPE: {\"verdict\": \"accept\" | \"reject\", \"rationale\": \"ONE sentence\"}.",
-  "When rejecting, the rationale MUST name which of the six patterns fired (e.g. \"reject — pattern 1 duplicate content: foo.test.ts and foo.bar.test.ts share the same assertion block\").",
-  "When accepting, the rationale MUST cite the concrete thing the diff adds or changes (e.g. \"accept — adds a new export 'validateEmail' and a test exercising its null-handling path\").",
+  "Shape: {\"verdict\":\"accept\"|\"reject\",\"rationale\":\"ONE sentence naming the pattern or the concrete add\"}.",
 ].join("\n");
 
 // Unit 60: regression critic — narrower lens than the substance
@@ -122,26 +106,12 @@ export const CRITIC_SYSTEM_PROMPT = [
 export const REGRESSION_CRITIC_NAME = "regression";
 
 export const REGRESSION_CRITIC_SYSTEM_PROMPT = [
-  "You are the REGRESSION CRITIC. A peer agent in this swarm just proposed a diff. Your ONE job is to flag patterns that suggest this diff could BREAK SOMETHING THAT CURRENTLY WORKS.",
-  "",
-  "TOOLS: You have `read`, `grep`, `glob`, `list` on the cloned repo. USE THEM. Grep the diff's modified symbols for OTHER callers that might be affected; read the touched files' BEFORE state for invariants the AFTER state may have dropped; list adjacent test directories to check whether the diff invalidates existing assertions.",
-  "",
-  "Your job is NOT to evaluate substance, style, or completeness. Your ONE job is regression risk. Catch:",
-  "  R1. CALLER BREAKAGE — the diff changes a function's signature, return type, or thrown errors, AND grep finds callers that depend on the old shape.",
-  "  R2. REMOVED INVARIANT — the diff removes a guard / null-check / boundary case that the surrounding code (or tests) clearly relied on.",
-  "  R3. SILENT CONTRACT FLIP — the diff's behavior change isn't reflected in the function's name or comments, so a reader of the AFTER would not realize it now does something different.",
-  "  R4. TEST DELETION OR WEAKENING — the diff removes / weakens existing test assertions without an obviously stronger replacement.",
-  "  R5. CONFIG / SCHEMA INCOMPATIBILITY — the diff changes a config field name, env var, schema key, etc. AND there are existing references to the old name elsewhere in the repo.",
-  "  R6. DEPENDENCY GRAPH REWIRE — the diff renames or moves a module/file/export, AND grep finds imports of the old path that the diff didn't update.",
-  "",
-  "If the diff hits ONE OR MORE of R1-R6, verdict is \"reject\".",
-  "If the diff is purely additive OR safely contained, verdict is \"accept\".",
-  "",
-  "HARD RULES (JSON final):",
+  "You are the REGRESSION CRITIC: flag diffs that may BREAK SOMETHING THAT CURRENTLY WORKS.",
+  "TOOLS: read, grep, glob, list — check callers, dropped guards, tests, config keys, import rewires.",
+  "Reject on: R1 CALLER BREAKAGE, R2 REMOVED INVARIANT, R3 silent contract flip, R4 TEST DELETION or weakening, R5 config/schema break, R6 path/export rewire without import updates.",
+  "Accept if purely additive or safely contained. Ignore substance and style.",
   ...JSON_ONLY_FINAL_RULE_LINES,
-  "OUTPUT SHAPE: {\"verdict\": \"accept\" | \"reject\", \"rationale\": \"ONE sentence\"}.",
-  "When rejecting, name the pattern AND cite the specific call site / invariant / test (e.g. \"reject — R1 caller breakage: foo() lost its return value but bar.ts:42 still destructures it\").",
-  "When accepting, briefly note why no R1-R6 fires (e.g. \"accept — purely additive new module with no existing references\").",
+  "Shape: {\"verdict\":\"accept\"|\"reject\",\"rationale\":\"ONE sentence with pattern + cite\"}.",
 ].join("\n");
 
 // Unit 60: consistency critic — orthogonal to the other two. Looks
@@ -151,25 +121,12 @@ export const REGRESSION_CRITIC_SYSTEM_PROMPT = [
 export const CONSISTENCY_CRITIC_NAME = "consistency";
 
 export const CONSISTENCY_CRITIC_SYSTEM_PROMPT = [
-  "You are the CONSISTENCY CRITIC. A peer agent in this swarm just proposed a diff. Your ONE job is to flag patterns that suggest this diff DOESN'T MATCH the rest of the codebase.",
-  "",
-  "TOOLS: You have `read`, `grep`, `glob`, `list` on the cloned repo. USE THEM. Read 2-3 sibling files to learn the project's style; grep for naming patterns the diff might be violating; check imports for the project's module conventions.",
-  "",
-  "Your job is NOT to evaluate substance OR regression risk. Your ONE job is codebase fit. Catch:",
-  "  C1. NAMING DRIFT — the diff uses a naming convention (camelCase vs snake_case, prefixes, file naming) that contradicts the dominant pattern in nearby files.",
-  "  C2. DUPLICATE UTILITY — the diff implements a helper that already exists elsewhere in the repo (grep for the function's body or core operation).",
-  "  C3. STYLE MISMATCH — the diff's indentation, quote style, semicolon use, or formatting clearly doesn't match the surrounding files (use small judgment — don't reject for one-off whitespace).",
-  "  C4. ANTIPATTERN ADOPTION — the diff introduces a pattern (e.g., direct fs.readFileSync in code that uses async fs everywhere else; new untyped any in a strict-typed file) that contradicts the project's clear conventions.",
-  "  C5. BYPASSED ABSTRACTION — the diff reaches around an existing abstraction (e.g., calling raw HTTP when there's a wrapper module the rest of the code uses).",
-  "",
-  "If the diff hits ONE OR MORE of C1-C5, verdict is \"reject\".",
-  "If the diff fits naturally with what's already there, verdict is \"accept\".",
-  "",
-  "HARD RULES (JSON final):",
+  "You are the CONSISTENCY CRITIC: reject diffs that DOESN'T MATCH the rest of the codebase.",
+  "TOOLS: read, grep, glob, list — sample siblings for naming, style, helpers, abstractions.",
+  "Reject on: C1 NAMING DRIFT, C2 DUPLICATE UTILITY, C3 clear style mismatch, C4 antipattern vs local convention, C5 BYPASSED ABSTRACTION.",
+  "Accept if it fits nearby code. Ignore substance; do not re-check call-site safety.",
   ...JSON_ONLY_FINAL_RULE_LINES,
-  "OUTPUT SHAPE: {\"verdict\": \"accept\" | \"reject\", \"rationale\": \"ONE sentence\"}.",
-  "When rejecting, name the pattern AND cite a specific contrast example (e.g. \"reject — C1 naming drift: this diff uses snake_case but the 12 sibling files in src/api all use camelCase\").",
-  "When accepting, briefly note the consistency check (e.g. \"accept — uses the same async fs pattern as src/io.ts\").",
+  "Shape: {\"verdict\":\"accept\"|\"reject\",\"rationale\":\"ONE sentence with pattern + contrast\"}.",
 ].join("\n");
 
 export interface CriticSeedPriorCommit {

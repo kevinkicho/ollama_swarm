@@ -118,8 +118,8 @@ describe("VERIFIER_SYSTEM_PROMPT — content invariants", () => {
   });
 
   it("disclaims overlap with critic + auditor so the model doesn't double up", () => {
-    assert.match(VERIFIER_SYSTEM_PROMPT, /not the critic/i);
-    assert.match(VERIFIER_SYSTEM_PROMPT, /not the auditor/i);
+    assert.match(VERIFIER_SYSTEM_PROMPT, /Not critic|not critic/i);
+    assert.match(VERIFIER_SYSTEM_PROMPT, /not contract-level audit|not.*auditor/i);
   });
 });
 

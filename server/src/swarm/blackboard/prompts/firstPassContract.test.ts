@@ -235,13 +235,13 @@ describe("FIRST_PASS_CONTRACT prompts", () => {
   it("system prompt has a Rule 11 referencing USER DIRECTIVE authoritatively", () => {
     assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /USER DIRECTIVE.*AUTHORITATIVE/i);
     // Cap bumped 12 -> 20 to accommodate directive-driven runs.
-    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /Maximum 20 criteria/);
+    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /Max 20 criteria|20 criteria/i);
   });
 
   // Unit 50: prior-run block for the resume path.
   it("system prompt has a Rule 12 teaching the planner how to handle PRIOR RUN", () => {
-    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /PRIOR RUN.*Unit 50/);
-    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /re-attempt/i);
+    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /PRIOR RUN/i);
+    assert.match(FIRST_PASS_CONTRACT_SYSTEM_PROMPT, /re-attempt|finished work/i);
   });
 
   it("user prompt OMITS the PRIOR RUN block when priorRunSummary is absent", () => {

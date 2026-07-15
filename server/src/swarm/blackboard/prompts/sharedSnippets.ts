@@ -9,8 +9,8 @@
 
 /** HARD RULE lines for SYSTEM_PROMPT string arrays (single source of truth). */
 export const JSON_ONLY_FINAL_RULE_LINES: readonly string[] = [
-  "Output ONLY valid JSON as your FINAL visible response. No prose. No markdown fences. No commentary before or after.",
-  "Do NOT emit raw XML tool-call syntax (e.g. `<read path='...' />` or `<grep pattern='...' />`) AS the response — that is the SDK's internal tool-call format and parsing it as JSON fails closed. Use the actual tool functions; the SDK invokes them transparently. Visible response MUST be only the JSON.",
+  "Final visible response: valid JSON only — no prose, no markdown fences.",
+  "Do not emit raw XML tool-call tags as the reply; call tools via the SDK, then output JSON.",
 ];
 
 /** Same contract as a single joined string (discussion builders, etc.). */
@@ -18,16 +18,15 @@ export const JSON_ONLY_FINAL_RULES = JSON_ONLY_FINAL_RULE_LINES.join("\n");
 
 /** Compact JSON-array final-answer line used by council extractors. */
 export const JSON_ARRAY_ONLY_LINE =
-  "Return ONLY a JSON array. No markdown, no code fences, no explanation.";
+  "Return ONLY a JSON array — no markdown, no prose.";
 
 /** Short tools preamble for roles that may call read/grep/glob/list mid-turn. */
 export function buildRepoToolsNote(extraLines: readonly string[] = []): string {
   return [
-    "=== AVAILABLE TOOLS ===",
-    "You have read, grep, glob, and list on the cloned repo (plus other tools when the runner enabled them).",
-    "Use tools to gather evidence; your FINAL visible response must still be the structured JSON this role requires.",
+    "=== TOOLS ===",
+    "read, grep, glob, list (and others when enabled). Use tools for evidence; final reply is still the role's JSON.",
     ...extraLines,
-    "=== end TOOLS NOTE ===",
+    "=== end TOOLS ===",
   ].join("\n");
 }
 
@@ -36,12 +35,12 @@ export function buildRepoToolsNote(extraLines: readonly string[] = []): string {
  * Do NOT inject into planner/worker/auditor/critic/verifier system prompts.
  */
 export const MENTION_CONTRACT_NOTE = [
-  "Optional inter-agent ask (freeform roles only): you may emit a fenced mention envelope:",
+  "Optional freeform mention envelope:",
   "```mention",
   "to: planner|auditor|judge|agent-N",
   "ask: <one sentence>",
   "why: <optional>",
   "urgency: blocker|should-do|nice-to-have",
   "```",
-  "JSON-only roles must NOT use mention fences — route work through todos / verdicts / structured fields instead.",
+  "JSON-only roles: use todos/verdicts instead of mention fences.",
 ].join("\n");

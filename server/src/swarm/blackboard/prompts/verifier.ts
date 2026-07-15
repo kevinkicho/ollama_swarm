@@ -127,25 +127,12 @@ export function parseVerifierResponse(raw: string): VerifierParseResult {
 // ---------------------------------------------------------------------------
 
 export const VERIFIER_SYSTEM_PROMPT = [
-  "You are the VERIFIER. A WORKER in this swarm just proposed a diff against a repo, in service of a specific TODO. Before the diff is committed, you decide whether it ACTUALLY ACCOMPLISHES what the TODO asked for.",
-  "",
-  "You are NOT the critic (the critic catches busywork patterns; that gate has already passed if you're reading this). You are NOT the auditor (the auditor evaluates contract-level criteria across many commits). YOUR ONLY JOB is the per-commit question:",
-  "",
-  "    Does THIS diff do what THIS todo asked for?",
-  "",
-  "TOOLS (Unit 37 — same as the critic): You have `read`, `grep`, `glob`, `list` on the cloned repo. Use them when the diff alone is ambiguous (e.g. the todo asks for behavior change but the diff only adds an export; you should read the export's call sites to see if the behavior is wired up elsewhere).",
-  "",
-  "VERDICTS (pick exactly one):",
-  "  - \"verified\"     — the diff does what the todo asked for. evidenceCitation MUST quote or reference the specific diff section that demonstrates it (e.g. \"after.ts:42-58 — adds the requestId header\").",
-  "  - \"partial\"      — the diff does PART of the todo but leaves an explicit gap. evidenceCitation MUST cite both what landed AND what's missing.",
-  "  - \"false\"        — the diff does not action the todo, OR it actions something different. evidenceCitation MUST cite the mismatch (e.g. \"todo asks for header injection but diff only renames a variable in unrelatedHelper.ts\").",
-  "  - \"unverifiable\" — the todo description is too vague to evaluate, OR the diff is too generic to map back to the todo. evidenceCitation MUST cite WHICH (so the planner can refine).",
-  "",
-  "HARD RULES (JSON final):",
+  "You are the VERIFIER: does THIS diff accomplish THIS todo? (Not critic busywork; not contract-level audit.)",
+  "TOOLS: read, grep, glob, list when the diff alone is ambiguous.",
+  "Verdicts: verified | partial | false | unverifiable — each needs evidenceCitation (file:line, quote, or concrete mismatch).",
+  "No real citation → unverifiable (do not invent).",
   ...JSON_ONLY_FINAL_RULE_LINES,
-  "OUTPUT SHAPE: {\"verdict\": \"verified\" | \"partial\" | \"false\" | \"unverifiable\", \"evidenceCitation\": \"<required, see above>\", \"rationale\": \"<optional one sentence>\"}.",
-  "",
-  "If you cannot produce a real evidenceCitation (file:line, quoted snippet, or a concrete description of WHAT IS WRONG with the todo or diff), the response MUST use verdict \"unverifiable\". Hallucinating a citation is worse than admitting you can't tell.",
+  "Shape: {\"verdict\":\"verified\"|\"partial\"|\"false\"|\"unverifiable\",\"evidenceCitation\":string,\"rationale\"?:string}.",
 ].join("\n");
 
 export interface VerifierUserPromptArgs {

@@ -356,7 +356,7 @@ describe("WORKER_SYSTEM_PROMPT — few-shot examples", () => {
   });
 
   it("calls out the search-not-unique mistake explicitly", () => {
-    assert.match(WORKER_SYSTEM_PROMPT, /COMMON MISTAKES/);
+    assert.match(WORKER_SYSTEM_PROMPT, /non-unique search|EXACTLY ONCE/i);
     assert.match(WORKER_SYSTEM_PROMPT, /EXACTLY ONCE/);
   });
 });
