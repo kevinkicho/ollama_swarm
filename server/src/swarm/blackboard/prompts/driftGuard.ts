@@ -7,6 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -22,36 +23,55 @@ export interface DriftCheckResult {
   failures: Array<{ prompt: string; assertion: string }>;
 }
 
+function isPathInsideRoot(root: string, candidate: string): boolean {
+  const rootResolved = path.resolve(root);
+  const candResolved = path.resolve(candidate);
+  const rel = path.relative(rootResolved, candResolved);
+  // Outside root → relative path starts with .. or is absolute
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
 /**
  * Resolve a registry sourceFile to an absolute path.
  * - `prompts/...` → under blackboard/
  * - otherwise → under swarm/ (discussion helpers, bestOfN, etc.)
+ * Rejects path escape (`..` segments that leave the root).
  */
 export function resolveRegistrySourcePath(sourceFile: string): string {
-  const normalized = sourceFile.replace(/\\/g, "/");
-  if (normalized.startsWith("prompts/")) {
-    return path.resolve(blackboardRoot, normalized);
+  const normalized = sourceFile.replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized || normalized.includes("\0")) {
+    throw new Error(`invalid registry sourceFile: ${sourceFile}`);
   }
-  return path.resolve(swarmRoot, normalized);
+  const underBlackboard = normalized.startsWith("prompts/");
+  const root = underBlackboard ? blackboardRoot : swarmRoot;
+  const resolved = path.resolve(root, normalized);
+  if (!isPathInsideRoot(root, resolved)) {
+    throw new Error(
+      `registry sourceFile escapes root: ${sourceFile} → ${resolved}`,
+    );
+  }
+  return resolved;
 }
 
-/** Strip // line comments and /* block comments *\/ so drift checks
- *  run against string content the model would see (or export text),
- *  not parser implementation notes. */
+/**
+ * Best-effort strip of // line comments and /* block comments *\/.
+ * Limitations (documented on purpose — not a full TS parser):
+ * - Only treats `"` for "inside string" when deciding line-comment starts
+ *   (template literals / `'` / escaped quotes can mis-strip).
+ * - Block removal is non-greedy `/* ... *\/` and can break on nested or
+ *   string-embedded comment markers.
+ * Good enough for our prompt modules; do not rely on perfect fidelity.
+ */
 function stripTsComments(src: string): string {
-  // Block comments first
   let out = src.replace(/\/\*[\s\S]*?\*\//g, "");
-  // Line comments (not inside strings — good enough for our prompt modules)
   out = out
     .split(/\r?\n/)
     .map((line) => {
-      // Keep string content that has // inside quotes; simple heuristic:
-      // only strip // that is outside of quotes by counting quotes before //.
       const idx = line.indexOf("//");
       if (idx < 0) return line;
       const before = line.slice(0, idx);
       const quotes = (before.match(/"/g) ?? []).length;
-      if (quotes % 2 === 1) return line; // inside string
+      if (quotes % 2 === 1) return line;
       return before;
     })
     .join("\n");
@@ -64,16 +84,46 @@ function assertionNeedles(assertion: string): string[] {
   if (quoted.length > 0) {
     return quoted.filter((q) => q.length > 0);
   }
-  // Fall back: tokens after MUST mention/contain/require
-  const m = assertion.match(
-    /MUST (?:mention|contain|require)\s+(.+)$/i,
-  );
+  const m = assertion.match(/MUST (?:mention|contain|require)\s+(.+)$/i);
   if (!m) return [];
   return m[1]!
     .split(/[\s,;:()]+/)
     .map((t) => t.replace(/^["']|["']$/g, ""))
     .filter((t) => t.length > 3)
-    .filter((t) => !/^(prompt|output|field|array|object|rule|only|valid|json|format|as|the|and|with|from|when)$/i.test(t));
+    .filter(
+      (t) =>
+        !/^(prompt|output|field|array|object|rule|only|valid|json|format|as|the|and|with|from|when)$/i.test(
+          t,
+        ),
+    );
+}
+
+/**
+ * Concatenate long string exports from a module so drift checks can see
+ * expanded SYSTEM_PROMPT text (including spread shared snippets), not only
+ * import identifiers in source.
+ */
+async function loadExpandedExportText(absTsPath: string): Promise<string> {
+  const asJs = absTsPath.replace(/\.ts$/, ".js");
+  try {
+    const mod = await import(pathToFileURL(asJs).href);
+    const parts: string[] = [];
+    for (const v of Object.values(mod as Record<string, unknown>)) {
+      if (typeof v === "string" && v.length >= 40) {
+        parts.push(v);
+      } else if (
+        Array.isArray(v) &&
+        v.length > 0 &&
+        v.every((x) => typeof x === "string")
+      ) {
+        const joined = (v as string[]).join("\n");
+        if (joined.length >= 40) parts.push(joined);
+      }
+    }
+    return parts.join("\n");
+  } catch {
+    return "";
+  }
 }
 
 export async function checkPromptDrift(): Promise<DriftCheckResult> {
@@ -85,7 +135,19 @@ export async function checkPromptDrift(): Promise<DriftCheckResult> {
   const failures: Array<{ prompt: string; assertion: string }> = [];
 
   for (const entry of entries) {
-    const promptPath = resolveRegistrySourcePath(entry.sourceFile);
+    let promptPath = "";
+    try {
+      promptPath = resolveRegistrySourcePath(entry.sourceFile);
+    } catch (err) {
+      failedAssertions++;
+      totalAssertions++;
+      failures.push({
+        prompt: entry.name,
+        assertion: `source path invalid: ${entry.sourceFile} (${err instanceof Error ? err.message : String(err)})`,
+      });
+      continue;
+    }
+
     let promptText = "";
     try {
       promptText = fs.readFileSync(promptPath, "utf8");
@@ -99,6 +161,10 @@ export async function checkPromptDrift(): Promise<DriftCheckResult> {
       continue;
     }
 
+    const expanded = await loadExpandedExportText(promptPath);
+    // Prefer expanded runtime strings for "MUST mention" content checks;
+    // keep full source for identifiers / structure.
+    const mentionCorpus = (promptText + "\n" + expanded).toLowerCase();
     const codeSansComments = stripTsComments(promptText);
     const lowerFull = promptText.toLowerCase();
     const lowerCode = codeSansComments.toLowerCase();
@@ -111,12 +177,7 @@ export async function checkPromptDrift(): Promise<DriftCheckResult> {
         const match = assertion.match(/MUST NOT contain '([^']+)'/);
         if (match) {
           const token = match[1]!.toLowerCase();
-          // Fence tokens: only fail when a non-comment string actively
-          // teaches wrapping the final answer in fences (positive example).
           if (token === "```json" || token === "```") {
-            // After stripping comments, if ```json remains inside a
-            // string that is part of SYSTEM_PROMPT instruction TO emit
-            // fences — fail. Allow "No markdown fences" / "no fences".
             if (lowerCode.includes(token)) {
               const lines = codeSansComments.split(/\r?\n/);
               ok = !lines.some((line) => {
@@ -136,7 +197,6 @@ export async function checkPromptDrift(): Promise<DriftCheckResult> {
                 ) {
                   return false;
                 }
-                // Positive instruction like: wrap in ```json
                 return true;
               });
             }
@@ -153,20 +213,20 @@ export async function checkPromptDrift(): Promise<DriftCheckResult> {
         if (needles.length === 0) {
           ok = false;
         } else {
-          // All quoted needles must appear; for unquoted, require every
-          // significant token appears in the source.
-          ok = needles.every((n) => lowerFull.includes(n.toLowerCase()));
+          // Check expanded+source corpus so emitted prompt text counts
+          // even when it only appears via shared snippet spread.
+          ok = needles.every((n) => mentionCorpus.includes(n.toLowerCase()));
         }
       } else if (assertion.includes("MUST prohibit")) {
         const match = assertion.match(/MUST prohibit.*?['']?([A-Za-z-]+)/i);
-        if (match && !lowerFull.includes(match[1]!.toLowerCase())) {
+        if (match && !mentionCorpus.includes(match[1]!.toLowerCase())) {
           ok = false;
         }
       } else if (assertion.includes("MUST limit")) {
         const m =
           assertion.match(/MAX_HUNKS\s*\(?\s*(\d+)/i) ||
           assertion.match(/\((\d+)\)/);
-        if (m && !promptText.includes(m[1]!)) {
+        if (m && !promptText.includes(m[1]!) && !expanded.includes(m[1]!)) {
           ok = false;
         }
       }

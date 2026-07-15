@@ -9,6 +9,9 @@
 //   - "prompts/<file>.ts" → relative to server/src/swarm/blackboard/
 //   - anything else        → relative to server/src/swarm/
 //
+// Prefer needles that appear in *emitted* prompt text (or expanded exports).
+// Identifier-only checks (e.g. import names) are secondary.
+//
 // Usage: npx tsx eval/run-eval.mjs --drift-check
 //        (also wired from Orchestrator.start via driftGuard)
 
@@ -30,7 +33,7 @@ export interface PromptSnapshot {
 }
 
 /** Bumped when this registry's assertion set or coverage changes. */
-const REGISTRY_VERSION = "2026-07-14";
+const REGISTRY_VERSION = "2026-07-15";
 
 export const promptRegistry: PromptSnapshot[] = [
   {
@@ -38,28 +41,28 @@ export const promptRegistry: PromptSnapshot[] = [
     version: REGISTRY_VERSION,
     sourceFile: "prompts/planner.ts",
     expectedBehavior: [
-      "prompt MUST mention 'description' as output field",
-      "prompt MUST mention 'expectedFiles' as output field",
+      "prompt MUST mention 'description'",
+      "prompt MUST mention 'expectedFiles'",
       "prompt MUST NOT contain '```json' (markdown fence — would cause format failure)",
       "prompt MUST NOT contain '<tool_call' (XML drift instruction — must remain prohibition)",
       "prompt MUST prohibit read-only TODOs (rule 5a: 'DO NOT emit read-only TODOs')",
-      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
+      "prompt MUST mention 'Output ONLY valid JSON'",
       "prompt MUST mention 'JSON array of todos'",
-      "prompt MUST mention 'imperative' (description style)",
+      "prompt MUST mention 'imperative'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "worker-hunks",
     version: REGISTRY_VERSION,
     sourceFile: "prompts/worker.ts",
     expectedBehavior: [
-      "prompt MUST mention 'hunks' as output array",
-      "prompt MUST mention 'skip' as optional output field",
+      "prompt MUST mention 'hunks'",
+      "prompt MUST mention 'skip'",
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
+      "prompt MUST mention 'Output ONLY valid JSON'",
       "prompt MUST mention 'replace_between'",
       "prompt MUST mention 'replace'",
       "prompt MUST mention 'write'",
@@ -68,24 +71,26 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST limit hunks to MAX_HUNKS (16)",
     ],
     lastValidatedModel: "gemma4:31b-cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "auditor-verdict",
     version: REGISTRY_VERSION,
     sourceFile: "prompts/auditor.ts",
     expectedBehavior: [
-      "prompt MUST mention 'verdicts' as output array",
+      "prompt MUST mention 'verdicts'",
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
       "prompt MUST mention 'already met or wont-do'",
       "prompt MUST mention 'c1, c2'",
       "prompt MUST mention 'WORKER CAPABILITIES'",
       "prompt MUST mention 'allowlisted'",
-      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
+      "prompt MUST mention 'build'",
+      "prompt MUST mention 'command'",
+      "prompt MUST mention 'Output ONLY valid JSON'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "contract-criteria",
@@ -96,12 +101,12 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'criteria'",
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
+      "prompt MUST mention 'Output ONLY valid JSON'",
       "prompt MUST mention 'description'",
       "prompt MUST mention 'expectedFiles'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "replanner-todos",
@@ -110,11 +115,11 @@ export const promptRegistry: PromptSnapshot[] = [
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
+      "prompt MUST mention 'Output ONLY valid JSON'",
       "prompt MUST mention 'revised'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "verifier-review",
@@ -123,12 +128,12 @@ export const promptRegistry: PromptSnapshot[] = [
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
+      "prompt MUST mention 'Output ONLY valid JSON'",
       "prompt MUST mention 'verified'",
       "prompt MUST mention 'evidenceCitation'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "critic-review",
@@ -137,12 +142,12 @@ export const promptRegistry: PromptSnapshot[] = [
     expectedBehavior: [
       "prompt MUST NOT contain '```json' (markdown fence)",
       "prompt MUST NOT contain '<tool_call' (XML drift)",
-      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
+      "prompt MUST mention 'Output ONLY valid JSON'",
       "prompt MUST mention 'accept'",
       "prompt MUST mention 'reject'",
     ],
     lastValidatedModel: "glm-5.1:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
 
   // ── Discussion / control critical paths (source under server/src/swarm/) ──
@@ -157,7 +162,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'FIXING/ENHANCING'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "debate-judge-json",
@@ -168,7 +173,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST NOT contain '<tool_call'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "ow-lead-plan",
@@ -180,7 +185,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'no markdown fences'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "best-of-n-judge",
@@ -191,7 +196,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'STRICT JSON'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "shared-json-snippets",
@@ -201,11 +206,12 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'Output ONLY valid JSON'",
       "prompt MUST mention 'markdown fences'",
       "prompt MUST mention 'MENTION_CONTRACT_NOTE'",
-      "prompt MUST mention 'JSON_ONLY_FINAL_RULES'",
+      "prompt MUST mention 'JSON_ONLY_FINAL_RULE_LINES'",
       "prompt MUST mention 'JSON_ARRAY_ONLY_LINE'",
+      "prompt MUST mention 'Return ONLY a JSON array'",
     ],
     lastValidatedModel: "n/a-static",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "stigmergy-territory",
@@ -217,7 +223,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'no markdown fences'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "moa-aggregator",
@@ -228,7 +234,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'proposers'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "map-reduce-mapper",
@@ -239,7 +245,7 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'USER DIRECTIVE'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
   {
     name: "council-todo-extract",
@@ -249,8 +255,10 @@ export const promptRegistry: PromptSnapshot[] = [
       "prompt MUST mention 'JSON_ARRAY_ONLY_LINE'",
       "prompt MUST mention 'ACTIONABLE'",
       "prompt MUST mention 'PARTITIONING'",
+      "prompt MUST mention 'buildAuditFollowUpTodoPrompt'",
+      "prompt MUST mention 'buildCouncilTodoExtractPrompt'",
     ],
     lastValidatedModel: "deepseek-v4-flash:cloud",
-    lastValidatedAt: Date.UTC(2026, 6, 14),
+    lastValidatedAt: Date.UTC(2026, 6, 15),
   },
 ];

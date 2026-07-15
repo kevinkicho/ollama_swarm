@@ -91,6 +91,29 @@ export function buildAuditorUnmetTodoFallbackPrompt(
   ].join("\n");
 }
 
+/** Follow-up todos from incomplete audit findings (JSON-array contract). */
+export function buildAuditFollowUpTodoPrompt(args: {
+  missingWork: string;
+  treeSection: string;
+}): string {
+  return [
+    "The council audit found incomplete work. Extract specific actionable todos to complete it.",
+    "",
+    "Incomplete work identified by auditors:",
+    args.missingWork.slice(0, 2000),
+    args.treeSection.trim() ? args.treeSection : "",
+    "",
+    JSON_ARRAY_ONLY_LINE,
+    '[{"description": "specific actionable change", "expectedFiles": ["path/to/file.ts"]}]',
+    "",
+    "Rules:",
+    "- Each item must be a CONCRETE, SPECIFIC change to complete the incomplete work.",
+    "- Max 4 items.",
+  ]
+    .filter((line, i, arr) => !(line === "" && arr[i - 1] === ""))
+    .join("\n");
+}
+
 type CouncilRepos = {
   listTopLevel: (path: string) => Promise<string[]>;
   listRepoFiles: (path: string, opts: { maxFiles: number }) => Promise<string[]>;
@@ -131,18 +154,10 @@ export async function extractTodosFromAudit(
     treeSection = `\nProject top-level files: ${tree.join(", ")}`;
   } catch { /* ignore */ }
 
-  const prompt = `The council audit found incomplete work. Extract specific actionable todos to complete it.
-
-Incomplete work identified by auditors:
-${missingWork.slice(0, 2000)}
-${treeSection}
-
-Return ONLY a JSON array:
-[{"description": "specific actionable change", "expectedFiles": ["path/to/file.ts"]}]
-
-Rules:
-- Each item must be a CONCRETE, SPECIFIC change to complete the incomplete work.
-- Max 4 items.`;
+  const prompt = buildAuditFollowUpTodoPrompt({
+    missingWork,
+    treeSection,
+  });
 
   try {
     const { controller, cleanup } = createTimeoutController();

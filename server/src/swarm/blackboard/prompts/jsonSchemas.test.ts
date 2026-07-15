@@ -126,6 +126,16 @@ test("AUDITOR_VERDICT_JSON_SCHEMA — todos is optional in verdict items", () =>
   assert.ok(required.includes("rationale"));
 });
 
+test("AUDITOR_VERDICT_JSON_SCHEMA — todos support build anyOf branch", () => {
+  const todos = AUDITOR_VERDICT_JSON_SCHEMA.properties.verdicts.items.properties.todos;
+  const items = todos.items as { anyOf?: Array<{ required?: readonly string[] }> };
+  assert.ok(Array.isArray(items.anyOf) && items.anyOf.length >= 2, "todos items must be anyOf hunks|build");
+  const buildBranch = items.anyOf.find(
+    (b) => Array.isArray(b.required) && b.required.includes("command"),
+  );
+  assert.ok(buildBranch, "build branch must require command");
+});
+
 test("AUDITOR_VERDICT_JSON_SCHEMA — newCriteria is optional at envelope level", () => {
   const required = AUDITOR_VERDICT_JSON_SCHEMA.required as readonly string[];
   assert.ok(!required.includes("newCriteria"));

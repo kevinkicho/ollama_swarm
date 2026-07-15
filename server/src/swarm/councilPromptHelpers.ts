@@ -3,8 +3,8 @@ import {
   readDirective,
   buildDirectiveBlock,
 } from "./directivePromptHelpers.js";
-import { readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { readdirSync, realpathSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { getModelBudget } from "./modelContextBudget.js";
 import { JSON_ONLY_FINAL_RULES } from "./blackboard/prompts/sharedSnippets.js";
 
@@ -32,9 +32,25 @@ const PROJECT_CODE_EXT = new Set([
   ".cjs",
 ]);
 
+function pathStaysUnderRoot(rootReal: string, candidate: string): boolean {
+  let candReal: string;
+  try {
+    candReal = realpathSync(candidate);
+  } catch {
+    // Dangling / unreadable — skip rather than list outside
+    return false;
+  }
+  const rootNorm = resolve(rootReal);
+  const candNorm = resolve(candReal);
+  const rel = relative(rootNorm, candNorm);
+  return rel === "" || (!rel.startsWith("..") && !rel.startsWith(`..${sep}`));
+}
+
 /**
  * Cross-platform project tree for prompt context (replaces Unix find|grep).
  * Pure sync walk; best-effort — empty string on failure.
+ * Skips symlink/junction entries and rejects paths that resolve outside root
+ * so model context does not leak linked dependency trees.
  */
 export function listProjectTreeSync(
   root: string,
@@ -46,8 +62,16 @@ export function listProjectTreeSync(
   const dirs: string[] = [];
   const files: string[] = [];
 
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    return { dirs, files };
+  }
+
   const walk = (dir: string, depth: number) => {
     if (dirs.length >= maxDirs && files.length >= maxFiles) return;
+    if (!pathStaysUnderRoot(rootReal, dir)) return;
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -59,8 +83,14 @@ export function listProjectTreeSync(
     for (const ent of entries) {
       if (PROJECT_SKIP_DIRS.has(ent.name)) continue;
       if (ent.name.startsWith(".") && ent.name !== ".env.example") continue;
+      // Do not follow symlink/junction directories or files (Windows clones
+      // with linked deps would otherwise leak outside the project root).
+      if (typeof ent.isSymbolicLink === "function" && ent.isSymbolicLink()) {
+        continue;
+      }
       const full = join(dir, ent.name);
-      const rel = relative(root, full).replace(/\\/g, "/");
+      if (!pathStaysUnderRoot(rootReal, full)) continue;
+      const rel = relative(rootReal, full).replace(/\\/g, "/");
       if (ent.isDirectory()) {
         if (dirs.length < maxDirs) dirs.push(`./${rel}`);
         if (depth < maxDepth) walk(full, depth + 1);
@@ -75,7 +105,7 @@ export function listProjectTreeSync(
     }
   };
 
-  walk(root, 0);
+  walk(rootReal, 0);
   return { dirs, files };
 }
 

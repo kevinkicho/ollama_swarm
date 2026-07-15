@@ -29,10 +29,21 @@ const filePathEntry = z
     message: "must be a file path, not a directory (no trailing / or \\)",
   });
 
-const AuditorTodoSchema = z.object({
+// Build-style todos (#237 parity with planner/replanner). Hunks default;
+// kind:"build" requires a non-empty command the runner will post through.
+const AuditorTodoSchemaHunks = z.object({
+  kind: z.literal("hunks").optional(),
   description: z.string().trim().min(1).max(500),
   expectedFiles: z.array(filePathEntry).min(1).max(2),
+  command: z.undefined().optional(),
 });
+const AuditorTodoSchemaBuild = z.object({
+  kind: z.literal("build"),
+  description: z.string().trim().min(1).max(500),
+  expectedFiles: z.array(filePathEntry).min(1).max(2),
+  command: z.string().trim().min(1).max(500),
+});
+const AuditorTodoSchema = z.union([AuditorTodoSchemaHunks, AuditorTodoSchemaBuild]);
 
 const VerdictStatusSchema = z.enum(["met", "wont-do", "unmet"]);
 
@@ -56,6 +67,10 @@ export const AuditorResponseSchema = z.object({
 export interface AuditorTodo {
   description: string;
   expectedFiles: string[];
+  /** "hunks" (default) or "build" — build requires `command`. */
+  kind?: "hunks" | "build";
+  /** Shell command for kind:"build" todos (runner enforce via build worker). */
+  command?: string;
 }
 
 export interface AuditorVerdict {
@@ -110,10 +125,28 @@ export function parseAuditorResponse(raw: string): AuditorParseResult {
   const verdicts: AuditorVerdict[] = [];
   const dropped: AuditorDropped[] = [];
   for (const item of envelope.verdicts) {
-    const itemProcessed = lenientPreprocess(item, {
+    // Preprocess nested todos (description/command/expectedFiles) before Zod.
+    let itemForParse: unknown = item;
+    if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+      const rec = item as Record<string, unknown>;
+      if (Array.isArray(rec.todos)) {
+        itemForParse = {
+          ...rec,
+          todos: rec.todos.map((t) =>
+            lenientPreprocess(t, {
+              maxDescription: 500,
+              maxExpectedFiles: 2,
+              maxCommand: 500,
+            }),
+          ),
+        };
+      }
+    }
+    const itemProcessed = lenientPreprocess(itemForParse, {
       maxDescription: 500,
       maxExpectedFiles: 2,
       maxRationale: 800,
+      maxCommand: 500,
     });
     const v = AuditorVerdictSchema.safeParse(itemProcessed);
     if (v.success) {
@@ -121,10 +154,19 @@ export function parseAuditorResponse(raw: string): AuditorParseResult {
         id: v.data.id,
         status: v.data.status,
         rationale: v.data.rationale,
-        todos: (v.data.todos ?? []).map((t) => ({
-          description: t.description,
-          expectedFiles: [...t.expectedFiles],
-        })),
+        todos: (v.data.todos ?? []).map((t) => {
+          const base: AuditorTodo = {
+            description: t.description,
+            expectedFiles: [...t.expectedFiles],
+          };
+          if (t.kind === "build" && typeof t.command === "string") {
+            base.kind = "build";
+            base.command = t.command;
+          } else if (t.kind === "hunks") {
+            base.kind = "hunks";
+          }
+          return base;
+        }),
       });
     } else {
       const reason = v.error.issues
@@ -204,7 +246,7 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "HARD RULES:",
   "1. JSON final response:",
   ...JSON_ONLY_FINAL_RULE_LINES.map((line) => `   ${line}`),
-  "2. Shape: {\"verdicts\": [{\"id\": string, \"status\": \"met\"|\"wont-do\"|\"unmet\", \"rationale\": string, \"todos\"?: [...]}], \"newCriteria\"?: [{\"description\": string, \"expectedFiles\": string[]}]}.",
+  "2. Shape: {\"verdicts\": [{\"id\": string, \"status\": \"met\"|\"wont-do\"|\"unmet\", \"rationale\": string, \"todos\"?: Array<{\"description\": string, \"expectedFiles\": string[], \"kind\"?: \"hunks\"|\"build\", \"command\"?: string}>}], \"newCriteria\"?: [{\"description\": string, \"expectedFiles\": string[]}]}. For kind:\"build\", `command` is REQUIRED (allowlisted project script). Default omitted kind is hunks.",
   "3. Every verdict's `id` MUST match an existing unmet criterion ID (c1, c2, ...). Do NOT include verdicts for criteria that are already met or wont-do.",
   "4. For `unmet` status, `todos` is REQUIRED and must contain 1–4 items; each todo names ≤2 expectedFiles (repo-relative paths).",
   "5. Each verdict's `rationale` is one sentence explaining the call; when possible, reference what you saw in the current file state.",

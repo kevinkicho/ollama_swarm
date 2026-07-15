@@ -7,17 +7,14 @@
 //   - Brain config UX may intentionally use ```json for pasteable config.
 //   - Freeform discussion may use ```mention envelopes (agentMentionContract).
 
-/** Core "visible final answer is bare JSON" contract (single string). */
-export const JSON_ONLY_FINAL_RULES = [
-  "Output ONLY valid JSON as your FINAL visible response. No prose. No markdown fences. No commentary before or after.",
-  "Do NOT emit raw XML tool-call syntax (e.g. `<read path='...' />` or `<grep pattern='...' />`) AS the response — that is the SDK's internal tool-call format and parsing it as JSON fails closed. Use the actual tool functions; the SDK invokes them transparently.",
-].join("\n");
-
-/** Same contract as HARD RULE lines for SYSTEM_PROMPT string arrays. */
+/** HARD RULE lines for SYSTEM_PROMPT string arrays (single source of truth). */
 export const JSON_ONLY_FINAL_RULE_LINES: readonly string[] = [
   "Output ONLY valid JSON as your FINAL visible response. No prose. No markdown fences. No commentary before or after.",
   "Do NOT emit raw XML tool-call syntax (e.g. `<read path='...' />` or `<grep pattern='...' />`) AS the response — that is the SDK's internal tool-call format and parsing it as JSON fails closed. Use the actual tool functions; the SDK invokes them transparently. Visible response MUST be only the JSON.",
 ];
+
+/** Same contract as a single joined string (discussion builders, etc.). */
+export const JSON_ONLY_FINAL_RULES = JSON_ONLY_FINAL_RULE_LINES.join("\n");
 
 /** Compact JSON-array final-answer line used by council extractors. */
 export const JSON_ARRAY_ONLY_LINE =

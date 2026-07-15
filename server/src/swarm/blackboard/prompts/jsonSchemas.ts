@@ -146,17 +146,37 @@ export const AUDITOR_VERDICT_JSON_SCHEMA = {
             type: "array",
             maxItems: 4,
             items: {
-              type: "object",
-              properties: {
-                description: { type: "string", minLength: 1, maxLength: 500 },
-                expectedFiles: {
-                  type: "array",
-                  minItems: 1,
-                  maxItems: 2,
-                  items: { type: "string", minLength: 1 },
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    kind: { type: "string", enum: ["hunks"] },
+                    description: { type: "string", minLength: 1, maxLength: 500 },
+                    expectedFiles: {
+                      type: "array",
+                      minItems: 1,
+                      maxItems: 2,
+                      items: { type: "string", minLength: 1 },
+                    },
+                  },
+                  required: ["description", "expectedFiles"],
                 },
-              },
-              required: ["description", "expectedFiles"],
+                {
+                  type: "object",
+                  properties: {
+                    kind: { type: "string", enum: ["build"] },
+                    description: { type: "string", minLength: 1, maxLength: 500 },
+                    expectedFiles: {
+                      type: "array",
+                      minItems: 1,
+                      maxItems: 2,
+                      items: { type: "string", minLength: 1 },
+                    },
+                    command: { type: "string", minLength: 1, maxLength: 500 },
+                  },
+                  required: ["kind", "description", "expectedFiles", "command"],
+                },
+              ],
             },
           },
         },

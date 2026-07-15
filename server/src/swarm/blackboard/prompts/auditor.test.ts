@@ -92,6 +92,68 @@ describe("parseAuditorResponse — happy path", () => {
     assert.equal(res.ok, true);
   });
 
+  it("preserves kind:build + command on unmet todos (audit fix)", () => {
+    const res = parseAuditorResponse(
+      JSON.stringify({
+        verdicts: [
+          {
+            id: "c1",
+            status: "unmet",
+            rationale: "docs need regen",
+            todos: [
+              {
+                kind: "build",
+                description: "Regenerate API docs",
+                expectedFiles: ["docs/api/index.md"],
+                command: "npm run docs:api",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    assert.equal(res.ok, true);
+    if (res.ok) {
+      const todo = res.result.verdicts[0]?.todos[0];
+      assert.equal(todo?.kind, "build");
+      assert.equal(todo?.command, "npm run docs:api");
+      assert.deepEqual(todo?.expectedFiles, ["docs/api/index.md"]);
+    }
+  });
+
+  it("drops build todos that omit command", () => {
+    const res = parseAuditorResponse(
+      JSON.stringify({
+        verdicts: [
+          {
+            id: "c1",
+            status: "unmet",
+            rationale: "needs build",
+            todos: [
+              {
+                kind: "build",
+                description: "Run tests",
+                expectedFiles: ["package.json"],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    // Whole verdict may drop if todos fail; or ok with dropped verdict
+    if (res.ok) {
+      const v = res.result.verdicts.find((x) => x.id === "c1");
+      // If verdict kept, todos must not silently carry kind:build without command
+      if (v) {
+        for (const t of v.todos) {
+          assert.notEqual(t.kind, "build");
+        }
+      }
+    } else {
+      assert.ok(res.reason.length > 0);
+    }
+  });
+
   it("accepts newCriteria alongside verdicts", () => {
     const res = parseAuditorResponse(
       JSON.stringify({

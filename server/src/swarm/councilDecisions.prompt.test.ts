@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildCouncilTodoExtractPrompt,
   buildAuditorUnmetTodoFallbackPrompt,
+  buildAuditFollowUpTodoPrompt,
 } from "./councilDecisions.js";
 import { JSON_ARRAY_ONLY_LINE } from "./blackboard/prompts/sharedSnippets.js";
 
@@ -35,5 +36,17 @@ describe("buildAuditorUnmetTodoFallbackPrompt", () => {
     assert.match(p, /Wire auth/);
     assert.match(p, /Add tests/);
     assert.match(p, /Max 8 todos/);
+  });
+});
+
+describe("buildAuditFollowUpTodoPrompt", () => {
+  it("uses shared JSON-array contract", () => {
+    const p = buildAuditFollowUpTodoPrompt({
+      missingWork: "Auth panel still uses mock data",
+      treeSection: "\nProject top-level files: src, package.json",
+    });
+    assert.ok(p.includes(JSON_ARRAY_ONLY_LINE));
+    assert.match(p, /mock data/);
+    assert.match(p, /Max 4 items/);
   });
 });

@@ -255,6 +255,11 @@ export function applyAuditorResult(
           createdAt: now,
           criterionId: crit.id,
           expectedAnchors: (t as { expectedAnchors?: string[] }).expectedAnchors,
+          ...(t.kind === "build" && t.command
+            ? { kind: "build" as const, command: t.command }
+            : t.kind === "hunks"
+              ? { kind: "hunks" as const }
+              : {}),
         });
         todosPosted++;
       }

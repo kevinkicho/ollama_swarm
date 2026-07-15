@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { listProjectTreeSync } from "./councilPromptHelpers.js";
@@ -23,6 +29,49 @@ describe("listProjectTreeSync", () => {
       assert.ok(files.some((f) => f.includes("package.json")));
       assert.ok(!files.some((f) => f.includes("node_modules")));
       assert.ok(!dirs.some((d) => d.includes("node_modules")));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skips symlink directories (does not list outside root)", () => {
+    const root = mkdtempSync(join(tmpdir(), "proj-tree-sym-"));
+    const outside = mkdtempSync(join(tmpdir(), "proj-outside-"));
+    try {
+      writeFileSync(join(outside, "secret.ts"), "export {};\n");
+      writeFileSync(join(root, "local.ts"), "export {};\n");
+      try {
+        symlinkSync(outside, join(root, "linked"), "junction");
+      } catch {
+        // Symlinks may require privileges on some Windows hosts — skip then.
+        return;
+      }
+      const { files, dirs } = listProjectTreeSync(root, {
+        maxDirs: 20,
+        maxFiles: 20,
+      });
+      assert.ok(files.some((f) => f.includes("local.ts")));
+      assert.ok(!files.some((f) => f.includes("secret.ts")));
+      assert.ok(!dirs.some((d) => d.includes("linked")));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("respects maxDepth", () => {
+    const root = mkdtempSync(join(tmpdir(), "proj-tree-depth-"));
+    try {
+      mkdirSync(join(root, "a", "b", "c"), { recursive: true });
+      writeFileSync(join(root, "a", "b", "c", "deep.ts"), "export {};\n");
+      writeFileSync(join(root, "top.ts"), "export {};\n");
+      const { files } = listProjectTreeSync(root, {
+        maxDirs: 50,
+        maxFiles: 50,
+        maxDepth: 1,
+      });
+      assert.ok(files.some((f) => f.includes("top.ts")));
+      assert.ok(!files.some((f) => f.includes("deep.ts")));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

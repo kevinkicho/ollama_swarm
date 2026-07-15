@@ -19,6 +19,13 @@ describe("resolveRegistrySourcePath", () => {
     assert.ok(p.replace(/\\/g, "/").endsWith("swarm/councilPromptHelpers.ts"));
     assert.ok(fs.existsSync(p), `expected file at ${p}`);
   });
+
+  it("rejects path escape via .. segments", () => {
+    assert.throws(
+      () => resolveRegistrySourcePath("prompts/../../../etc/passwd"),
+      /escapes root|invalid/i,
+    );
+  });
 });
 
 describe("checkPromptDrift", () => {
