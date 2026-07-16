@@ -129,6 +129,11 @@ export interface RunSummary {
    * Optional for back-compat with older summary.json files.
    */
   streamIntegrity?: import("../../../../shared/src/streamIntegrityReport.js").StreamIntegrityReport;
+  /**
+   * Apply/repair integrity aggregate (miss kinds, repair outcomes).
+   * Optional for back-compat with older summary.json files.
+   */
+  applyIntegrity?: import("../../../../shared/src/applyIntegrityReport.js").ApplyIntegrityReport;
   agents: PerAgentStat[];
   // Task #65 (2026-04-24): persist the in-memory transcript at run-end
   // so the history modal / review view can replay what happened.
@@ -309,6 +314,8 @@ export interface BuildSummaryInput {
   tierHistory?: RunSummary["tierHistory"];
   // Task #65: in-memory transcript snapshot at run-end.
   transcript?: import("../../types.js").TranscriptEntry[];
+  /** Live apply/repair counters snapshot (optional; omit when no apply activity). */
+  applyIntegrity?: RunSummary["applyIntegrity"];
   // V2 Step 3b.2: parallel-track V2 reducer state at run end.
   v2State?: RunSummary["v2State"];
   // V2 Step 5c.1: parallel-track V2 TodoQueue state at run end.

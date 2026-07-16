@@ -249,6 +249,14 @@ export interface RunSummary {
     hadLoopCollapse: boolean;
     hadHardTruncate: boolean;
   };
+  /** Apply/repair miss aggregate (optional, newer runs). */
+  applyIntegrity?: {
+    attempts: number;
+    applied: number;
+    missByKind: Record<string, number>;
+    repairSuccesses: number;
+    repairFailures: number;
+  };
   agents: PerAgentStat[];
   contract?: ExitContract;
   // Brain chat history persisted for recovery/FAB continuity (per-run).

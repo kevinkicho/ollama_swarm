@@ -620,3 +620,48 @@ describe("buildSummary — Phase 10 (no phase state population)", () => {
     assert.equal(s.transcript[0].phaseIndex, 0);
   });
 });
+
+describe("buildSummary — applyIntegrity (optional)", () => {
+  it("omits applyIntegrity when not provided (back-compat)", () => {
+    const s = buildSummary(baseInput());
+    assert.equal(s.applyIntegrity, undefined);
+    const parsed = JSON.parse(JSON.stringify(s));
+    assert.equal("applyIntegrity" in parsed, false);
+  });
+
+  it("assembles applyIntegrity with missByKind into summary JSON", () => {
+    const missByKind = {
+      search_not_found: 2,
+      start_not_unique: 1,
+    };
+    const s = buildSummary(
+      baseInput({
+        applyIntegrity: {
+          attempts: 5,
+          applied: 2,
+          missByKind,
+          repairSuccesses: 1,
+          repairFailures: 1,
+        },
+      }),
+    );
+    assert.ok(s.applyIntegrity);
+    assert.equal(s.applyIntegrity!.attempts, 5);
+    assert.equal(s.applyIntegrity!.applied, 2);
+    assert.deepEqual(s.applyIntegrity!.missByKind, {
+      search_not_found: 2,
+      start_not_unique: 1,
+    });
+    assert.equal(s.applyIntegrity!.repairSuccesses, 1);
+    assert.equal(s.applyIntegrity!.repairFailures, 1);
+
+    const roundtrip = JSON.parse(JSON.stringify(s));
+    assert.deepEqual(roundtrip.applyIntegrity.missByKind, {
+      search_not_found: 2,
+      start_not_unique: 1,
+    });
+    // Defensive clone: mutating summary must not mutate the input object
+    s.applyIntegrity!.missByKind.search_not_found = 99;
+    assert.equal(missByKind.search_not_found, 2);
+  });
+});

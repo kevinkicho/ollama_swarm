@@ -2,6 +2,7 @@
 
 import type { LifecycleContext } from "./lifecycleRunner.js";
 import { config as appConfig } from "../../config.js";
+import { startApplyIntegrityTracking } from "../applyIntegrityStats.js";
 
 /**
  * Clear all prior-run mutable fields so start() begins from a clean slate.
@@ -50,6 +51,7 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   ctx.clearStateSnapshotScheduler();
   ctx.setGitPorcelainAtRunStart("");
   ctx.setRunBootedAt(Date.now());
+  startApplyIntegrityTracking(cfg.runId);
   {
     const plannerModel = cfg.plannerModel ?? cfg.model;
     const workerModel = cfg.workerModel ?? cfg.model;

@@ -31,6 +31,7 @@ import type { TranscriptEntry, TranscriptEntrySummary } from "../types.js";
 import type { RepoService } from "../services/RepoService.js";
 import type { RunConfig } from "./SwarmRunner.js";
 import { resolveRunGitMetrics } from "./blackboard/gitRunDelta.js";
+import { snapshotApplyIntegrityForRun } from "./applyIntegrityStats.js";
 
 export interface DiscussionWriteSummaryOpts {
   cfg: RunConfig;
@@ -130,6 +131,10 @@ export async function discussionWriteSummary(opts: DiscussionWriteSummaryOpts): 
     transcript: opts.transcript,
     topology: opts.topology,
     controlAdvice: opts.controlAdvice,
+    ...((): { applyIntegrity?: import("@ollama-swarm/shared/applyIntegrityReport").ApplyIntegrityReport } => {
+      const applyIntegrity = snapshotApplyIntegrityForRun(opts.cfg.runId);
+      return applyIntegrity ? { applyIntegrity } : {};
+    })(),
   };
   const summary = buildDiscussionSummary(summaryInput);
 

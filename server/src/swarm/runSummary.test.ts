@@ -44,6 +44,29 @@ describe("buildDiscussionSummary — common shape", () => {
     assert.deepEqual(s.agents, []);
   });
 
+  it("assembles optional applyIntegrity with missByKind", () => {
+    const s = buildDiscussionSummary(
+      base({
+        applyIntegrity: {
+          attempts: 3,
+          applied: 1,
+          missByKind: { search_not_found: 2 },
+          repairSuccesses: 0,
+          repairFailures: 1,
+        },
+      }),
+    );
+    assert.ok(s.applyIntegrity);
+    assert.deepEqual(s.applyIntegrity!.missByKind, { search_not_found: 2 });
+    assert.equal(s.applyIntegrity!.attempts, 3);
+    assert.equal(s.applyIntegrity!.applied, 1);
+  });
+
+  it("omits applyIntegrity when absent", () => {
+    const s = buildDiscussionSummary(base());
+    assert.equal(s.applyIntegrity, undefined);
+  });
+
   it("computes wallClockMs = endedAt - startedAt (clamped at 0)", () => {
     assert.equal(
       buildDiscussionSummary(base({ startedAt: 1000, endedAt: 2500 })).wallClockMs,

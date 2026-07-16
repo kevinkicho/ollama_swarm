@@ -30,6 +30,11 @@ import {
   decideDryRunOutcome,
 } from "../preflightDryRun.js";
 import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
+import {
+  noteApplyMiss,
+  noteRepairFailure,
+  noteRepairSuccess,
+} from "../applyIntegrityStats.js";
 
 export type SelfConsistencyOutcome = {
   outcome: "stale" | "aborted" | "pending-commit";
@@ -308,6 +313,12 @@ export async function finalizeWorkerHunks(
       }
     }
     const dryApply = applyHunks(contents, hunksToCommit.slice() as Hunk[]);
+    const runIdForStats = cfg?.runId;
+    // Dry-run preflight: record miss kinds + repair outcomes only.
+    // attempts/applied are owned by applyAndCommit (proposeCommit path).
+    if (!dryApply.ok) {
+      noteApplyMiss(dryApply.miss?.kind ?? "other", runIdForStats);
+    }
     if (
       !dryApply.ok &&
       isRepairableApplyMiss({ miss: dryApply.miss, reason: dryApply.error })
@@ -363,6 +374,7 @@ export async function finalizeWorkerHunks(
           ctx.appendSystem(
             `[${agent.id}] [apply-miss] hunk repair prompt failed: ${msg} — proposing original hunks`,
           );
+          noteRepairFailure(runIdForStats);
           repairResponse = "";
         }
         if (repairResponse) {
@@ -392,15 +404,18 @@ export async function finalizeWorkerHunks(
             if (gate.accepted) {
               hunksToCommit = gate.hunks;
               commitTier = "repair";
+              noteRepairSuccess(runIdForStats);
               ctx.appendSystem(
                 `[${agent.id}] [apply-miss] hunk repair dry-run ok — proposing repaired hunks`,
               );
             } else {
+              noteRepairFailure(runIdForStats);
               ctx.appendSystem(
                 `[${agent.id}] [apply-miss] hunk repair still misses: ${(gate.error ?? "apply failed").slice(0, 200)} — proposing original`,
               );
             }
           } else {
+            noteRepairFailure(runIdForStats);
             ctx.appendSystem(
               `[${agent.id}] [apply-miss] hunk repair parse failed — proposing original hunks`,
             );

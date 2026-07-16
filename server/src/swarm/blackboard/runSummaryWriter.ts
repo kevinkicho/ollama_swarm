@@ -15,6 +15,7 @@ import { writeFileAtomic } from "./writeFileAtomic.js";
 import { buildSummary } from "./summary.js";
 import { resolveRunGitMetrics } from "./gitRunDelta.js";
 import { config } from "../../config.js";
+import { snapshotApplyIntegrityForRun } from "../applyIntegrityStats.js";
 
 export interface PerAgentCounters {
   agentRoster: Array<{ id: string; index: number }>;
@@ -176,6 +177,10 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     topology: cfg.topology,
     errors: ctx.errorTracker,
     ...(ctx.controlAdvice?.length ? { controlAdvice: ctx.controlAdvice } : {}),
+    ...((): { applyIntegrity?: import("@ollama-swarm/shared/applyIntegrityReport").ApplyIntegrityReport } => {
+      const applyIntegrity = snapshotApplyIntegrityForRun(cfg.runId);
+      return applyIntegrity ? { applyIntegrity } : {};
+    })(),
   });
 
   try {

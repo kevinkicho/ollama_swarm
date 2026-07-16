@@ -47,6 +47,7 @@ import {
   runTierPromotion,
   type CouncilAdapterState,
 } from "./councilAdapter.js";
+import { startApplyIntegrityTracking } from "./applyIntegrityStats.js";
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import type { StallGateVerdict } from "@ollama-swarm/shared/swarmControl/types";
@@ -231,6 +232,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
       this.pendingToolTraceByAgent,
       () => this.opts.getAmendments?.() ?? [],
     );
+    // Apply/repair integrity counters for summary.applyIntegrity (PR6).
+    startApplyIntegrityTracking(cfg.runId);
 
     // Gather project context
     this.repoFiles = await this.opts.repos.listRepoFiles(destPath, { maxFiles: 500 });

@@ -49,6 +49,7 @@ import { TodoQueue, type QueuedTodo } from "./blackboard/TodoQueue.js";
 import { scoreCouncilTodoForDequeue } from "./councilTodoPlan.js";
 import type { CouncilAdapterState } from "./councilAdapter.js";
 import { wrapProgressContextForPrompt } from "./councilProgressLedger.js";
+import { noteRepairFailure, noteRepairSuccess } from "./applyIntegrityStats.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { checkBuildCommand } from "./blackboard/buildCommandAllowlist.js";
 import simpleGit from "simple-git";
@@ -722,6 +723,7 @@ async function tryWorkerPrompt(
         hunks: fixedHunks,
         fs: fsAdapter,
         git: gitAdapter,
+        runId: state.cfg.runId,
       });
 
       if (applyResult.ok) {
@@ -811,19 +813,27 @@ async function tryWorkerPrompt(
                 hunks: repairParsed.hunks,
                 fs: fsAdapter,
                 git: gitAdapter,
+                runId: state.cfg.runId,
               });
               if (repairResult.ok) {
                 if (!repairResult.filesWritten || repairResult.filesWritten.length === 0) {
+                  noteRepairFailure(state.cfg.runId);
                   return {
                     outcome: "retry",
                     reason: "hunk repair wrote zero files (no-op) — not a successful commit",
                     lastResponse: repairText,
                   };
                 }
+                noteRepairSuccess(state.cfg.runId);
                 ctx.appendSystem(`[execution] ${agent.id} ✓ applied (hunk repair) — ${repairResult.commitSha?.slice(0, 7)}.`);
                 return { outcome: "completed" };
               }
+              noteRepairFailure(state.cfg.runId);
+            } else {
+              noteRepairFailure(state.cfg.runId);
             }
+          } else {
+            noteRepairFailure(state.cfg.runId);
           }
         }
       }

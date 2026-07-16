@@ -137,6 +137,7 @@ const TEST_FILES = [
   "src/swarm/runStateMachine.test.ts",
   "src/swarm/agentStatsCollector.test.ts",
   "src/swarm/runSummary.test.ts",
+  "src/swarm/applyIntegrityStats.test.ts",
   // 2026-05-02–05-03: previously orphaned (added but never registered here).
   "src/swarm/propositionDerive.test.ts",
   "src/swarm/roleDiffDeliverable.test.ts",

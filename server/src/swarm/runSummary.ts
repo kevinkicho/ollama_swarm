@@ -64,6 +64,8 @@ export interface DiscussionSummaryInput {
   // specs without re-deriving from preset+count.
   topology?: RunSummary["topology"];
   controlAdvice?: RunSummary["controlAdvice"];
+  /** Live apply/repair counters snapshot (optional; council apply paths). */
+  applyIntegrity?: RunSummary["applyIntegrity"];
 }
 
 export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummary {
@@ -123,6 +125,14 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
     totalPromptTokens,
     totalResponseTokens,
     ...(streamIntegrity ? { streamIntegrity } : {}),
+    ...(input.applyIntegrity
+      ? {
+          applyIntegrity: {
+            ...input.applyIntegrity,
+            missByKind: { ...input.applyIntegrity.missByKind },
+          },
+        }
+      : {}),
     agents: input.agents.slice(),
     transcript,
     transcriptTruncated,

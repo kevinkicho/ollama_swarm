@@ -114,6 +114,7 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     totalPromptTokens,
     totalResponseTokens,
     ...(streamIntegrity ? { streamIntegrity } : {}),
+    ...(input.applyIntegrity ? { applyIntegrity: { ...input.applyIntegrity, missByKind: { ...input.applyIntegrity.missByKind } } } : {}),
     agents: input.agents.slice(),
     contract: input.contract ? cloneContract(input.contract) : undefined,
     // Task #65: cap transcript at TRANSCRIPT_MAX_ENTRIES (head) so a

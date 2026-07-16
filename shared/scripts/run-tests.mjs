@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 
 const TEST_FILES = [
+  "src/applyIntegrityReport.test.ts",
   "src/brainAlias.test.ts",
   "src/drainEligibility.test.ts",
   "src/explorationCache.test.ts",
