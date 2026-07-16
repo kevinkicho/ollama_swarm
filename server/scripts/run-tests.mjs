@@ -51,6 +51,7 @@ const TEST_FILES = [
   "src/swarm/blackboard/finalAudit.test.ts",
   "src/swarm/blackboard/retry.test.ts",
   "src/swarm/blackboard/applyHunks.test.ts",
+  "src/swarm/blackboard/applyMissReport.test.ts",
   "src/swarm/blackboard/applyHunksPipeline.test.ts",
   "src/swarm/blackboard/windowFile.test.ts",
   "src/swarm/blackboard/transcriptSummary.test.ts",

@@ -20,6 +20,15 @@
 // worker-emitted hunks by file, reads the current file content, calls
 // applyFileHunks, and then CAS-writes the result.
 
+import {
+  buildApplyMissReport,
+  normalizeSearchWhitespace,
+  type ApplyMissKind,
+  type ApplyMissReport,
+} from "./applyMissReport.js";
+
+export type { ApplyMissKind, ApplyMissReport } from "./applyMissReport.js";
+
 export type Hunk =
   | { op: "replace"; file: string; search: string; replace: string }
   | { op: "create"; file: string; content: string }
@@ -42,11 +51,31 @@ export type Hunk =
 
 export type ApplyFileResult =
   | { ok: true; newText: string }
-  | { ok: false; error: string };
+  | { ok: false; error: string; miss?: ApplyMissReport };
 
 export type ApplyResult =
   | { ok: true; newTextsByFile: Record<string, string> }
-  | { ok: false; error: string };
+  | { ok: false; error: string; miss?: ApplyMissReport };
+
+function failWithMiss(
+  input: {
+    file: string;
+    hunkIndex: number;
+    op: string;
+    kind: ApplyMissKind;
+    needle: string;
+    matchCount: number;
+    fileText: string;
+    message: string;
+    focusOffset?: number | null;
+  },
+): ApplyFileResult {
+  return {
+    ok: false,
+    error: input.message,
+    miss: buildApplyMissReport(input),
+  };
+}
 
 // Apply all hunks for a single file in sequence. Each hunk sees the output
 // of the previous one — so a second "replace" can target text produced by
@@ -66,19 +95,34 @@ export function applyFileHunks(
   // Path A: file didn't exist yet. Valid: single create, or single write.
   if (currentText === null) {
     if (hunks.length !== 1) {
-      return {
-        ok: false,
-        error: `file does not exist — expected exactly one "create" or "write" hunk, got ${hunks.length}`,
-      };
+      const file = hunks[0]?.file ?? "";
+      const message = `file does not exist — expected exactly one "create" or "write" hunk, got ${hunks.length}`;
+      return failWithMiss({
+        file,
+        hunkIndex: 0,
+        op: hunks[0]?.op ?? "unknown",
+        kind: "other",
+        needle: "",
+        matchCount: 0,
+        fileText: "",
+        message,
+      });
     }
     const only = hunks[0];
     if (only.op === "create" || only.op === "write") {
       return { ok: true, newText: only.content };
     }
-    return {
-      ok: false,
-      error: `file does not exist — got op "${only.op}", expected "create" or "write"`,
-    };
+    const message = `file does not exist — got op "${only.op}", expected "create" or "write"`;
+    return failWithMiss({
+      file: only.file,
+      hunkIndex: 0,
+      op: only.op,
+      kind: "other",
+      needle: "",
+      matchCount: 0,
+      fileText: "",
+      message,
+    });
   }
 
   // Path B: file exists. Walk the hunks in order, mutating the working
@@ -88,10 +132,16 @@ export function applyFileHunks(
     const h = hunks[i];
     switch (h.op) {
       case "create":
-        return {
-          ok: false,
-          error: `hunk[${i}] op "create": file already exists — use "replace", "replace_between", "write", or "append"`,
-        };
+        return failWithMiss({
+          file: h.file,
+          hunkIndex: i,
+          op: h.op,
+          kind: "other",
+          needle: "",
+          matchCount: 0,
+          fileText: text,
+          message: `hunk[${i}] op "create": file already exists — use "replace", "replace_between", "write", or "append"`,
+        });
       case "write":
         text = h.content;
         break;
@@ -102,34 +152,92 @@ export function applyFileHunks(
         // Delete the file — return empty string to signal deletion
         return { ok: true, newText: "" };
       case "replace_between": {
-        const start = h.start;
+        let start = h.start;
         if (!start) {
-          return { ok: false, error: `hunk[${i}] op "replace_between": empty "start" marker` };
+          return failWithMiss({
+            file: h.file,
+            hunkIndex: i,
+            op: h.op,
+            kind: "other",
+            needle: "",
+            matchCount: 0,
+            fileText: text,
+            message: `hunk[${i}] op "replace_between": empty "start" marker`,
+          });
         }
-        const startCount = countOccurrences(text, start);
+        let startCount = countOccurrences(text, start);
+
+        // Same trailing-trim / CRLF normalize as replace.search.
         if (startCount === 0) {
-          return {
-            ok: false,
-            error: `hunk[${i}] op "replace_between": "start" text not found in file`,
-          };
+          const normalized = normalizeSearchWhitespace(start);
+          if (normalized !== start) {
+            const normCount = countOccurrences(text, normalized);
+            if (normCount === 1) {
+              start = normalized;
+              startCount = 1;
+            }
+          }
+        }
+
+        if (startCount === 0) {
+          const message = `hunk[${i}] op "replace_between": "start" text not found in file`;
+          return failWithMiss({
+            file: h.file,
+            hunkIndex: i,
+            op: h.op,
+            kind: "start_not_found",
+            needle: start,
+            matchCount: 0,
+            fileText: text,
+            message,
+            focusOffset: null,
+          });
         }
         if (startCount > 1) {
-          return {
-            ok: false,
-            error: `hunk[${i}] op "replace_between": "start" text matches ${startCount} times — must be unique; add surrounding context`,
-          };
+          const message = `hunk[${i}] op "replace_between": "start" text matches ${startCount} times — must be unique; add surrounding context`;
+          return failWithMiss({
+            file: h.file,
+            hunkIndex: i,
+            op: h.op,
+            kind: "start_not_unique",
+            needle: start,
+            matchCount: startCount,
+            fileText: text,
+            message,
+            // first match for nearby excerpt
+            focusOffset: text.indexOf(start),
+          });
         }
         const startIdx = text.indexOf(start);
         let endIdx = text.length;
         if (h.endExclusive != null && h.endExclusive.length > 0) {
-          const end = h.endExclusive;
+          let end = h.endExclusive;
           const from = startIdx + start.length;
-          const rel = text.indexOf(end, from);
+          let rel = text.indexOf(end, from);
+          // Port trailing-trim / CRLF normalize to endExclusive.
           if (rel === -1) {
-            return {
-              ok: false,
-              error: `hunk[${i}] op "replace_between": "endExclusive" text not found after start`,
-            };
+            const normalizedEnd = normalizeSearchWhitespace(end);
+            if (normalizedEnd !== end) {
+              rel = text.indexOf(normalizedEnd, from);
+              if (rel !== -1) {
+                end = normalizedEnd;
+              }
+            }
+          }
+          if (rel === -1) {
+            const message = `hunk[${i}] op "replace_between": "endExclusive" text not found after start`;
+            return failWithMiss({
+              file: h.file,
+              hunkIndex: i,
+              op: h.op,
+              kind: "end_not_found",
+              needle: end,
+              matchCount: 0,
+              fileText: text,
+              message,
+              // Best guess: around start (section we were trying to bound).
+              focusOffset: startIdx,
+            });
           }
           // endExclusive must not appear again between start and first end if we want unique section;
           // first match after start is the section boundary (heading-style usage).
@@ -146,7 +254,7 @@ export function applyFileHunks(
         // the most common source of search mismatches. Try normalized
         // matching before giving up.
         if (count === 0) {
-          const normalized = search.split("\n").map((l) => l.trimEnd()).join("\n");
+          const normalized = normalizeSearchWhitespace(search);
           if (normalized !== search) {
             const normCount = countOccurrences(text, normalized);
             if (normCount === 1) {
@@ -157,10 +265,18 @@ export function applyFileHunks(
         }
 
         if (count === 0) {
-          return {
-            ok: false,
-            error: `hunk[${i}] op "replace": "search" text not found in file`,
-          };
+          const message = `hunk[${i}] op "replace": "search" text not found in file`;
+          return failWithMiss({
+            file: h.file,
+            hunkIndex: i,
+            op: h.op,
+            kind: "search_not_found",
+            needle: search,
+            matchCount: 0,
+            fileText: text,
+            message,
+            focusOffset: null,
+          });
         }
         if (count > 1) {
           // Try longest unique substring fallback: find the longest
@@ -182,10 +298,18 @@ export function applyFileHunks(
             }
           }
           if (!found) {
-            return {
-              ok: false,
-              error: `hunk[${i}] op "replace": "search" text matches ${count} times — must be unique; add surrounding context`,
-            };
+            const message = `hunk[${i}] op "replace": "search" text matches ${count} times — must be unique; add surrounding context`;
+            return failWithMiss({
+              file: h.file,
+              hunkIndex: i,
+              op: h.op,
+              kind: "search_not_unique",
+              needle: search,
+              matchCount: count,
+              fileText: text,
+              message,
+              focusOffset: text.indexOf(search),
+            });
           }
         }
         const idx = text.indexOf(search);
@@ -197,7 +321,17 @@ export function applyFileHunks(
         // runtime, but fail loud just in case a new op is added without
         // updating the switch.
         const never: never = h;
-        return { ok: false, error: `unknown hunk op: ${JSON.stringify(never)}` };
+        const message = `unknown hunk op: ${JSON.stringify(never)}`;
+        return failWithMiss({
+          file: "",
+          hunkIndex: i,
+          op: "unknown",
+          kind: "other",
+          needle: "",
+          matchCount: 0,
+          fileText: text,
+          message,
+        });
       }
     }
   }
@@ -227,14 +361,29 @@ export function applyHunks(
   const out: Record<string, string> = {};
   for (const [file, fileHunks] of grouped) {
     if (!(file in currentTextsByFile)) {
+      const message = `hunk references file "${file}" which was not provided in currentTextsByFile`;
       return {
         ok: false,
-        error: `hunk references file "${file}" which was not provided in currentTextsByFile`,
+        error: message,
+        miss: buildApplyMissReport({
+          file,
+          hunkIndex: 0,
+          op: fileHunks[0]?.op ?? "unknown",
+          kind: "other",
+          needle: "",
+          matchCount: 0,
+          fileText: "",
+          message,
+        }),
       };
     }
     const r = applyFileHunks(currentTextsByFile[file], fileHunks);
     if (!r.ok) {
-      return { ok: false, error: `file "${file}": ${r.error}` };
+      return {
+        ok: false,
+        error: `file "${file}": ${r.error}`,
+        miss: r.miss,
+      };
     }
     out[file] = r.newText;
   }

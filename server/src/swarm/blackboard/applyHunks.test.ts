@@ -98,6 +98,10 @@ describe("applyFileHunks — replace semantics", () => {
     ]);
     assert.equal(r.ok, false);
     assert.match(r.ok ? "" : r.error, /"search" text not found/);
+    if (!r.ok) {
+      assert.equal(r.miss?.kind, "search_not_found");
+      assert.equal(r.miss?.matchCount, 0);
+    }
   });
 
   it("fails when the search text appears more than once (ambiguous anchor)", () => {
@@ -106,6 +110,10 @@ describe("applyFileHunks — replace semantics", () => {
     ]);
     assert.equal(r.ok, false);
     assert.match(r.ok ? "" : r.error, /matches 3 times/);
+    if (!r.ok) {
+      assert.equal(r.miss?.kind, "search_not_unique");
+      assert.equal(r.miss?.matchCount, 3);
+    }
   });
 
   it("reports which hunk index failed when there are several", () => {
@@ -378,5 +386,24 @@ describe("applyFileHunks — write and replace_between", () => {
     ]);
     assert.equal(r.ok, false);
     assert.match(r.ok ? "" : r.error, /"start" text not found/);
+    if (!r.ok) {
+      assert.equal(r.miss?.kind, "start_not_found");
+    }
+  });
+
+  it("replace_between normalizes trailing spaces on start (parity with replace)", () => {
+    const original = "## Head\nbody\n";
+    const r = applyFileHunks(original, [
+      {
+        op: "replace_between",
+        file: "f.md",
+        start: "## Head  ",
+        replace: "## Head\nnew\n",
+      },
+    ]);
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.newText, "## Head\nnew\n");
+    }
   });
 });
