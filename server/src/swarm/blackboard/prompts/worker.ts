@@ -304,8 +304,31 @@ export function buildWorkerToolsNote(): string {
   ].join("\n");
 }
 
+/**
+ * Whether this todo needs a web literature pre-pass.
+ *
+ * Run eee6718f RCA: the old regex matched bare "source", "paper", "findings"
+ * inside normal panel todos (e.g. COMMERCIAL_PAPER, "source: worldbank",
+ * "data source health") and burned ~20 literature tool-loop failures per run.
+ *
+ * Require explicit research intent — not incidental vocabulary.
+ */
 export function isLiteratureTodo(description: string): boolean {
-  return /literature|research|survey|review|paper|arxiv|citation|sources?|web search|findings/i.test(description);
+  const d = description.trim();
+  if (!d) return false;
+  // Explicit research / literature language
+  if (
+    /\b(literature\s+review|literature\s+research|web\s+research|web\s+search|desk\s+research)\b/i.test(d)
+  ) {
+    return true;
+  }
+  if (/\b(arxiv|citation|citations|bibliography|survey papers?)\b/i.test(d)) {
+    return true;
+  }
+  // "research X" / "research and document" as a primary verb phrase near the start
+  if (/^(research|survey|investigate)\b/i.test(d)) return true;
+  if (/\b(research (the |and |official |API |endpoints?|sources?))\b/i.test(d)) return true;
+  return false;
 }
 
 /**

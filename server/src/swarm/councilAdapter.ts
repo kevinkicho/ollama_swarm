@@ -75,6 +75,18 @@ export interface CouncilAdapterState {
   pendingToolTraceByAgent: Map<string, ToolTraceEntry[]>;
   /** Mid-run HITL amendments (orchestrator AmendmentsBuffer). */
   getAmendments?: () => Array<{ ts: number; text: string }>;
+  /**
+   * Run-level literature/web research blackout (eee6718f RCA).
+   * After consecutive literature pre-pass failures, skip further web research
+   * for the rest of the run so workers spend tokens on hunks, not 403 thrash.
+   */
+  researchBlackout?: {
+    consecutiveFailures: number;
+    active: boolean;
+    lastReason?: string;
+  };
+  /** Per-todo literature notes cache — avoid re-running research on repair/failover. */
+  literatureNotesByTodoId?: Map<string, string | null>;
 }
 
 export function buildCouncilAdapterState(
@@ -115,6 +127,8 @@ export function buildCouncilAdapterState(
     emit,
     logDiag,
     pendingToolTraceByAgent,
+    researchBlackout: { consecutiveFailures: 0, active: false },
+    literatureNotesByTodoId: new Map(),
   };
 }
 

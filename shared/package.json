@@ -31,6 +31,7 @@
     "./streamLoopDetect": "./src/streamLoopDetect.ts",
     "./finalizeAgentOutput": "./src/finalizeAgentOutput.ts",
     "./streamIntegrityReport": "./src/streamIntegrityReport.ts",
+    "./jsonFormatSniff": "./src/jsonFormatSniff.ts",
     "./thinkGuardBudget": "./src/thinkGuardBudget.ts",
     "./thinkGuardErrors": "./src/thinkGuardErrors.ts",
     "./thinkGuardReferee": "./src/thinkGuardReferee.ts",

@@ -4,6 +4,7 @@ import {
   type ThinkGuardSession,
 } from "@ollama-swarm/shared/streamThinkGuard";
 import { ThinkGuardAbortError } from "@ollama-swarm/shared/thinkGuardErrors";
+import { sniffJsonFormatStream } from "@ollama-swarm/shared/jsonFormatSniff";
 
 export type PromptGuardOpts = {
   /** Idle wall-clock: resets on each stream chunk (provider still talking). */
@@ -25,6 +26,12 @@ export type PromptGuardOpts = {
   activityKind?: string;
   /** Reuse session for continuation prompts (budgetExtended may already be set). */
   session?: ThinkGuardSession;
+  /**
+   * When "json", abort streams that never produce JSON markers (think-aware).
+   * Was documented on formatExpect but never wired on the Ollama path
+   * (run eee6718f: 12× primary failed on pure <think> with no JSON).
+   */
+  formatExpect?: "json" | "free";
 };
 
 /** Resolve absolute prompt ceiling (fail-closed hung/runaway stream). */
@@ -88,6 +95,7 @@ export function composePromptGuardSignals(
   const resolveRefereeOn = () =>
     opts.getRefereeOn ? opts.getRefereeOn() === true : opts.refereeOn === true;
 
+  let formatSniffDone = false;
   const wrapOnChunk = (fn?: (text: string) => void) => {
     if (!fn) return undefined;
     return (text: string) => {
@@ -112,6 +120,25 @@ export function composePromptGuardSignals(
           }),
         );
         return;
+      }
+      // Think-aware JSON format sniff (Ollama path — previously dead option).
+      if (opts.formatExpect === "json" && !formatSniffDone) {
+        const sniff = sniffJsonFormatStream(text);
+        if (!sniff.ok) {
+          formatSniffDone = true;
+          trip.abort(
+            new ThinkGuardAbortError({
+              tier: 2,
+              reason: sniff.reason,
+              partialText: text,
+              thinkChars: 0,
+              thinkElapsedMs: Math.max(0, Date.now() - session.startedAt),
+              activityKind: opts.activityKind,
+            }),
+          );
+          return;
+        }
+        if (sniff.phase === "has_json") formatSniffDone = true;
       }
       fn(text);
     };

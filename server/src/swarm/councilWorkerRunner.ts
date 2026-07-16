@@ -165,18 +165,44 @@ function isWorkerRetry(r: WorkerAttemptResult): r is WorkerRetryResult {
   return r.outcome === "retry";
 }
 
+/** Consecutive literature failures before run-wide blackout. */
+const LITERATURE_BLACKOUT_AFTER = 3;
+
 async function runCouncilLiteratureResearch(
   state: CouncilAdapterState,
   agent: Agent,
   todo: QueuedTodo,
   appendSystem: (msg: string) => void,
   signal?: AbortSignal,
+  opts?: { skip?: boolean },
 ): Promise<string | undefined> {
-  if (signal?.aborted) return undefined;
+  if (opts?.skip || signal?.aborted) return undefined;
   const cfg = state.cfg;
   if (!isWebToolsEnabled(cfg) || !isLiteratureTodo(todo.description)) {
     return undefined;
   }
+
+  // Per-todo cache: primary/repair/failover share one research pass (eee6718f).
+  const cache = state.literatureNotesByTodoId ?? (state.literatureNotesByTodoId = new Map());
+  if (cache.has(todo.id)) {
+    const cached = cache.get(todo.id);
+    return cached ?? undefined;
+  }
+
+  // Run-level blackout after repeated research tool failures.
+  const blackout = state.researchBlackout ?? (state.researchBlackout = {
+    consecutiveFailures: 0,
+    active: false,
+  });
+  if (blackout.active) {
+    appendSystem(
+      `[${agent.id}] Literature research skipped (run blackout after ${blackout.consecutiveFailures} failures` +
+        `${blackout.lastReason ? `: ${blackout.lastReason.slice(0, 80)}` : ""}) — using local tools only.`,
+    );
+    cache.set(todo.id, null);
+    return undefined;
+  }
+
   (state.manager as {
     markStatus: (id: string, status: string, extra?: Record<string, unknown>) => void;
   }).markStatus(agent.id, "thinking", {
@@ -193,10 +219,13 @@ async function runCouncilLiteratureResearch(
     cfg.userDirective ? `User directive: ${cfg.userDirective}` : "",
     "",
     "Use web_search and web_fetch to gather citable findings. Output plain prose with bullet points and URLs.",
+    "If search backends fail, stop tool use immediately and say so — do not retry the same query.",
     "Do NOT emit JSON hunks in this phase.",
   ].filter(Boolean).join("\n");
 
   try {
+    // Literature is tool-heavy; keep budget tight so thrash fails fast.
+    const litToolTurns = Math.min(EXPLORE_MAX_LITERATURE_TOOL_TURNS, 8);
     const res = await chatOnce(agent, {
       agentName: LITERATURE_RESEARCH_PROFILE,
       promptText: prompt,
@@ -207,18 +236,22 @@ async function runCouncilLiteratureResearch(
       signal,
       manager: state.manager as any,
       activity: { kind: "worker", label: "literature research" },
-      maxToolTurns: EXPLORE_MAX_LITERATURE_TOOL_TURNS,
+      maxToolTurns: litToolTurns,
       toolsOverride: [...LITERATURE_RESEARCH_TOOLS],
       toolLoopNudge: {
-        atTurn: LITERATURE_RESEARCH_NUDGE_TURN,
+        atTurn: Math.min(LITERATURE_RESEARCH_NUDGE_TURN, 4),
         message: LITERATURE_RESEARCH_NUDGE_MESSAGE,
       },
       onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
+      // Shorter wall for literature — 120s idle was common on eee6718f.
+      promptWallClockMs: 90_000,
     });
     const text = extractText(res)?.trim();
     if (text && isUsableResearchBrief(text)) {
       const capped = text.length > 8000 ? `${text.slice(0, 8000)}…` : text;
       appendSystem(`[${agent.id}] Literature research: captured ${capped.length} chars of notes.`);
+      blackout.consecutiveFailures = 0;
+      cache.set(todo.id, capped);
       return capped;
     }
     if (text && text.length >= 80) {
@@ -226,10 +259,23 @@ async function runCouncilLiteratureResearch(
         `[${agent.id}] Literature research: rejected output (need prose notes with URLs, not JSON hunks or intent-only stubs).`,
       );
     }
+    blackout.consecutiveFailures += 1;
+    blackout.lastReason = "unusable brief";
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     appendSystem(`[${agent.id}] Literature research failed: ${msg}`);
+    blackout.consecutiveFailures += 1;
+    blackout.lastReason = msg.slice(0, 160);
   }
+
+  if (blackout.consecutiveFailures >= LITERATURE_BLACKOUT_AFTER) {
+    blackout.active = true;
+    appendSystem(
+      `[research] Run-level literature blackout after ${blackout.consecutiveFailures} consecutive failures — ` +
+        `further web research pre-passes skipped; workers use local read/grep only.`,
+    );
+  }
+  cache.set(todo.id, null);
   return undefined;
 }
 
@@ -551,15 +597,22 @@ async function tryWorkerPrompt(
   }
 
   const webToolsEnabled = isWebToolsEnabled(state.cfg);
+  // Literature only on primary attempt — repair/failover must not re-burn web tools.
   const researchNotes = await runCouncilLiteratureResearch(
     state,
     agent,
     todo,
     ctx.appendSystem,
     ctx.promptSignal,
+    { skip: !!opts.repairFrom },
   );
+  // Emit-biased profile: prefer JSON hunks over open-ended tool tours.
+  // Read tools still available via a small turn cap when not pure emit.
   const workerProfile = effectiveToolProfileId("swarm-builder", state.cfg) as ToolProfileId;
-  const workerToolTurnCap = resolveMaxToolTurnsForProfile(workerProfile);
+  const defaultCap = resolveMaxToolTurnsForProfile(workerProfile);
+  // eee6718f: workers with full tool budgets spent turns thinking/tooling and
+  // never emitted JSON. Cap emit tools tightly; literature already ran.
+  const workerToolTurnCap = Math.min(defaultCap ?? 0, 6);
 
   // Planner anchors + headings pulled from free-text todo descriptions.
   const descAnchors = extractAnchorsFromTodoDescription(todo.description);
@@ -599,10 +652,9 @@ async function tryWorkerPrompt(
     ctx.promptSignal?.addEventListener("abort", onPromptAbort, { once: true });
     ctx.registerTodoAbort?.(agent.id, controller);
     try {
-    // formatExpect:"json" early-sniffs the stream for a JSON envelope so a
-    // think/prose loop cannot run for minutes (9f449937). ollamaFormat is
-    // only used when no tool turns are allowed — grammar-constrained JSON
-    // + tool calling is unreliable on some cloud models.
+    // formatExpect wired into stream guard (think-aware JSON sniff).
+    // Prefer ollamaFormat json whenever tools are off; with a small tool
+    // budget still request formatExpect so pure-think streams abort early.
     const raw = await promptWithFailoverAuto(agent, basePrompt, {
       manager: state.manager as any,
       agentName: workerProfile,
@@ -614,6 +666,7 @@ async function tryWorkerPrompt(
       onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
       onToolResultHook: toolCoachHook,
       runId: state.cfg.runId,
+      promptWallClockMs: 180_000,
     }, state.cfg.providerFailover);
 
     const res = extractProviderText(raw);

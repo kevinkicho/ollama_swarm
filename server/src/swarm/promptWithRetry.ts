@@ -372,6 +372,8 @@ export async function promptWithRetry(
               getMinThinkCharsForReferee: opts.getMinThinkCharsForReferee,
               activityKind: opts.activity?.kind,
               session: guardSession,
+              // Wire formatExpect into the live stream guard (was unused on Ollama path).
+              formatExpect: opts.formatExpect,
             });
           const chatOpts = {
             modelString: effectiveModel,
