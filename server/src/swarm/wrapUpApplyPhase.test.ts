@@ -14,7 +14,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readTopNextAction } from "./wrapUpApplyPhase.js";
+import {
+  buildSynthesizerMissRepromptBlock,
+  readTopNextAction,
+} from "./wrapUpApplyPhase.js";
+import type { ApplyMissReport } from "./blackboard/applyMissReport.js";
 
 describe("readTopNextAction — parser", () => {
   let workdir: string;
@@ -172,5 +176,32 @@ describe("readTopNextAction — parser", () => {
       presetName: "ow",
     });
     assert.equal(top, "high-prio item");
+  });
+});
+
+describe("buildSynthesizerMissRepromptBlock — grounded fallthrough", () => {
+  it("includes reasons, nearbyExcerpt, and uniqueCandidates", () => {
+    const miss: ApplyMissReport = {
+      file: "marketPanels.js",
+      hunkIndex: 0,
+      op: "replace",
+      kind: "search_not_found",
+      needle: "stale anchor",
+      matchCount: 0,
+      nearbyExcerpt: "live disk nearby TEXT",
+      uniqueCandidates: ["exact candidate from file"],
+      message: "search not found",
+    };
+    const block = buildSynthesizerMissRepromptBlock(
+      ['marketPanels.js: hunk[0] op "replace": "search" text not found in file'],
+      [miss],
+    );
+    assert.ok(block.includes("PRIOR ATTEMPT FAILED"));
+    assert.ok(block.includes("marketPanels.js"));
+    assert.ok(block.includes("kind=search_not_found"));
+    assert.ok(block.includes("live disk nearby TEXT"));
+    assert.ok(block.includes("exact candidate from file"));
+    assert.ok(block.includes("uniqueCandidates"));
+    assert.ok(block.includes("Do not invent anchors"));
   });
 });

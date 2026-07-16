@@ -5,13 +5,15 @@
 
 import type { Agent } from "../../services/AgentManager.js";
 import type { Todo, CommitTier } from "./types.js";
-import type { Hunk } from "./applyHunks.js";
+import { applyHunks, type Hunk } from "./applyHunks.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueueWrappers } from "./todoQueueWrappers.js";
 import {
+  buildHunkRepairPrompt,
   buildWorkerRepairPrompt,
   buildWorkerUserPrompt,
+  isRepairableApplyMiss,
   parseWorkerResponse,
   validateHunkPayload,
   WORKER_SYSTEM_PROMPT,
@@ -269,10 +271,123 @@ export async function finalizeWorkerHunks(
     hunksToCommit = verdict.winner;
   }
 
+  // Grounded apply preflight: dry-run pure applyHunks against live disk.
+  // On search/start not-found or not-unique, one repair re-prompt with
+  // ApplyMissReport (nearbyExcerpt + uniqueCandidates). No literature.
+  const cfg = ctx.getActive();
+  const clonePathForRepair = cfg?.localPath?.trim() ?? "";
+  if (clonePathForRepair && hunksToCommit.length > 0) {
+    const fsForRepair = realFilesystemAdapter(clonePathForRepair);
+    const contents: Record<string, string | null> = {};
+    for (const file of todo.expectedFiles) {
+      try {
+        contents[file] = await fsForRepair.read(file);
+      } catch {
+        contents[file] = null;
+      }
+    }
+    const dryApply = applyHunks(contents, hunksToCommit.slice() as Hunk[]);
+    if (
+      !dryApply.ok &&
+      isRepairableApplyMiss({ miss: dryApply.miss, reason: dryApply.error })
+    ) {
+      const miss = dryApply.miss;
+      const failedFile =
+        miss?.file ||
+        dryApply.error.match(/file "([^"]+)"/)?.[1] ||
+        todo.expectedFiles[0];
+      let freshContent: string | null = null;
+      if (failedFile) {
+        try {
+          freshContent = await fsForRepair.read(failedFile);
+        } catch {
+          freshContent = null;
+        }
+        if (freshContent == null && contents[failedFile] != null) {
+          freshContent = contents[failedFile];
+        }
+      }
+      if (freshContent != null && failedFile) {
+        ctx.appendSystem(
+          `[${agent.id}] [apply-miss] kind=${miss?.kind ?? "unknown"} file=${failedFile} — grounded hunk repair (no literature)`,
+        );
+        let repairResponse: string;
+        try {
+          repairResponse = await ctx.promptAgent(
+            agent,
+            `${WORKER_SYSTEM_PROMPT}\n\n${buildHunkRepairPrompt(
+              hunksToCommit.slice() as unknown[],
+              dryApply.error,
+              { [failedFile]: freshContent },
+              { miss },
+            )}`,
+            ctx.workerToolProfile("hunk"),
+            "json",
+            WORKER_HUNKS_JSON_SCHEMA,
+            {
+              kind: "worker",
+              label: `hunk-repair ${todo.id.slice(0, 8)}`,
+              maxToolTurns: 0,
+              mode: "emit",
+            },
+          );
+        } catch (err) {
+          if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) {
+            return { outcome: "aborted" };
+          }
+          const msg = err instanceof Error ? err.message : String(err);
+          ctx.appendSystem(
+            `[${agent.id}] [apply-miss] hunk repair prompt failed: ${msg} — proposing original hunks`,
+          );
+          repairResponse = "";
+        }
+        if (repairResponse) {
+          if (ctx.isStopping()) return { outcome: "aborted" };
+          ctx.appendAgent(agent, repairResponse);
+          const repairParsed = parseWorkerResponse(repairResponse, todo.expectedFiles);
+          if (repairParsed.ok && !repairParsed.skip && repairParsed.hunks.length > 0) {
+            const reDry = applyHunks(contents, repairParsed.hunks.slice() as Hunk[]);
+            // Re-read may still matter; re-apply against refreshed map if first fail used stale.
+            if (!reDry.ok) {
+              // Retry dry against a fresh read of the failed file only.
+              const refreshed: Record<string, string | null> = { ...contents };
+              try {
+                refreshed[failedFile] = await fsForRepair.read(failedFile);
+              } catch {
+                /* keep */
+              }
+              const reDry2 = applyHunks(refreshed, repairParsed.hunks.slice() as Hunk[]);
+              if (reDry2.ok) {
+                hunksToCommit = repairParsed.hunks;
+                commitTier = "repair";
+                ctx.appendSystem(
+                  `[${agent.id}] [apply-miss] hunk repair dry-run ok — proposing repaired hunks`,
+                );
+              } else {
+                ctx.appendSystem(
+                  `[${agent.id}] [apply-miss] hunk repair still misses: ${reDry2.error.slice(0, 200)} — proposing original`,
+                );
+              }
+            } else {
+              hunksToCommit = repairParsed.hunks;
+              commitTier = "repair";
+              ctx.appendSystem(
+                `[${agent.id}] [apply-miss] hunk repair dry-run ok — proposing repaired hunks`,
+              );
+            }
+          } else {
+            ctx.appendSystem(
+              `[${agent.id}] [apply-miss] hunk repair parse failed — proposing original hunks`,
+            );
+          }
+        }
+      }
+    }
+  }
+
   // Q10: optional pre-flight verify dry-run before proposeCommit.
   // Requires cfg.preflightDryRun + cfg.verifyCommand. Applies hunks,
   // runs verify, reverts always — never leaves dirty tree or commits.
-  const cfg = ctx.getActive();
   const verifyCommand = cfg?.verifyCommand?.trim();
   if (cfg?.preflightDryRun && verifyCommand) {
     const clonePath = cfg.localPath ?? "";

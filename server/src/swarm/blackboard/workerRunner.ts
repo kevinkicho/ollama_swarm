@@ -23,8 +23,6 @@ import {
 } from "./hypothesisGrouping.js";
 import { hasActiveFileConflict } from "./workerFileConflict.js";
 import {
-  buildHunkRepairPrompt,
-  buildWorkerRepairPrompt,
   buildWorkerUserPrompt,
   isLiteratureTodo,
   parseWorkerResponse,
@@ -33,6 +31,8 @@ import {
   type WorkerSeed,
   WorkerResponseSchema,
 } from "./prompts/worker.js";
+// Grounded hunk repair (buildHunkRepairPrompt + ApplyMissReport) lives in
+// finalizeWorkerHunks (workerSelfConsistency.ts), invoked below after parse.
 
 import { extractText } from "../extractText.js";
 import { isWebToolsEnabled } from "../toolProfiles.js";

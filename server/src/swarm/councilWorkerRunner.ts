@@ -8,6 +8,7 @@ import {
   buildWorkerUserPrompt,
   buildWorkerRepairPrompt,
   buildHunkRepairPrompt,
+  isRepairableApplyMiss,
   parseWorkerResponse,
   validateHunkPayload,
   WORKER_SYSTEM_PROMPT,
@@ -715,12 +716,44 @@ async function tryWorkerPrompt(
         return { outcome: "completed" };
       }
 
-      // Apply failed — try hunk repair
-      if (applyResult.reason.includes("search") && applyResult.reason.includes("not found")) {
-        const failedFile = applyResult.reason.match(/file "([^"]+)"/)?.[1];
-        const currentContent = failedFile ? fileContents[failedFile] : null;
-        if (currentContent && fixedHunks.length > 0) {
-          const repairPrompt = buildHunkRepairPrompt(fixedHunks, applyResult.reason, { [failedFile!]: currentContent });
+      // Apply failed — grounded hunk repair (search/start not found or not unique).
+      // Never re-enter literature research on this pure apply-repair path.
+      if (
+        isRepairableApplyMiss({
+          miss: applyResult.miss,
+          reason: applyResult.reason,
+        })
+      ) {
+        const miss = applyResult.miss;
+        const failedFile =
+          miss?.file ||
+          applyResult.reason.match(/file "([^"]+)"/)?.[1] ||
+          expectedFiles[0];
+        // Always re-read from disk so repair is grounded on live content,
+        // not the pre-prompt window snapshot.
+        let currentContent: string | null = null;
+        if (failedFile) {
+          try {
+            currentContent = await fsAdapter.read(failedFile);
+          } catch {
+            currentContent = null;
+          }
+          if (currentContent == null) {
+            currentContent = fileContents[failedFile] ?? null;
+          }
+        }
+        if (currentContent && fixedHunks.length > 0 && failedFile) {
+          ctx.appendSystem(
+            `[apply-miss] kind=${miss?.kind ?? "unknown"} file=${failedFile}` +
+              (miss?.needle ? ` needle=${JSON.stringify(miss.needle).slice(0, 80)}` : "") +
+              ` — grounded hunk repair (no literature)`,
+          );
+          const repairPrompt = buildHunkRepairPrompt(
+            fixedHunks,
+            applyResult.reason,
+            { [failedFile]: currentContent },
+            { miss },
+          );
           const repairRaw = await promptWithFailoverAuto(agent, wrapCouncilPromptWithControlHints(
             `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`,
             agent.id,
@@ -729,7 +762,10 @@ async function tryWorkerPrompt(
             manager: state.manager as any,
             agentName: workerProfile,
             signal: controller.signal,
-            maxToolTurns: workerToolTurnCap,
+            // Pure apply repair: no tools / no literature research loops.
+            maxToolTurns: 0,
+            formatExpect: "json",
+            ollamaFormat: "json" as const,
             onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
             onToolResultHook: toolCoachHook,
             runId: state.cfg.runId,

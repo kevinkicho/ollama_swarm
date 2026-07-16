@@ -1,7 +1,8 @@
 // 2026-05-02: structural regression tests for the hunk-repair retry
-// path. The logic now lives in workerRunner.ts (refactored from
-// BlackboardRunner.ts). Source-grep checks lock the wiring with much
-// less overhead than mocking the full worker pipeline.
+// path. Apply-time grounded repair lives in workerSelfConsistency
+// (finalizeWorkerHunks), invoked from workerRunner.executeWorkerTodo.
+// Source-grep checks lock the wiring with much less overhead than
+// mocking the full worker pipeline.
 //
 // Why this matters: pre-fix, every applyHunks failure escalated straight
 // to replan. The retry path lets the worker fix its OWN hunks against the
@@ -15,10 +16,51 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WORKER_SRC = readFileSync(join(__dirname, "workerRunner.ts"), "utf8");
+const SELF_CONSISTENCY_SRC = readFileSync(
+  join(__dirname, "workerSelfConsistency.ts"),
+  "utf8",
+);
+const PROMPT_SRC = readFileSync(join(__dirname, "prompts", "worker.ts"), "utf8");
 
-test("workerRunner — buildHunkRepairPrompt is actually called in executeWorkerTodo", () => {
-  // With auditor-gated commits + batching, workers only propose; auditor reviews + batches.
-  assert.ok(true, "hunk-repair / apply now under auditor control with in-memory batch + single commit");
+test("workerRunner — finalizeWorkerHunks is called (repair path entry)", () => {
+  assert.ok(
+    WORKER_SRC.includes("finalizeWorkerHunks"),
+    "executeWorkerTodo must hand off to finalizeWorkerHunks",
+  );
+});
+
+test("workerSelfConsistency — grounded buildHunkRepairPrompt on apply miss", () => {
+  assert.ok(
+    SELF_CONSISTENCY_SRC.includes("buildHunkRepairPrompt"),
+    "finalizeWorkerHunks must call buildHunkRepairPrompt",
+  );
+  assert.ok(
+    SELF_CONSISTENCY_SRC.includes("isRepairableApplyMiss"),
+    "repair must gate on isRepairableApplyMiss",
+  );
+  assert.ok(
+    SELF_CONSISTENCY_SRC.includes("uniqueCandidates") ||
+      SELF_CONSISTENCY_SRC.includes("{ miss }") ||
+      SELF_CONSISTENCY_SRC.includes("miss:"),
+    "repair must pass ApplyMissReport into buildHunkRepairPrompt",
+  );
+  assert.ok(
+    SELF_CONSISTENCY_SRC.includes("no literature") ||
+      SELF_CONSISTENCY_SRC.includes("maxToolTurns: 0"),
+    "pure apply repair must not re-enter literature tool loops",
+  );
+});
+
+test("buildHunkRepairPrompt accepts optional miss opts (source shape)", () => {
+  assert.ok(
+    PROMPT_SRC.includes("opts?: { miss?: ApplyMissReport }") ||
+      PROMPT_SRC.includes("miss?: ApplyMissReport"),
+    "buildHunkRepairPrompt v2 signature must accept miss",
+  );
+  assert.ok(
+    PROMPT_SRC.includes("uniqueCandidates") && PROMPT_SRC.includes("nearbyExcerpt"),
+    "repair prompt must surface uniqueCandidates and nearbyExcerpt",
+  );
 });
 
 test("auditor batching: collect changes → in-memory applyHunks → one git commit", () => {

@@ -18,7 +18,7 @@
 // let tests use in-memory fakes; real fs/git plumbing is wired by the
 // caller.
 
-import { applyHunks, type Hunk } from "./applyHunks.js";
+import { applyHunks, type Hunk, type ApplyMissReport } from "./applyHunks.js";
 
 export interface FilesystemAdapter {
   /** Read a file's text. Returns null when the file doesn't exist
@@ -80,6 +80,10 @@ export type WorkerOutcomeV2 =
        *  prompt the worker to fix the underlying bug rather than
        *  re-emit the same hunks. */
       verifyFailed?: boolean;
+      /** Structured apply miss (needle, nearbyExcerpt, uniqueCandidates)
+       *  when failure is from applyHunks. Optional so callers remain
+       *  compatible when miss is unavailable. */
+      miss?: ApplyMissReport;
     };
 
 export interface WorkerPipelineInput {
@@ -169,6 +173,7 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
       ok: false,
       reason: applied.error + anchorDiag,
       ...(idx !== undefined && Number.isFinite(idx) ? { failedHunkIndex: idx } : {}),
+      ...(applied.miss ? { miss: applied.miss } : {}),
     };
   }
 

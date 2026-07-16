@@ -1,14 +1,17 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
+  buildHunkRepairPrompt,
   buildWorkerUserPrompt,
   HUNK_REPLACE_SOFT_MAX,
+  isRepairableApplyMiss,
   MAX_HUNKS,
   parseWorkerResponse,
   validateHunkPayload,
   WORKER_SYSTEM_PROMPT,
   type WorkerParseResult,
 } from "./worker.js";
+import type { ApplyMissReport } from "../applyMissReport.js";
 
 function expectOk(
   r: WorkerParseResult,
@@ -397,5 +400,137 @@ describe("buildWorkerUserPrompt — Unit 59 role guidance preamble", () => {
       roleGuidance: "   \n  ",
     });
     assert.ok(!prompt.includes("ROLE BIAS"));
+  });
+});
+
+describe("buildHunkRepairPrompt — grounded ApplyMissReport (v2)", () => {
+  const failedHunks = [
+    {
+      op: "replace",
+      file: "panelRegistry.js",
+      search: "section rates MISSING_KEY",
+      replace: "section rates FIXED",
+    },
+  ];
+  const fileBody = [
+    "# panels",
+    "section rates unique alpha",
+    "section rates unique beta",
+    "other stuff",
+  ].join("\n");
+
+  it("without miss still asks for JSON hunks and includes file content", () => {
+    const prompt = buildHunkRepairPrompt(
+      failedHunks,
+      'file "panelRegistry.js": hunk[0] op "replace": "search" text not found in file',
+      { "panelRegistry.js": fileBody },
+    );
+    assert.ok(prompt.includes("applyHunks error:"));
+    assert.ok(prompt.includes("BEGIN PREVIOUS HUNKS"));
+    assert.ok(prompt.includes('"op": "replace"'));
+    assert.ok(prompt.includes("panelRegistry.js"));
+    assert.ok(prompt.includes("section rates unique alpha"));
+    assert.ok(prompt.includes('{"hunks":'));
+    assert.ok(prompt.includes("No prose"));
+  });
+
+  it("with miss includes nearbyExcerpt and uniqueCandidates text", () => {
+    const miss: ApplyMissReport = {
+      file: "panelRegistry.js",
+      hunkIndex: 0,
+      op: "replace",
+      kind: "search_not_found",
+      needle: "section rates MISSING_KEY",
+      matchCount: 0,
+      nearbyExcerpt: "section rates unique alpha\nsection rates unique beta",
+      uniqueCandidates: [
+        "section rates unique alpha",
+        "section rates unique beta",
+      ],
+      message: 'hunk[0] op "replace": "search" text not found in file',
+    };
+    const prompt = buildHunkRepairPrompt(
+      failedHunks,
+      miss.message,
+      { "panelRegistry.js": fileBody },
+      { miss },
+    );
+    assert.ok(prompt.includes("kind: search_not_found"), "kind");
+    assert.ok(prompt.includes("needle (failed search/start)"), "needle label");
+    assert.ok(prompt.includes("section rates MISSING_KEY"), "needle value");
+    assert.ok(prompt.includes("BEGIN NEARBY EXCERPT"), "nearby header");
+    assert.ok(
+      prompt.includes("section rates unique alpha\nsection rates unique beta"),
+      "nearbyExcerpt body",
+    );
+    assert.ok(prompt.includes("CANDIDATE 1"), "candidate 1");
+    assert.ok(prompt.includes("section rates unique beta"), "candidate 2 text");
+    assert.ok(
+      prompt.includes("prefer pasting one of them"),
+      "prefer-candidate instruction",
+    );
+    assert.ok(
+      prompt.includes("do not research") || prompt.includes("pure apply repair"),
+      "no literature instruction",
+    );
+    // Keep existing JSON output shape contract
+    assert.ok(prompt.includes('{"hunks": [{"op": "replace"'));
+  });
+
+  it("isRepairableApplyMiss covers search/start not found and not unique", () => {
+    assert.equal(
+      isRepairableApplyMiss({
+        miss: {
+          file: "a.ts",
+          hunkIndex: 0,
+          op: "replace",
+          kind: "search_not_found",
+          needle: "x",
+          matchCount: 0,
+          nearbyExcerpt: "",
+          uniqueCandidates: [],
+          message: "not found",
+        },
+      }),
+      true,
+    );
+    assert.equal(
+      isRepairableApplyMiss({
+        miss: {
+          file: "a.ts",
+          hunkIndex: 0,
+          op: "replace_between",
+          kind: "start_not_unique",
+          needle: "x",
+          matchCount: 2,
+          nearbyExcerpt: "",
+          uniqueCandidates: [],
+          message: "not unique",
+        },
+      }),
+      true,
+    );
+    assert.equal(
+      isRepairableApplyMiss({
+        reason: 'file "a.ts": hunk[0] op "replace": "search" text not found in file',
+      }),
+      true,
+    );
+    assert.equal(
+      isRepairableApplyMiss({
+        miss: {
+          file: "a.ts",
+          hunkIndex: 0,
+          op: "create",
+          kind: "other",
+          needle: "",
+          matchCount: 0,
+          nearbyExcerpt: "",
+          uniqueCandidates: [],
+          message: "file already exists",
+        },
+      }),
+      false,
+    );
   });
 });

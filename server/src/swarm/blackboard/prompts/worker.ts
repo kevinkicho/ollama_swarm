@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { Hunk } from "../applyHunks.js";
+import type { ApplyMissReport } from "../applyMissReport.js";
 import {
   windowFileForWorker,
   windowFileWithAnchors,
@@ -511,16 +512,22 @@ export function buildWorkerRepairPrompt(previousResponse: string, parseError: st
 // scratch with a fresh worker. Now: feed the actual file content +
 // the failed hunks back to the SAME worker once before giving up.
 //
+// PR3 (eee6718f): grounded repair — optional ApplyMissReport supplies
+// failed op/needle, nearbyExcerpt from disk, and uniqueCandidates so
+// the model re-anchors on real substrings instead of inventing text.
 // Cap at HUNK_REPAIR_FILE_SLICE chars — most worker turns are
 // surgical and the worker doesn't need the whole 50KB file to fix
 // one hunk. If the file is larger we send head+tail.
 const HUNK_REPAIR_FILE_SLICE = 8_000;
+const HUNK_REPAIR_FALLBACK_EXCERPT = 1_200;
 
 export function buildHunkRepairPrompt(
   failedHunks: unknown[],
   applyError: string,
   fileContents: Record<string, string>,
+  opts?: { miss?: ApplyMissReport },
 ): string {
+  const miss = opts?.miss;
   const fileBlocks: string[] = [];
   for (const [file, contents] of Object.entries(fileContents)) {
     let body = contents;
@@ -533,11 +540,71 @@ export function buildHunkRepairPrompt(
     }
     fileBlocks.push(`--- BEGIN FILE: ${file}${note} ---\n${body}\n--- END FILE: ${file} ---`);
   }
+
+  const missLines: string[] = [];
+  if (miss) {
+    missLines.push(
+      "Structured apply miss:",
+      `  kind: ${miss.kind}`,
+      `  file: ${miss.file}`,
+      `  op: ${miss.op}`,
+      `  hunkIndex: ${miss.hunkIndex}`,
+      `  matchCount: ${miss.matchCount}`,
+      `  needle (failed search/start): ${JSON.stringify(miss.needle)}`,
+    );
+    if (miss.nearbyExcerpt && miss.nearbyExcerpt.trim().length > 0) {
+      missLines.push(
+        "",
+        "Nearby file excerpt (from disk at apply time — prefer re-anchoring here):",
+        "--- BEGIN NEARBY EXCERPT ---",
+        miss.nearbyExcerpt,
+        "--- END NEARBY EXCERPT ---",
+      );
+    }
+    if (miss.uniqueCandidates.length > 0) {
+      missLines.push(
+        "",
+        "Suggested unique search/start strings (exact paste from the file — prefer these if they fit the edit):",
+      );
+      for (let i = 0; i < miss.uniqueCandidates.length; i++) {
+        missLines.push(
+          `--- CANDIDATE ${i + 1} ---`,
+          miss.uniqueCandidates[i]!,
+          `--- END CANDIDATE ${i + 1} ---`,
+        );
+      }
+    }
+    missLines.push("");
+  } else {
+    // No structured miss: still give a short head excerpt per file for grounding.
+    for (const [file, contents] of Object.entries(fileContents)) {
+      const excerpt =
+        contents.length > HUNK_REPAIR_FALLBACK_EXCERPT
+          ? contents.slice(0, HUNK_REPAIR_FALLBACK_EXCERPT) + "…"
+          : contents;
+      missLines.push(
+        `Nearby excerpt (${file}):`,
+        "--- BEGIN NEARBY EXCERPT ---",
+        excerpt,
+        "--- END NEARBY EXCERPT ---",
+        "",
+      );
+    }
+  }
+
   return [
-    "Your previous diff did NOT apply to the file. The most common cause is a whitespace or newline mismatch — your `search` text doesn't exactly match what's actually in the file.",
+    "Your previous diff did NOT apply to the file. The most common cause is a whitespace or newline mismatch — your `search`/`start` text doesn't exactly match what's actually in the file, or it is not unique.",
     `applyHunks error: ${applyError}`,
     "",
-    "The ACTUAL current file content is below. Compare your search text to the real bytes — note exact whitespace, tabs vs spaces, blank lines.",
+    ...missLines,
+    "Rules for this repair:",
+    "- Re-read the anchors against the ACTUAL file content below (and the nearby excerpt / candidates above).",
+    "- Do NOT invent text that is not in the file. `search` / `start` must be a verbatim substring of the current file.",
+    "- If unique candidates are listed, prefer pasting one of them as `search` or `start` when it matches the intended edit region.",
+    "- Match exact whitespace, tabs vs spaces, and blank lines.",
+    "- This is pure apply repair — do not research, browse the web, or change the intended edit; only fix anchors so the hunk applies.",
+    "",
+    "The ACTUAL current file content is below. Compare your search text to the real bytes.",
     "",
     ...fileBlocks,
     "",
@@ -551,4 +618,30 @@ export function buildHunkRepairPrompt(
     'Shape: {"hunks": [{"op": "replace", "file": "path", "search": "exact old text", "replace": "new text"}]}',
     "No prose. No markdown fences. Just the JSON object.",
   ].join("\n");
+}
+
+/** Miss kinds that should trigger grounded hunk repair (not replan/literature). */
+export const REPAIRABLE_APPLY_MISS_KINDS: ReadonlySet<string> = new Set([
+  "search_not_found",
+  "search_not_unique",
+  "start_not_found",
+  "start_not_unique",
+]);
+
+/**
+ * Whether an apply failure is a repairable anchor miss (search/start not found
+ * or not unique). Prefer structured miss.kind; fall back to reason text.
+ */
+export function isRepairableApplyMiss(input: {
+  miss?: ApplyMissReport;
+  reason?: string;
+}): boolean {
+  if (input.miss && REPAIRABLE_APPLY_MISS_KINDS.has(input.miss.kind)) {
+    return true;
+  }
+  const reason = input.reason ?? input.miss?.message ?? "";
+  if (!reason) return false;
+  if (/\b(search|start)\b/i.test(reason) && /not found/i.test(reason)) return true;
+  if (/must be unique|matches \d+ times|not[_ ]unique/i.test(reason)) return true;
+  return false;
 }

@@ -193,6 +193,13 @@ describe("applyAndCommit — failure modes", () => {
     assert.match(out.reason, /search/i);
     // No commit fired
     assert.equal(gitState.commits.length, 0);
+    // Structured miss threaded for grounded repair
+    assert.ok(out.miss, "miss should be present on apply failure");
+    assert.equal(out.miss?.kind, "search_not_found");
+    assert.equal(out.miss?.file, "a.ts");
+    assert.equal(out.miss?.needle, "MISSING");
+    assert.ok(typeof out.miss?.nearbyExcerpt === "string");
+    assert.ok(Array.isArray(out.miss?.uniqueCandidates));
   });
 
   it("write failure surfaces the error reason", async () => {

@@ -32,7 +32,7 @@ import path from "node:path";
 import type { Agent, AgentManager } from "../services/AgentManager.js";
 import type { SwarmEvent } from "../types.js";
 import type { RepoService } from "../services/RepoService.js";
-import { applyHunks, type Hunk } from "./blackboard/applyHunks.js";
+import { applyHunks, type Hunk, type ApplyMissReport } from "./blackboard/applyHunks.js";
 import { extractText } from "./extractText.js";
 import { parseWorkerResponse } from "./blackboard/prompts/worker.js";
 import {
@@ -51,7 +51,11 @@ import { pickProvider } from "../providers/pickProvider.js";
 async function dryRunHunks(
   clonePath: string,
   hunks: Hunk[],
-): Promise<{ wouldApply: number; reasons: string[] }> {
+): Promise<{
+  wouldApply: number;
+  reasons: string[];
+  misses: ApplyMissReport[];
+}> {
   const fsAdapter = realFilesystemAdapter(clonePath);
   const byFile = new Map<string, Hunk[]>();
   for (const h of hunks) {
@@ -61,6 +65,7 @@ async function dryRunHunks(
   }
   let wouldApply = 0;
   const reasons: string[] = [];
+  const misses: ApplyMissReport[] = [];
   for (const [file, fileHunks] of byFile) {
     let current: string | null = null;
     try {
@@ -70,9 +75,62 @@ async function dryRunHunks(
     }
     const r = applyHunks({ [file]: current }, fileHunks);
     if (r.ok) wouldApply += fileHunks.length;
-    else reasons.push(`${file}: ${r.error}`);
+    else {
+      reasons.push(`${file}: ${r.error}`);
+      if (r.miss) misses.push(r.miss);
+    }
   }
-  return { wouldApply, reasons };
+  return { wouldApply, reasons, misses };
+}
+
+/** Build re-prompt context from synthesizer total-miss (reasons + ApplyMissReport). */
+export function buildSynthesizerMissRepromptBlock(
+  reasons: string[],
+  misses: ApplyMissReport[],
+): string {
+  const lines: string[] = [
+    "",
+    "PRIOR ATTEMPT FAILED (search/start anchors not found or not unique). Reasons:",
+    ...reasons.slice(0, 8).map((r) => `- ${r}`),
+  ];
+  for (let i = 0; i < Math.min(misses.length, 4); i++) {
+    const m = misses[i]!;
+    lines.push(
+      "",
+      `Apply miss [${i + 1}]: kind=${m.kind} file=${m.file} op=${m.op} matchCount=${m.matchCount}`,
+      `  needle: ${JSON.stringify(m.needle).slice(0, 200)}`,
+    );
+    if (m.nearbyExcerpt?.trim()) {
+      lines.push(
+        "  nearbyExcerpt:",
+        "  ---",
+        m.nearbyExcerpt
+          .split("\n")
+          .slice(0, 40)
+          .map((l) => `  ${l}`)
+          .join("\n"),
+        "  ---",
+      );
+    }
+    if (m.uniqueCandidates.length > 0) {
+      lines.push(
+        "  uniqueCandidates (exact paste for search/start if they fit the edit):",
+      );
+      for (let c = 0; c < m.uniqueCandidates.length; c++) {
+        lines.push(
+          `  --- CANDIDATE ${c + 1} ---`,
+          m.uniqueCandidates[c]!,
+          `  --- END CANDIDATE ${c + 1} ---`,
+        );
+      }
+    }
+  }
+  lines.push(
+    "",
+    "Re-read the listed files and emit replace/replace_between hunks whose search/start text exists EXACTLY once in the current file contents. Prefer uniqueCandidates when listed. Do not invent anchors.",
+    "",
+  );
+  return lines.join("\n");
 }
 
 
@@ -155,9 +213,11 @@ export async function runWrapUpApplyPhase(
 
   // Phase 1 extension: dry-run synthesizer hunks (no disk write). On total
   // miss (stale search anchors — run 9f449937: 16→0), fall through to a
-  // worker re-prompt that includes the failure reasons so anchors re-read.
+  // worker re-prompt that includes the failure reasons + ApplyMissReport
+  // fields (nearbyExcerpt, uniqueCandidates) so anchors re-read from disk.
   let hunksToApply: Hunk[] = [];
   let synthesizerMissReasons: string[] = [];
+  let synthesizerMisses: ApplyMissReport[] = [];
 
   if (input.hunksFromSynthesizer && input.hunksFromSynthesizer.length > 0) {
     const synthHunks = input.hunksFromSynthesizer;
@@ -172,9 +232,11 @@ export async function runWrapUpApplyPhase(
       );
     } else {
       synthesizerMissReasons = dry.reasons;
+      synthesizerMisses = dry.misses;
+      const missKinds = dry.misses.map((m) => m.kind).join(",") || "n/a";
       input.appendSystem(
-        `Wrap-up apply: synthesizer ${synthHunks.length} hunk(s) dry-run 0 would land — ${dry.reasons.join("; ").slice(0, 500)}. ` +
-          `Falling through to worker re-prompt with live file anchors.`,
+        `Wrap-up apply: synthesizer ${synthHunks.length} hunk(s) dry-run 0 would land (miss kinds: ${missKinds}) — ${dry.reasons.join("; ").slice(0, 500)}. ` +
+          `Falling through to worker re-prompt with live file anchors + unique candidates.`,
       );
     }
   }
@@ -188,8 +250,10 @@ export async function runWrapUpApplyPhase(
     const readme = await input.repos.readReadme(input.clonePath);
     const failureBlock =
       synthesizerMissReasons.length > 0
-        ? `\n\nPRIOR ATTEMPT FAILED (search anchors not found). Reasons:\n- ${synthesizerMissReasons.slice(0, 8).join("\n- ")}\n` +
-          `Re-read the listed files and emit replace hunks whose "search" text exists EXACTLY in the current file contents.\n`
+        ? buildSynthesizerMissRepromptBlock(
+            synthesizerMissReasons,
+            synthesizerMisses,
+          )
         : "";
     const prompt =
       buildBaselinePrompt({ directive, repoFiles, readme }) + failureBlock;
