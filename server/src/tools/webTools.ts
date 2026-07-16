@@ -323,15 +323,14 @@ export async function webSearchTool(args: Record<string, unknown>): Promise<Tool
     return formatSearchResults(query, links, b.name);
   }
 
-  // Soft success with guidance so tool-loop stuck detectors don't thrash on 403 forever.
+  // Hard error (not soft-ok): consecutive identical failures trip toolLoopStuck
+  // so the agent cannot thrash web_search for minutes (9f449937 literature loop).
   return {
-    ok: true,
-    output:
-      `Web search backends unavailable for "${query}".\n` +
-      `Tried: ${errors.join("; ") || "none"}.\n\n` +
-      `Do NOT retry web_search with the same query. Instead:\n` +
-      `1. Use read/grep/list on the local clone for code and existing panels.\n` +
-      `2. web_fetch known official endpoints (bis.org, worldbank.org, imf.org, fred.stlouisfed.org, data.gov, …).\n` +
-      `3. Never invent placeholder URLs (your-org/your-repo, file://).`,
+    ok: false,
+    error:
+      `web_search backends unavailable for "${query}". ` +
+      `Tried: ${errors.join("; ") || "none"}. ` +
+      `Do NOT retry the same query. Use read/grep/list on the clone, or web_fetch a known official https URL ` +
+      `(bis.org, worldbank.org, imf.org, fred.stlouisfed.org, data.gov). Never invent your-org/file:// placeholders.`,
   };
 }
