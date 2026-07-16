@@ -6,6 +6,13 @@ const QUOTA_RE = /HTTP 429|session usage limit|rate limit exceeded/i;
 const ALREADY_DONE_RE = /already (done|complete|exist)|completed by another|work appears to have been/i;
 const OUT_OF_SCOPE_RE = /out of scope|not needed for|tests? not needed|not the current objective/i;
 
+/** Storm classes that get a free rule verdict; arbitrator may escalate after stuckCycles. */
+const STORM_CLASSES: readonly StallRuleClass[] = [
+  "replanner-skip-storm",
+  "skip-storm",
+  "reject-storm",
+];
+
 export function classifyStallRules(snap: StallBoardSnapshot): StallRuleClass {
   if (snap.providerStall && QUOTA_RE.test(snap.providerStall)) {
     return "transient-quota";
@@ -21,6 +28,16 @@ export function classifyStallRules(snap: StallBoardSnapshot): StallRuleClass {
   }
   if (snap.total === 0 && snap.committed === 0) {
     return "no-activity";
+  }
+  // Zombie open board: todos open/claimed but nothing commits and criteria remain.
+  // Do not treat as healthy once stuckCycles have accumulated.
+  if (
+    snap.open > 0
+    && snap.committed === 0
+    && snap.unmetCriteria > 0
+    && snap.stuckCycles >= 2
+  ) {
+    return "ambiguous";
   }
   if (snap.open > 0 || snap.committed > 0) {
     return "healthy";
@@ -71,13 +88,44 @@ export function ruleStallVerdict(
           "Workers are staling without commits. Prefer single-file todos, smaller hunks, and build-kind for shell steps.",
         confidence: "medium",
       };
+    case "no-activity":
+      return {
+        action: "retry",
+        source: "rule",
+        rationale:
+          "No board activity (no todos / no commits) while the run is blocked — seed concrete file-level work.",
+        plannerHint:
+          "Board is empty. Post 1–3 small, grounded todos (real paths from REPO FILE LIST) targeting unmet criteria. "
+          + "Avoid read-only or vague todos.",
+        confidence: "medium",
+      };
     case "healthy":
+      return null;
+    case "ambiguous":
+      // Prefer arbitrator when allowed; rule fallback if arb unavailable.
+      if (snap.stuckCycles >= 1) {
+        return {
+          action: "retry",
+          source: "rule",
+          rationale:
+            "Board state is ambiguous after stuck cycle(s) — re-seed smaller todos before hard-stop floor.",
+          plannerHint:
+            "Stall gate ambiguous: re-read contract + board. Post fewer, single-file todos for remaining unmet criteria.",
+          confidence: "low",
+        };
+      }
       return null;
     default:
       return null;
   }
 }
 
+/**
+ * Whether to call the LLM arbitrator.
+ * - Never for quota/healthy.
+ * - Early for ambiguous / no-activity once stuckCycles >= 1 (avoid silent null).
+ * - Escalate storms after stuckCycles >= 2 so rule templates can be overridden.
+ */
 export function shouldInvokeStallArbitrator(
   snap: StallBoardSnapshot,
   ruleClass: StallRuleClass,
@@ -86,8 +134,17 @@ export function shouldInvokeStallArbitrator(
 ): boolean {
   if (arbitratorCallsUsed >= maxCalls) return false;
   if (ruleClass === "transient-quota" || ruleClass === "healthy") return false;
-  if (snap.stuckCycles >= 2) return true;
-  return ruleClass === "ambiguous" || ruleClass === "replanner-skip-storm";
+
+  if (ruleClass === "ambiguous" || ruleClass === "no-activity") {
+    return snap.stuckCycles >= 1;
+  }
+
+  if ((STORM_CLASSES as readonly string[]).includes(ruleClass)) {
+    // First hit: free rule verdict only. Repeated stuck: escalate to arbitrator.
+    return snap.stuckCycles >= 2;
+  }
+
+  return snap.stuckCycles >= 2;
 }
 
 export function summarizeStallForPrompt(snap: StallBoardSnapshot, ruleClass: StallRuleClass): string {

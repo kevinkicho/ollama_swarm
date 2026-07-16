@@ -142,45 +142,48 @@ export class SwarmControlCenter {
     const snap = this.buildBoardSnapshot(input);
     const ruleClass = classifyStallRules(snap);
     const ruleVerdict = ruleStallVerdict(snap, ruleClass);
-    if (ruleVerdict && ruleClass !== "ambiguous") {
-      this.applyVerdictSideEffects(ruleVerdict, input);
-      return ruleVerdict;
-    }
 
-    if (
-      !shouldInvokeStallArbitrator(
-        snap,
-        ruleClass,
-        this.stallArbitratorCalls,
-        STALL_ARBITRATOR_MAX_CALLS,
-      )
-    ) {
-      return ruleVerdict;
-    }
-
-    const inRunPatterns =
-      input.exceptionCollector?.getPatternSummary().recurringPatterns
-        .slice(0, 8)
-        .map((p) => `${p.pattern} (${p.count}x)`) ?? [];
-    const patterns = [...new Set([...this.priorPatterns.slice(0, 6), ...inRunPatterns])].slice(0, 12);
-
-    this.stallArbitratorCalls++;
-    input.appendSystem(
-      `[control] Stall arbitrator invoked (${this.stallArbitratorCalls}/${STALL_ARBITRATOR_MAX_CALLS}) — class=${ruleClass}.`,
+    // Prefer arbitrator when eligible (escalation / ambiguous) so rule
+    // storms are not a permanent short-circuit of contextual stop/backoff.
+    const wantArb = shouldInvokeStallArbitrator(
+      snap,
+      ruleClass,
+      this.stallArbitratorCalls,
+      STALL_ARBITRATOR_MAX_CALLS,
     );
 
-    const arb =
-      (await runStallArbitrator(snap, ruleClass, {
+    if (wantArb) {
+      const inRunPatterns =
+        input.exceptionCollector?.getPatternSummary().recurringPatterns
+          .slice(0, 8)
+          .map((p) => `${p.pattern} (${p.count}x)`) ?? [];
+      const patterns = [...new Set([...this.priorPatterns.slice(0, 6), ...inRunPatterns])].slice(0, 12);
+
+      this.stallArbitratorCalls++;
+      input.appendSystem(
+        `[control] Stall arbitrator invoked (${this.stallArbitratorCalls}/${STALL_ARBITRATOR_MAX_CALLS}) — class=${ruleClass}.`,
+      );
+
+      const arb = await runStallArbitrator(snap, ruleClass, {
         agent: input.coachAgent,
         clonePath: input.clonePath,
         runId: input.runId,
         manager: input.manager,
         recurringPatterns: patterns,
         interactionSummary: this.summarizeInteractions(input.interactionTracker),
-      })) ?? ruleVerdict;
+      });
+      if (arb) {
+        this.applyVerdictSideEffects(arb, input);
+        return arb;
+      }
+      // Parse/LLM failure: fall through to rule verdict if any.
+    }
 
-    if (arb) this.applyVerdictSideEffects(arb, input);
-    return arb;
+    if (ruleVerdict) {
+      this.applyVerdictSideEffects(ruleVerdict, input);
+      return ruleVerdict;
+    }
+    return null;
   }
 
   private applyVerdictSideEffects(verdict: StallGateVerdict, input: StallGateInput): void {

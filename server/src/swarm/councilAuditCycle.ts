@@ -307,7 +307,10 @@ export async function runCouncilAuditCycle(
           host.setPhase("stopped");
           return "stop";
         }
-        if (gate?.action === "retry" && isAutonomous) {
+        // Honor retry on finite-round runs too (align with blackboard tierRunner).
+        // PlannerHint is already applied via session control; one more cycle is cheap
+        // vs burning stuck counters while ignoring control advice.
+        if (gate?.action === "retry") {
           host.setStuckCycleCount(0);
           host.setPreviousStuckFailSignature("");
           host.appendSystem(`[control] Retrying after stall gate — ${gate.rationale}`);

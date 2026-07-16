@@ -6,6 +6,7 @@ import {
   summarizeStallForPrompt,
   type StallRuleClass,
 } from "@ollama-swarm/shared/swarmControl/stallRules";
+import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 
 const VerdictSchema = z.object({
   action: z.enum(["backoff", "retry", "stop"]),
@@ -73,7 +74,10 @@ export async function runStallArbitrator(
     });
     const text =
       (res as { data?: { parts?: Array<{ text?: string }> } })?.data?.parts?.[0]?.text ?? "";
-    const parsed = VerdictSchema.safeParse(JSON.parse(text));
+    // Tolerate fences / prose wrappers (JSON.parse alone was a silent null path).
+    const envelope = parseJsonEnvelope(text);
+    if (!envelope.ok) return null;
+    const parsed = VerdictSchema.safeParse(envelope.value);
     if (!parsed.success) return null;
     const v = parsed.data;
     return {
