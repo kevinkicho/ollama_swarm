@@ -183,12 +183,67 @@ export function diversifyCandidates(
   return kept;
 }
 
-/** Truncate each candidate for transcript / repair-prompt size. */
+/**
+ * Shrink an oversized candidate to a unique prefix or suffix ≤ maxChars that
+ * still appears exactly once in fileText. Never adds ellipsis — result is
+ * always a literal substring of fileText (or null if none fits).
+ */
+export function fitCandidateToMax(
+  candidate: string,
+  fileText: string,
+  maxChars: number = UNIQUE_CANDIDATE_MAX_CHARS,
+  minLength: number = UNIQUE_CANDIDATE_MIN_LENGTH,
+): string | null {
+  if (!candidate || !fileText || maxChars < minLength) return null;
+  if (candidate.length <= maxChars) {
+    return countOccurrences(fileText, candidate) === 1 ? candidate : null;
+  }
+
+  // Prefer longest unique prefix ≤ maxChars, then longest unique suffix.
+  for (const len of sparseProbeLengths(maxChars, minLength)) {
+    const prefix = candidate.slice(0, len);
+    if (countOccurrences(fileText, prefix) === 1) return prefix;
+  }
+  for (const len of sparseProbeLengths(maxChars, minLength)) {
+    const suffix = candidate.slice(candidate.length - len);
+    if (countOccurrences(fileText, suffix) === 1) return suffix;
+  }
+  return null;
+}
+
+/**
+ * Size-cap candidates while keeping them exact unique substrings of fileText.
+ * Drops entries that cannot be shortened uniquely without ellipsis.
+ * Dedupes + diversifies the result.
+ */
+export function sizeCapCandidates(
+  candidates: string[],
+  fileText: string,
+  maxChars: number = UNIQUE_CANDIDATE_MAX_CHARS,
+  minLength: number = UNIQUE_CANDIDATE_MIN_LENGTH,
+): string[] {
+  const fitted: string[] = [];
+  const seen = new Set<string>();
+  for (const c of candidates) {
+    const f = fitCandidateToMax(c, fileText, maxChars, minLength);
+    if (!f || seen.has(f)) continue;
+    seen.add(f);
+    fitted.push(f);
+  }
+  return diversifyCandidates(fitted);
+}
+
+/**
+ * @deprecated Use sizeCapCandidates(candidates, fileText) — ellipsis truncation
+ * produces non-literal anchors. Kept as a thin alias name only for clarity in
+ * older call sites; do not use truncateForReport on candidates.
+ */
 export function truncateCandidates(
   candidates: string[],
+  fileText: string,
   maxChars: number = UNIQUE_CANDIDATE_MAX_CHARS,
 ): string[] {
-  return candidates.map((c) => truncateForReport(c, maxChars));
+  return sizeCapCandidates(candidates, fileText, maxChars);
 }
 
 /**
@@ -196,7 +251,8 @@ export function truncateCandidates(
  * in `fileText`. Prefers multi-line / whole-line anchors first; only falls
  * back to a sparse set of char prefixes/suffixes when still under the cap.
  * De-duplicates near-identical prefixes. Only candidates ≥ minLength.
- * Capped at UNIQUE_CANDIDATE_MAX; each entry size-capped.
+ * Capped at UNIQUE_CANDIDATE_MAX; each entry size-capped as a literal
+ * unique file substring (no ellipsis).
  *
  * Used for search_not_found / start_not_found repair suggestions — never
  * applied silently as a first-match substitute.
@@ -210,9 +266,15 @@ export function findUniqueSubstrings(
 
   const seen = new Set<string>();
   const found: string[] = [];
+  /** Raw bag can grow past MAX so diversify still has material for Phase 2. */
+  const rawCap = UNIQUE_CANDIDATE_MAX * 3;
+
+  const diversifiedCount = (): number =>
+    diversifyCandidates(found, UNIQUE_CANDIDATE_MAX).length;
 
   const consider = (s: string): void => {
-    if (found.length >= UNIQUE_CANDIDATE_MAX * 2) return; // soft bound before diversify
+    if (found.length >= rawCap) return;
+    if (diversifiedCount() >= UNIQUE_CANDIDATE_MAX) return;
     if (s.length < minLength) return;
     if (seen.has(s)) return;
     if (countOccurrences(fileText, s) !== 1) return;
@@ -223,31 +285,33 @@ export function findUniqueSubstrings(
   const lines = needle.split("\n");
 
   // Phase 1: multi-line / whole-line prefixes and suffixes (structural first).
+  // Early-stop on *diversified* count so near-dup multi-line prefixes don't
+  // skip Phase 2 before distinct lines are collected.
   for (let k = lines.length; k >= 1; k--) {
-    if (found.length >= UNIQUE_CANDIDATE_MAX) break;
+    if (diversifiedCount() >= UNIQUE_CANDIDATE_MAX) break;
     consider(lines.slice(0, k).join("\n"));
-    if (k < lines.length && found.length < UNIQUE_CANDIDATE_MAX) {
+    if (k < lines.length && diversifiedCount() < UNIQUE_CANDIDATE_MAX) {
       consider(lines.slice(lines.length - k).join("\n"));
     }
   }
 
   // Phase 2: sparse char prefixes/suffixes only if we still need diversity.
-  if (found.length < UNIQUE_CANDIDATE_MAX) {
+  if (diversifiedCount() < UNIQUE_CANDIDATE_MAX) {
     for (const line of lines) {
-      if (found.length >= UNIQUE_CANDIDATE_MAX) break;
+      if (diversifiedCount() >= UNIQUE_CANDIDATE_MAX) break;
       if (line.length < minLength) continue;
       for (const len of sparseProbeLengths(line.length, minLength)) {
-        if (found.length >= UNIQUE_CANDIDATE_MAX) break;
+        if (diversifiedCount() >= UNIQUE_CANDIDATE_MAX) break;
         // Whole line already considered in phase 1.
         if (len === line.length) continue;
         consider(line.slice(0, len));
-        if (found.length >= UNIQUE_CANDIDATE_MAX) break;
+        if (diversifiedCount() >= UNIQUE_CANDIDATE_MAX) break;
         consider(line.slice(line.length - len));
       }
     }
   }
 
-  return truncateCandidates(diversifyCandidates(found));
+  return sizeCapCandidates(diversifyCandidates(found), fileText, UNIQUE_CANDIDATE_MAX_CHARS, minLength);
 }
 
 /**
@@ -307,7 +371,10 @@ export function expandToUnique(
 
   // Prefer shortest successful expansion (most specific).
   found.sort((a, b) => a.length - b.length || a.localeCompare(b));
-  return truncateCandidates(found.slice(0, UNIQUE_CANDIDATE_MAX));
+  return sizeCapCandidates(
+    found.slice(0, UNIQUE_CANDIDATE_MAX),
+    fileText,
+  );
 }
 
 /**
@@ -405,9 +472,12 @@ export function buildApplyMissReport(
     }
   }
 
-  const uniqueCandidates = truncateCandidates(
+  // Always size-cap against fileText so overrides and computed paths alike
+  // remain exact unique substrings (no ellipsis).
+  const uniqueCandidates = sizeCapCandidates(
     input.uniqueCandidates ??
       computeUniqueCandidates(input.kind, input.needle, input.fileText),
+    input.fileText,
   );
 
   return {

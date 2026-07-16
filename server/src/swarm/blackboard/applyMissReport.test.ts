@@ -4,11 +4,14 @@ import {
   buildApplyMissReport,
   buildNearbyExcerpt,
   computeUniqueCandidates,
+  countOccurrences,
   diversifyCandidates,
   expandToUnique,
   findUniqueSubstrings,
+  fitCandidateToMax,
   lineIndexAtOffset,
   normalizeSearchWhitespace,
+  sizeCapCandidates,
   truncateForReport,
   EXPAND_MAX_LINES,
   NEARBY_EXCERPT_MAX_CHARS,
@@ -166,17 +169,48 @@ describe("findUniqueSubstrings", () => {
   });
 
   it("handles multi-KB unique lines without quadratic char scan", () => {
-    const unique = "U".repeat(20_000);
+    // Non-repetitive long line so unique prefixes remain unique after size-cap.
+    const unique =
+      "UNIQUE_MARKER_START_" +
+      Array.from({ length: 4000 }, (_, i) => `s${i},`).join("") +
+      "_END";
     const fileText = `head\n${unique}\ntail\n`;
     const t0 = performance.now();
     const cands = findUniqueSubstrings(unique, fileText);
     const ms = performance.now() - t0;
     assert.ok(cands.length >= 1);
     assert.ok(cands.length <= UNIQUE_CANDIDATE_MAX);
-    // Truncated for report size
     assert.ok(cands.every((c) => c.length <= UNIQUE_CANDIDATE_MAX_CHARS));
-    // Sparse probes: should be well under the old ~745ms quadratic path
-    assert.ok(ms < 200, `expected <200ms for 20KB line, got ${ms.toFixed(1)}ms`);
+    // Exact file substrings — no ellipsis corruption
+    for (const c of cands) {
+      assert.ok(fileText.includes(c), `candidate not in file: ${c.slice(0, 40)}…`);
+      assert.equal(countOccurrences(fileText, c), 1);
+      assert.ok(!c.includes("…"));
+    }
+    assert.ok(ms < 200, `expected <200ms for multi-KB line, got ${ms.toFixed(1)}ms`);
+  });
+
+  it("continues past near-dup multi-line prefixes to collect distinct lines (Issue 7)", () => {
+    // Nested multi-line prefixes of a unique block would all be unique and
+    // near-duplicates; a second distinct unique line must still surface.
+    const blockA = [
+      "LINE_A0_UNIQUE_PREFIX_BLOCK_AAAA_XXXX",
+      "LINE_A1_UNIQUE_PREFIX_BLOCK_AAAA_YYYY",
+      "LINE_A2_UNIQUE_PREFIX_BLOCK_AAAA_ZZZZ",
+    ].join("\n");
+    const lineB = "LINE_B_DISTINCT_OTHER_SECTION_BBBB_WWWW";
+    const fileText = `${blockA}\n---\n${lineB}\n`;
+    const needle = `${blockA}\n${lineB}`;
+    const cands = findUniqueSubstrings(needle, fileText);
+    assert.ok(cands.length >= 1);
+    // Should not collapse to only the big block — distinct lineB (or a
+    // unique substring covering it) should remain available after diversify.
+    const joined = cands.join("\n");
+    assert.ok(
+      cands.some((c) => c.includes("LINE_B_DISTINCT") || c === lineB) ||
+        joined.includes("LINE_B_DISTINCT"),
+      `expected distinct line B among candidates: ${JSON.stringify(cands)}`,
+    );
   });
 
   it("respects minLength (default 32)", () => {
@@ -364,10 +398,17 @@ describe("buildApplyMissReport", () => {
     );
   });
 
-  it("size-caps each uniqueCandidates entry", () => {
-    const longLine = "L".repeat(2000);
-    // Two "shared" markers separated by huge lines so expand yields multi-KB strings.
-    const fileText = `${longLine}\nshared\n${longLine}\nshared\n`;
+  it("size-caps candidates as exact unique file substrings (no ellipsis)", () => {
+    // Distinct long lines so unique expand prefixes remain unique after fit.
+    const longA =
+      "LONG_A_START_" +
+      Array.from({ length: 200 }, (_, i) => `a${i},`).join("") +
+      "_A_END";
+    const longB =
+      "LONG_B_START_" +
+      Array.from({ length: 200 }, (_, i) => `b${i},`).join("") +
+      "_B_END";
+    const fileText = `${longA}\nshared\n${longB}\nshared\n`;
     const r = buildApplyMissReport({
       file: "big.ts",
       hunkIndex: 0,
@@ -384,7 +425,22 @@ describe("buildApplyMissReport", () => {
         c.length <= UNIQUE_CANDIDATE_MAX_CHARS,
         `candidate length ${c.length} > ${UNIQUE_CANDIDATE_MAX_CHARS}`,
       );
+      assert.ok(!c.includes("…"), "must not use ellipsis truncation");
+      assert.ok(fileText.includes(c), "candidate must be literal substring of file");
+      assert.equal(countOccurrences(fileText, c), 1);
     }
+  });
+
+  it("fitCandidateToMax / sizeCapCandidates drop non-shortenable oversized", () => {
+    // Highly repetitive: any short prefix of U's appears many times.
+    const huge = "U".repeat(2000);
+    const fileText = `x\n${huge}\ny\n`;
+    assert.equal(fitCandidateToMax(huge, fileText), null);
+    assert.deepEqual(sizeCapCandidates([huge], fileText), []);
+    // Short unique string passes through.
+    const ok = "unique-enough-anchor-string-here-xx";
+    const file2 = `a\n${ok}\nb\n`;
+    assert.equal(fitCandidateToMax(ok, file2), ok);
   });
 
   it("focuses nearby excerpt on first match when matchCount > 0", () => {
