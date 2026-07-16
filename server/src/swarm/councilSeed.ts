@@ -60,9 +60,21 @@ export async function buildCouncilSeedMessage(
     }
   }
 
+  // Prior-run approve/deny lessons so peers don't re-litigate settled fails.
+  try {
+    const { buildDeliberationSeed } = await import("./deliberation/deliberationSeed.js");
+    const delib = await buildDeliberationSeed(clonePath);
+    if (delib.text) {
+      lines.push("", delib.text);
+    }
+  } catch {
+    /* best-effort */
+  }
+
   lines.push(
     "",
     "Use your read / grep / find tools to actually inspect this repo — start with README.md if present.",
+    "When evaluating peers, prefer ```deliberate``` envelopes (approve/deny with evidence).",
   );
 
   return {

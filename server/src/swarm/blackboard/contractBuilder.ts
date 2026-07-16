@@ -32,6 +32,7 @@ import {
   renderMemoryForSeed,
 } from "./memoryStore.js";
 import { buildFailurePatternSeed } from "../failurePatternSeed.js";
+import { buildDeliberationSeed } from "../deliberation/deliberationSeed.js";
 import {
   readDesignMemory,
   renderDesignMemoryForSeed,
@@ -478,6 +479,24 @@ export async function buildSeed(
       const msg = err instanceof Error ? err.message : String(err);
       ctx.appendSystem(`Failure-pattern seed failed (${msg}); continuing.`);
     }
+  }
+
+  // Cross-run peer/hierarchy approve·deny lessons from deliberation.jsonl.
+  try {
+    const delib = await buildDeliberationSeed(clonePath);
+    if (delib.text) {
+      priorMemoryRendered = priorMemoryRendered
+        ? `${priorMemoryRendered}\n\n${delib.text}`
+        : delib.text;
+      if (cfg.suppressSeedMessages !== true) {
+        ctx.appendSystem(
+          `Deliberation seed: ${delib.denyCount} deny + ${delib.approveCount} approve signal(s) from ${delib.runsScanned} prior run log(s).`,
+        );
+      }
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ctx.appendSystem(`Deliberation seed failed (${msg}); continuing.`);
   }
 
   let priorDesignMemoryRendered: string | undefined;

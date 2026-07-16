@@ -60,8 +60,19 @@ const rows = await readDeliberationLog(clonePath, runId);
 // → feed Brain, next-run context, or external analytics
 ```
 
+## Cross-run seed
+
+`buildDeliberationSeed(clonePath)` scans recent `logs/*/deliberation.jsonl`
+and injects ranked DENY / APPROVE patterns into:
+
+- Blackboard planner seed (`contractBuilder` → `priorMemoryRendered`)
+- Council project seed (`councilSeed`)
+
+So the next run avoids re-proposing rejected patterns without new evidence.
+
 ## Related knobs
 
 - `mentionContracts` — inter-agent asks (orthogonal; routing work)
 - `councilReconcile: "vote" | "judge"` — structured peer selection
 - Auditor pending-commit gate — hierarchy ship authority
+- Peer deny vote override — `peerDeliberationAggregate.preferNonRejectedWinner`
