@@ -21,6 +21,10 @@ const SELF_CONSISTENCY_SRC = readFileSync(
   "utf8",
 );
 const PROMPT_SRC = readFileSync(join(__dirname, "prompts", "worker.ts"), "utf8");
+const COUNCIL_WORKER_SRC = readFileSync(
+  join(__dirname, "..", "councilWorkerRunner.ts"),
+  "utf8",
+);
 
 test("workerRunner — finalizeWorkerHunks is called (repair path entry)", () => {
   assert.ok(
@@ -45,9 +49,49 @@ test("workerSelfConsistency — grounded buildHunkRepairPrompt on apply miss", (
     "repair must pass ApplyMissReport into buildHunkRepairPrompt",
   );
   assert.ok(
-    SELF_CONSISTENCY_SRC.includes("no literature") ||
-      SELF_CONSISTENCY_SRC.includes("maxToolTurns: 0"),
-    "pure apply repair must not re-enter literature tool loops",
+    SELF_CONSISTENCY_SRC.includes("EMIT_ONLY_PROFILE_ID"),
+    "pure apply repair must use emit-only profile (empty tools)",
+  );
+  assert.ok(
+    /promptAgent\(\s*agent,[\s\S]*?EMIT_ONLY_PROFILE_ID/m.test(SELF_CONSISTENCY_SRC),
+    "promptAgent repair call must pass EMIT_ONLY_PROFILE_ID as agentName",
+  );
+  assert.ok(
+    SELF_CONSISTENCY_SRC.includes("maxToolTurns: 1"),
+    "repair must allow ≥1 model turn (0 with tools = no-op; emit-only + 1 is portable)",
+  );
+  assert.ok(
+    SELF_CONSISTENCY_SRC.includes("acceptRepairedHunksIfApply"),
+    "repair must gate accept on dry-run apply success",
+  );
+});
+
+test("councilWorkerRunner — repair uses emit-only profile (no tool-bearing + 0-cap)", () => {
+  assert.ok(
+    COUNCIL_WORKER_SRC.includes("EMIT_ONLY_PROFILE_ID"),
+    "council repair must import/use EMIT_ONLY_PROFILE_ID",
+  );
+  assert.ok(
+    /agentName:\s*EMIT_ONLY_PROFILE_ID/.test(COUNCIL_WORKER_SRC),
+    "council repair prompt must set agentName: EMIT_ONLY_PROFILE_ID",
+  );
+  // Repair block must not pin tool-bearing workerProfile with maxToolTurns: 0
+  const repairBlockMatch = COUNCIL_WORKER_SRC.match(
+    /grounded hunk repair[\s\S]*?promptWithFailoverAuto\([\s\S]*?\{([\s\S]*?)\},\s*state\.cfg\.providerFailover\)/,
+  );
+  assert.ok(repairBlockMatch, "expected grounded hunk repair promptWithFailoverAuto call");
+  const repairOpts = repairBlockMatch![1]!;
+  assert.ok(
+    /agentName:\s*EMIT_ONLY_PROFILE_ID/.test(repairOpts),
+    "repair opts agentName must be emit-only",
+  );
+  assert.ok(
+    /maxToolTurns:\s*1/.test(repairOpts),
+    "repair opts must use maxToolTurns: 1 (portable one model turn)",
+  );
+  assert.ok(
+    !/agentName:\s*workerProfile/.test(repairOpts),
+    "repair must not use tool-bearing workerProfile",
   );
 });
 

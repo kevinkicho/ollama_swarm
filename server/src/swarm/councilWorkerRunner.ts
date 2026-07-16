@@ -22,6 +22,7 @@ import { extractText } from "./extractText.js";
 import { isWebToolsEnabled, resolveCouncilToolProfile, resolveToolProfile } from "./toolProfiles.js";
 import {
   effectiveToolProfileId,
+  EMIT_ONLY_PROFILE_ID,
   EXPLORE_MAX_LITERATURE_TOOL_TURNS,
   LITERATURE_RESEARCH_NUDGE_MESSAGE,
   LITERATURE_RESEARCH_NUDGE_TURN,
@@ -754,16 +755,19 @@ async function tryWorkerPrompt(
             { [failedFile]: currentContent },
             { miss },
           );
+          // Emit-only profile ("swarm" → empty tools). maxToolTurns must be ≥1 so
+          // OpenAI/Anthropic run a single model turn; Ollama no-tools path is single-shot.
+          // Never use workerProfile here — tool-bearing + maxToolTurns:0 yields zero model turns.
           const repairRaw = await promptWithFailoverAuto(agent, wrapCouncilPromptWithControlHints(
             `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`,
             agent.id,
             ctx,
           ), {
             manager: state.manager as any,
-            agentName: workerProfile,
+            agentName: EMIT_ONLY_PROFILE_ID,
             signal: controller.signal,
-            // Pure apply repair: no tools / no literature research loops.
-            maxToolTurns: 0,
+            // Pure apply repair: tools-off profile + one model turn (no literature).
+            maxToolTurns: 1,
             formatExpect: "json",
             ollamaFormat: "json" as const,
             onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),

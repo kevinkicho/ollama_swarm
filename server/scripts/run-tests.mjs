@@ -61,6 +61,7 @@ const TEST_FILES = [
   "src/swarm/blackboard/lifecycleState.test.ts",
   "src/swarm/blackboard/TodoQueue.test.ts",
   "src/swarm/blackboard/WorkerPipeline.test.ts",
+  "src/swarm/blackboard/workerSelfConsistency.test.ts",
   "src/swarm/blackboard/eventLogIndex.test.ts",
   "src/swarm/blackboard/v2Adapters.test.ts",
   "src/swarm/blackboard/EventLogReaderV2.test.ts",

@@ -29,10 +29,31 @@ import {
   buildDryRunFailurePromptAddendum,
   decideDryRunOutcome,
 } from "../preflightDryRun.js";
+import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
 
 export type SelfConsistencyOutcome = {
   outcome: "stale" | "aborted" | "pending-commit";
 };
+
+/**
+ * After a repair re-prompt: accept repaired hunks only if pure applyHunks
+ * succeeds against the given file map. Otherwise keep originals (fail-safe).
+ * Pure + unit-testable — no I/O.
+ */
+export function acceptRepairedHunksIfApply(
+  original: readonly Hunk[],
+  repaired: readonly Hunk[],
+  contents: Record<string, string | null>,
+): { hunks: readonly Hunk[]; accepted: boolean; error?: string } {
+  if (repaired.length === 0) {
+    return { hunks: original, accepted: false, error: "empty repaired hunks" };
+  }
+  const dry = applyHunks(contents, repaired.slice() as Hunk[]);
+  if (dry.ok) {
+    return { hunks: repaired, accepted: true };
+  }
+  return { hunks: original, accepted: false, error: dry.error };
+}
 
 export interface WorkerSelfConsistencyCtx {
   isStopping: () => boolean;
@@ -313,6 +334,9 @@ export async function finalizeWorkerHunks(
         );
         let repairResponse: string;
         try {
+          // Emit-only profile ("swarm" → empty tools). maxToolTurns ≥1 so
+          // non-Ollama providers actually run one model turn. Never use
+          // workerToolProfile("hunk") with a 0-cap — tool loop never calls the model.
           repairResponse = await ctx.promptAgent(
             agent,
             `${WORKER_SYSTEM_PROMPT}\n\n${buildHunkRepairPrompt(
@@ -321,13 +345,13 @@ export async function finalizeWorkerHunks(
               { [failedFile]: freshContent },
               { miss },
             )}`,
-            ctx.workerToolProfile("hunk"),
+            EMIT_ONLY_PROFILE_ID,
             "json",
             WORKER_HUNKS_JSON_SCHEMA,
             {
               kind: "worker",
               label: `hunk-repair ${todo.id.slice(0, 8)}`,
-              maxToolTurns: 0,
+              maxToolTurns: 1,
               mode: "emit",
             },
           );
@@ -346,33 +370,34 @@ export async function finalizeWorkerHunks(
           ctx.appendAgent(agent, repairResponse);
           const repairParsed = parseWorkerResponse(repairResponse, todo.expectedFiles);
           if (repairParsed.ok && !repairParsed.skip && repairParsed.hunks.length > 0) {
-            const reDry = applyHunks(contents, repairParsed.hunks.slice() as Hunk[]);
-            // Re-read may still matter; re-apply against refreshed map if first fail used stale.
-            if (!reDry.ok) {
-              // Retry dry against a fresh read of the failed file only.
+            // Prefer current in-memory map; on miss re-read the failed file once.
+            let gate = acceptRepairedHunksIfApply(
+              hunksToCommit,
+              repairParsed.hunks,
+              contents,
+            );
+            if (!gate.accepted) {
               const refreshed: Record<string, string | null> = { ...contents };
               try {
                 refreshed[failedFile] = await fsForRepair.read(failedFile);
               } catch {
                 /* keep */
               }
-              const reDry2 = applyHunks(refreshed, repairParsed.hunks.slice() as Hunk[]);
-              if (reDry2.ok) {
-                hunksToCommit = repairParsed.hunks;
-                commitTier = "repair";
-                ctx.appendSystem(
-                  `[${agent.id}] [apply-miss] hunk repair dry-run ok — proposing repaired hunks`,
-                );
-              } else {
-                ctx.appendSystem(
-                  `[${agent.id}] [apply-miss] hunk repair still misses: ${reDry2.error.slice(0, 200)} — proposing original`,
-                );
-              }
-            } else {
-              hunksToCommit = repairParsed.hunks;
+              gate = acceptRepairedHunksIfApply(
+                hunksToCommit,
+                repairParsed.hunks,
+                refreshed,
+              );
+            }
+            if (gate.accepted) {
+              hunksToCommit = gate.hunks;
               commitTier = "repair";
               ctx.appendSystem(
                 `[${agent.id}] [apply-miss] hunk repair dry-run ok — proposing repaired hunks`,
+              );
+            } else {
+              ctx.appendSystem(
+                `[${agent.id}] [apply-miss] hunk repair still misses: ${(gate.error ?? "apply failed").slice(0, 200)} — proposing original`,
               );
             }
           } else {
