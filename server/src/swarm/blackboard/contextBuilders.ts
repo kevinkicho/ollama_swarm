@@ -636,6 +636,7 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
       auditorApproved: true,
       skipCommit: options?.skipCommit,
       gitCommitOptional,
+      runId: r.active?.runId,
     });
     return { 
       ok: result.ok, 

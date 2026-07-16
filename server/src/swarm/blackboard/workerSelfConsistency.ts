@@ -314,16 +314,17 @@ export async function finalizeWorkerHunks(
     }
     const dryApply = applyHunks(contents, hunksToCommit.slice() as Hunk[]);
     const runIdForStats = cfg?.runId;
-    // Dry-run preflight: record miss kinds + repair outcomes only.
-    // attempts/applied are owned by applyAndCommit (proposeCommit path).
-    if (!dryApply.ok) {
-      noteApplyMiss(dryApply.miss?.kind ?? "other", runIdForStats);
-    }
+    // Grounded preflight integrity ownership (avoid double-count with applyAndCommit):
+    // - repairSuccess/Failure only here for repair outcomes
+    // - On accepted repair: note original miss once (primary fail that was recovered)
+    // - On repair fail / non-repairable: do NOT note miss here — real applyAndCommit owns it
+    // - attempts/applied always owned by non-dryRunOnly applyAndCommit
     if (
       !dryApply.ok &&
       isRepairableApplyMiss({ miss: dryApply.miss, reason: dryApply.error })
     ) {
       const miss = dryApply.miss;
+      const originalMissKind = miss?.kind ?? "other";
       const failedFile =
         miss?.file ||
         dryApply.error.match(/file "([^"]+)"/)?.[1] ||
@@ -404,6 +405,8 @@ export async function finalizeWorkerHunks(
             if (gate.accepted) {
               hunksToCommit = gate.hunks;
               commitTier = "repair";
+              // Primary fail that was repaired — count miss once here (real apply succeeds).
+              noteApplyMiss(originalMissKind, runIdForStats);
               noteRepairSuccess(runIdForStats);
               ctx.appendSystem(
                 `[${agent.id}] [apply-miss] hunk repair dry-run ok — proposing repaired hunks`,
@@ -446,6 +449,7 @@ export async function finalizeWorkerHunks(
         auditorApproved: true,
         dryRunOnly: true,
         expectedAnchors: todo.expectedAnchors,
+        runId: cfg?.runId,
       });
       if (!dry.ok) {
         const reason = dry.reason;

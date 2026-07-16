@@ -4,7 +4,7 @@
 // disk I/O, no real git invocations. Real adapters will live in
 // Step 5c (BlackboardRunner integration).
 
-import { describe, it } from "node:test";
+import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
   applyAndCommit,
@@ -12,6 +12,11 @@ import {
   type GitAdapter,
 } from "./WorkerPipeline.js";
 import type { Hunk } from "./applyHunks.js";
+import {
+  clearApplyIntegrityTracking,
+  snapshotApplyIntegrityForRun,
+  startApplyIntegrityTracking,
+} from "../applyIntegrityStats.js";
 
 interface FakeFsState {
   files: Map<string, string>;
@@ -421,6 +426,40 @@ describe("applyAndCommit — verification gate (#296)", () => {
     assert.equal(out.verifyFailed, true);
     assert.equal(fsState.files.get("a.ts"), "hello world");
     assert.equal(gitState.commits.length, 0);
+  });
+
+  it("dryRunOnly does not inflate applyIntegrity attempts/applied", async () => {
+    clearApplyIntegrityTracking();
+    startApplyIntegrityTracking("run-dry");
+    const { fs } = makeFakeFs({ "a.ts": "hello world" });
+    const { git } = makeFakeGit();
+    const dry = await applyAndCommit({
+      todoId: "t1",
+      workerId: "w",
+      expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "world", replace: "kevin" }],
+      fs,
+      git,
+      dryRunOnly: true,
+      runId: "run-dry",
+    });
+    assert.equal(dry.ok, true);
+    assert.equal(snapshotApplyIntegrityForRun("run-dry"), undefined, "dry-run must not count");
+
+    const real = await applyAndCommit({
+      todoId: "t1",
+      workerId: "w",
+      expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "world", replace: "kevin" }],
+      fs,
+      git,
+      runId: "run-dry",
+    });
+    assert.equal(real.ok, true);
+    const snap = snapshotApplyIntegrityForRun("run-dry")!;
+    assert.equal(snap.attempts, 1);
+    assert.equal(snap.applied, 1);
+    clearApplyIntegrityTracking();
   });
 
   it("reverts writes + skips commit when verify fails", async () => {

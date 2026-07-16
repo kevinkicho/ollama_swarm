@@ -150,7 +150,10 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
   // 2. Apply hunks in memory. applyHunks returns a structured error
   //    on first failure (search anchor not found, create-on-existing,
   //    etc.) with the hunk index baked in.
-  noteApplyAttempt(input.runId);
+  // dryRunOnly (Q10 preflight) must not inflate attempts/applied — the
+  // subsequent real auditor apply owns those counters.
+  const countIntegrity = !input.dryRunOnly;
+  if (countIntegrity) noteApplyAttempt(input.runId);
   const applied = applyHunks(contents, input.hunks.slice());
   if (!applied.ok) {
     // Multi-anchor diagnostic: when expectedAnchors were provided but
@@ -177,7 +180,7 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
     }
     const match = applied.error.match(/hunk\[(\d+)\]/i);
     const idx = match ? Number.parseInt(match[1], 10) : undefined;
-    noteApplyMiss(applied.miss?.kind ?? "other", input.runId);
+    if (countIntegrity) noteApplyMiss(applied.miss?.kind ?? "other", input.runId);
     return {
       ok: false,
       reason: applied.error + anchorDiag,
@@ -296,7 +299,7 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
         // best-effort revert
       }
     }
-    noteApplySuccess(input.runId);
+    if (countIntegrity) noteApplySuccess(input.runId);
     return {
       ok: true,
       commitSha: "",
@@ -309,7 +312,7 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
   // 5. Commit the changes (unless skipCommit for batching).
   //    In batch mode, caller (auditor) will do one combined git commit.
   if (input.skipCommit) {
-    noteApplySuccess(input.runId);
+    if (countIntegrity) noteApplySuccess(input.runId);
     return {
       ok: true,
       commitSha: "",  // no individual sha
@@ -325,7 +328,7 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
   );
   if (!commit.ok) {
     if (input.gitCommitOptional) {
-      noteApplySuccess(input.runId);
+      if (countIntegrity) noteApplySuccess(input.runId);
       return {
         ok: true,
         commitSha: "",
@@ -336,7 +339,7 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
     }
     return { ok: false, reason: `git commit failed: ${commit.reason}` };
   }
-  noteApplySuccess(input.runId);
+  if (countIntegrity) noteApplySuccess(input.runId);
   return {
     ok: true,
     commitSha: commit.sha,
