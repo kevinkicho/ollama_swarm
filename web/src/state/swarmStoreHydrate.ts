@@ -1,5 +1,5 @@
 import type { StoreApi } from "zustand";
-import type { SwarmEvent, SwarmStatusSnapshot, TranscriptEntry } from "../types";
+import type { RunSummary, SwarmEvent, SwarmStatusSnapshot, TranscriptEntry } from "../types";
 import type { SwarmPhase } from "../types";
 import type { SwarmStore } from "./store";
 import type { AgentActivityRecord } from "./agentActivityProjection";
@@ -352,6 +352,27 @@ export function applyStatusSnapshotToStore(
       ?.controlAdvice,
     transcript: store.getState().transcript,
   });
+  hydrateDeliberationToStore(store, snap.summary?.deliberation);
+}
+
+/** Hydrate deliberation tail from summary.json for history / reconnect. */
+export function hydrateDeliberationToStore(
+  store: StoreApi<SwarmStore>,
+  rows: RunSummary["deliberation"] | undefined,
+): void {
+  if (!rows?.length) return;
+  store.getState().replaceDeliberation(
+    rows.map((r) => ({
+      ts: r.ts,
+      layer: r.layer,
+      verdict: r.verdict,
+      subject: r.subject,
+      ...(r.claim ? { claim: r.claim } : {}),
+      ...(r.validationReason ? { validationReason: r.validationReason } : {}),
+      ...(r.proposer ? { proposer: r.proposer } : {}),
+      ...(r.validator ? { validator: r.validator } : {}),
+    })),
+  );
 }
 
 /** Best-effort event-log replay for control advice on historical runs. */

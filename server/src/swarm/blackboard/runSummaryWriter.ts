@@ -178,6 +178,16 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     ...(ctx.controlAdvice?.length ? { controlAdvice: ctx.controlAdvice } : {}),
   });
 
+  try {
+    const { loadDeliberationForSummary } = await import("../deliberation/deliberationLog.js");
+    const delib = await loadDeliberationForSummary(cfg.localPath, summary.runId ?? cfg.runId);
+    if (delib.length > 0) {
+      summary = { ...summary, deliberation: delib };
+    }
+  } catch {
+    /* best-effort */
+  }
+
   const prior = ctx.getLastSummary?.();
   if (
     prior?.stopReason === "user"

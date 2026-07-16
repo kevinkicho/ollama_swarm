@@ -144,6 +144,37 @@ export async function appendDeliberationJsonl(
   return file;
 }
 
+/** Compact tail for embedding in summary.json (dissemination without full JSONL). */
+export async function loadDeliberationForSummary(
+  clonePath: string | undefined,
+  runId: string | undefined,
+  limit = 40,
+): Promise<
+  Array<{
+    ts: number;
+    layer: string;
+    verdict: string;
+    subject: string;
+    claim?: string;
+    validationReason?: string;
+    proposer?: string;
+    validator?: string;
+  }>
+> {
+  if (!clonePath || !runId) return [];
+  const rows = await readDeliberationLog(clonePath, runId);
+  return rows.slice(-limit).map((tx) => ({
+    ts: tx.ts,
+    layer: tx.layer,
+    verdict: tx.verdict,
+    subject: tx.subject,
+    ...(tx.claim ? { claim: tx.claim.slice(0, 240) } : {}),
+    ...(tx.validationReason ? { validationReason: tx.validationReason.slice(0, 240) } : {}),
+    ...(tx.proposer ? { proposer: tx.proposer } : {}),
+    ...(tx.validator ? { validator: tx.validator } : {}),
+  }));
+}
+
 /** Read all deliberation rows for a run (for export / post-run dissemination). */
 export async function readDeliberationLog(
   clonePath: string,

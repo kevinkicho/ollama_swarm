@@ -75,6 +75,7 @@ export interface DiscussionWriteSummaryOpts {
    *  MoA passes false. */
   includeFilesInLogLine?: boolean;
   controlAdvice?: RunSummary["controlAdvice"];
+  deliberation?: RunSummary["deliberation"];
 }
 
 /** The shared writeSummary body. Calling pattern in each runner:
@@ -131,6 +132,17 @@ export async function discussionWriteSummary(opts: DiscussionWriteSummaryOpts): 
     controlAdvice: opts.controlAdvice,
   };
   const summary = buildDiscussionSummary(summaryInput);
+
+  // Attach deliberation tail for dissemination (peer votes, hierarchy approve/deny).
+  try {
+    const { loadDeliberationForSummary } = await import("./deliberation/deliberationLog.js");
+    const delib = await loadDeliberationForSummary(opts.cfg.localPath, opts.cfg.runId);
+    if (delib.length > 0) {
+      (summary as { deliberation?: typeof delib }).deliberation = delib;
+    }
+  } catch {
+    /* best-effort */
+  }
 
   try {
     await writeRunSummary(opts.cfg.localPath, summary);

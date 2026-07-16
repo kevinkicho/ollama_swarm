@@ -281,6 +281,27 @@ export interface RunSummary {
   plannerTools?: boolean;
   webTools?: boolean;
   mcpServers?: string;
+  controlAdvice?: Array<{
+    ts: number;
+    kind: string;
+    action?: string;
+    source?: string;
+    rationale: string;
+    plannerHint?: string;
+    agentId?: string;
+    tool?: string;
+  }>;
+  /** Tail of peer/hierarchy/control deliberation for hydrate + history. */
+  deliberation?: Array<{
+    ts: number;
+    layer: string;
+    verdict: string;
+    subject: string;
+    claim?: string;
+    validationReason?: string;
+    proposer?: string;
+    validator?: string;
+  }>;
 }
 
 export interface BoardCountsDTO {

@@ -128,6 +128,25 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         ...(ev.tool ? { tool: ev.tool } : {}),
       });
       break;
+    case "deliberation_transaction": {
+      const tx = ev.transaction;
+      if (tx && typeof tx === "object") {
+        s.pushDeliberation({
+          id: typeof tx.id === "string" ? tx.id : undefined,
+          ts: typeof tx.ts === "number" ? tx.ts : Date.now(),
+          layer: typeof tx.layer === "string" ? tx.layer : "peer",
+          verdict: typeof tx.verdict === "string" ? tx.verdict : "claim",
+          subject: typeof tx.subject === "string" ? tx.subject : "",
+          ...(typeof tx.claim === "string" ? { claim: tx.claim } : {}),
+          ...(typeof tx.validationReason === "string"
+            ? { validationReason: tx.validationReason }
+            : {}),
+          ...(typeof tx.proposer === "string" ? { proposer: tx.proposer } : {}),
+          ...(typeof tx.validator === "string" ? { validator: tx.validator } : {}),
+        });
+      }
+      break;
+    }
     case "agent_latency_sample":
       s.pushLatencySample(ev.agentId, {
         ts: ev.ts,

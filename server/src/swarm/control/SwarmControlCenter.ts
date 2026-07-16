@@ -19,6 +19,7 @@ import {
   TOOL_COACH_THRESHOLD,
 } from "./toolFailureCoach.js";
 import { deterministicToolCoachHint } from "./deterministicToolCoach.js";
+import { recordDeliberationAsync } from "../deliberation/deliberationLog.js";
 
 export const STALL_ARBITRATOR_MAX_CALLS = 6;
 
@@ -206,6 +207,31 @@ export class SwarmControlCenter {
       type: "swarm_control_advice",
       ...advice,
     });
+    // Control-layer deliberation: machine approve/deny of continuing the run.
+    const verdictMap =
+      verdict.action === "stop"
+        ? "deny"
+        : verdict.action === "retry" || verdict.action === "backoff"
+          ? "approve"
+          : "validate";
+    recordDeliberationAsync(
+      {
+        runId: input.runId ?? "unknown",
+        layer: "control",
+        subject: `stall-gate:${verdict.action}`,
+        claim: verdict.rationale,
+        proposer: "swarm-control",
+        validator: tag,
+        verdict: verdictMap,
+        validationReason: verdict.plannerHint || verdict.rationale,
+      },
+      {
+        clonePath: input.clonePath,
+        runId: input.runId,
+        appendSystem: input.appendSystem,
+        emit: input.emit as any,
+      },
+    );
   }
 
   /**
@@ -246,6 +272,25 @@ export class SwarmControlCenter {
         type: "swarm_control_advice",
         ...advice,
       });
+      recordDeliberationAsync(
+        {
+          runId: deps.runId ?? "unknown",
+          layer: "control",
+          subject: `tool-coach:${tool}`,
+          claim: error.slice(0, 400),
+          proposer: agentId,
+          validator: `tool-coach-${source}`,
+          verdict: "challenge",
+          validationReason: hint,
+          evidence: [tool],
+        },
+        {
+          clonePath: deps.clonePath,
+          runId: deps.runId,
+          appendSystem: deps.appendSystem,
+          emit: deps.emit as any,
+        },
+      );
     };
 
     const ruleHint = deterministicToolCoachHint(tool, error);

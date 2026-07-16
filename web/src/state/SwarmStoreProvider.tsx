@@ -210,6 +210,8 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
         summaryAdvice: summary.controlAdvice,
         transcript: store.getState().transcript,
       });
+      const { hydrateDeliberationToStore } = await import("./swarmStoreHydrate");
+      hydrateDeliberationToStore(storeRef.current, summary.deliberation);
       const terminal = terminalPhaseFromSummary(summary);
       if (terminal) {
         s.setPhase(terminal, 0);

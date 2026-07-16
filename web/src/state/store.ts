@@ -52,6 +52,7 @@ const LATENCY_WINDOW = 20;
 const CONFORMANCE_WINDOW = 30;
 
 const CONTROL_ADVICE_WINDOW = 40;
+const DELIBERATION_WINDOW = 60;
 
 // T-Item-PerRunStore (2026-05-04): factory + Context for per-run
 // store scoping. The default singleton store backs the legacy "/" route
@@ -92,6 +93,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   runConfig: undefined,
   thinkGuardReferee: undefined,
   controlAdvice: [],
+  deliberation: [],
   wallClockCapMin: undefined,
   ambitionTiers: undefined,
   runId: undefined,
@@ -517,6 +519,18 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
     set({
       controlAdvice: advice.slice(-CONTROL_ADVICE_WINDOW),
     }),
+  pushDeliberation: (row) =>
+    set((s) => {
+      const next = s.deliberation.concat(row);
+      if (next.length > DELIBERATION_WINDOW) {
+        next.splice(0, next.length - DELIBERATION_WINDOW);
+      }
+      return { deliberation: next };
+    }),
+  replaceDeliberation: (rows) =>
+    set({
+      deliberation: rows.slice(-DELIBERATION_WINDOW),
+    }),
   // Unit 47: clone_state arrives once per run. Setting it ALSO clears
   // the dismissed flag so a fresh run shows its banner even if a
   // prior banner was dismissed mid-session (each run has its own
@@ -571,6 +585,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       runConfig: undefined,
       thinkGuardReferee: undefined,
       controlAdvice: [],
+      deliberation: [],
       wallClockCapMin: undefined,
       ambitionTiers: undefined,
       runId: undefined,
@@ -617,6 +632,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         brainChatHistory: [],
         useCaseFilters: [],
         controlAdvice: [],
+      deliberation: [],
       };
       const text = info
         ? [

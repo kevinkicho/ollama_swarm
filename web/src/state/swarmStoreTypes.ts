@@ -68,6 +68,19 @@ export interface SwarmControlAdvice {
   tool?: string;
 }
 
+/** Live peer/hierarchy/control deliberation transactions. */
+export interface DeliberationAdvice {
+  id?: string;
+  ts: number;
+  layer: "hierarchy" | "peer" | "control" | string;
+  verdict: string;
+  subject: string;
+  claim?: string;
+  validationReason?: string;
+  proposer?: string;
+  validator?: string;
+}
+
 // Task #46: metadata threaded into the transcript divider that
 // resetForNewRun appends. All optional — if missing, we fall back
 // to the plain "— new run started —" text for back-compat with any
@@ -141,6 +154,8 @@ export interface SwarmStore {
   thinkGuardReferee?: import("../types").ResolvedThinkGuardRefereeBudget;
   /** Rolling window of swarm_control_advice WS events. */
   controlAdvice: SwarmControlAdvice[];
+  /** Rolling window of deliberation_transaction WS events. */
+  deliberation: DeliberationAdvice[];
   // Caps from setup (wall clock, ambition tiers for blackboard) synced to
   // global store so other panels / review / bar can see them live.
   wallClockCapMin?: string;
@@ -247,6 +262,8 @@ export interface SwarmStore {
   pushAmendment: (amendment: DirectiveAmendment) => void;
   pushControlAdvice: (advice: SwarmControlAdvice) => void;
   replaceControlAdvice: (advice: SwarmControlAdvice[]) => void;
+  pushDeliberation: (row: DeliberationAdvice) => void;
+  replaceDeliberation: (rows: DeliberationAdvice[]) => void;
   setCloneState: (c: CloneState) => void;
   dismissCloneBanner: () => void;
   setRunStartedAt: (ts: number) => void;

@@ -222,6 +222,20 @@ export interface RunSummary {
   deliverables?: Array<{ path: string; status: "created" | "modified" }>;
   /** Swarm control center advice emitted during the run (history hydrate). */
   controlAdvice?: import("@ollama-swarm/shared/swarmControl/controlAdvice").SwarmControlAdviceRecord[];
+  /**
+   * Peer/hierarchy/control deliberation transactions (truncated tail).
+   * Full history lives in logs/<runId>/deliberation.jsonl.
+   */
+  deliberation?: Array<{
+    ts: number;
+    layer: string;
+    verdict: string;
+    subject: string;
+    claim?: string;
+    validationReason?: string;
+    proposer?: string;
+    validator?: string;
+  }>;
   /** User directive from setup / start payload. Enables Resume to replay intent. */
   userDirective?: string;
   plannerTools?: boolean;
