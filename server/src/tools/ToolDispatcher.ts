@@ -961,12 +961,18 @@ export class ToolDispatcher {
       case "edit":
         result = { ok: false, error: `${call.tool} dispatch not yet implemented` };
         break;
-      case "web_fetch":
-        result = await webFetchTool(call.args);
+      case "web_fetch": {
+        const { preflightResearchTool } = await import("./researchPolicy.js");
+        const blocked = preflightResearchTool("web_fetch", call.args);
+        result = blocked ?? (await webFetchTool(call.args));
         break;
-      case "web_search":
-        result = await webSearchTool(call.args);
+      }
+      case "web_search": {
+        const { preflightResearchTool } = await import("./researchPolicy.js");
+        const blocked = preflightResearchTool("web_search", call.args);
+        result = blocked ?? (await webSearchTool(call.args));
         break;
+      }
       default: {
         const mcpKey2 = this.mcpToolToClient.get(call.tool);
         if (mcpKey2 && this.mcpClients.has(mcpKey2)) {

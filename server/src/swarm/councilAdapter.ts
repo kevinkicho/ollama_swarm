@@ -64,7 +64,11 @@ export interface CouncilAdapterState {
   };
   repos: { listTopLevel: (p: string) => Promise<string[]>; readReadme: (p: string) => Promise<string | null>; listRepoFiles: (p: string, opts: { maxFiles: number }) => Promise<string[]> };
   appendSystem: (msg: string) => void;
-  appendAgent: (agent: Agent, text: string) => void;
+  appendAgent: (
+    agent: Agent,
+    text: string,
+    opts?: { role?: "worker" | "general" },
+  ) => void;
   emit: (e: unknown) => void;
   logDiag: (entry: Record<string, unknown>) => void;
   /** Shared with CouncilRunner — tool invocations attach to the next appendAgent bubble. */
@@ -79,7 +83,11 @@ export function buildCouncilAdapterState(
   manager: CouncilAdapterState["manager"],
   repos: { listTopLevel: (p: string) => Promise<string[]>; readReadme: (p: string) => Promise<string | null>; listRepoFiles: (p: string, opts: { maxFiles: number }) => Promise<string[]> },
   appendSystem: (msg: string) => void,
-  appendAgent: (agent: Agent, text: string) => void,
+  appendAgent: (
+    agent: Agent,
+    text: string,
+    opts?: { role?: "worker" | "general" },
+  ) => void,
   emit: (e: unknown) => void,
   logDiag: (entry: Record<string, unknown>) => void,
   pendingToolTraceByAgent: Map<string, ToolTraceEntry[]>,

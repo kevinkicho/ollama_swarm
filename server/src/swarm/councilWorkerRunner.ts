@@ -599,11 +599,17 @@ async function tryWorkerPrompt(
     ctx.promptSignal?.addEventListener("abort", onPromptAbort, { once: true });
     ctx.registerTodoAbort?.(agent.id, controller);
     try {
+    // formatExpect:"json" early-sniffs the stream for a JSON envelope so a
+    // think/prose loop cannot run for minutes (9f449937). ollamaFormat is
+    // only used when no tool turns are allowed — grammar-constrained JSON
+    // + tool calling is unreliable on some cloud models.
     const raw = await promptWithFailoverAuto(agent, basePrompt, {
       manager: state.manager as any,
       agentName: workerProfile,
       signal: controller.signal,
       maxToolTurns: workerToolTurnCap,
+      formatExpect: "json",
+      ...(workerToolTurnCap === 0 ? { ollamaFormat: "json" as const } : {}),
       activity: { kind: "worker", label: `todo ${todo.id.slice(0, 8)}` },
       onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
       onToolResultHook: toolCoachHook,
@@ -617,7 +623,7 @@ async function tryWorkerPrompt(
 
     // Mirror blackboard workerRunner: persist the model JSON so refresh/hydrate
     // can render WorkerHunksBubble (live StreamingDock alone is ephemeral).
-    state.appendAgent(agent, res);
+    state.appendAgent(agent, res, { role: "worker" });
 
     const parsed = parseWorkerResponseWithRepair(res, expectedFiles);
     if (parsed.ok && parsed.hunks.length > 0 && !parsed.skip) {
@@ -681,7 +687,7 @@ async function tryWorkerPrompt(
           }, state.cfg.providerFailover);
           const repairText = extractProviderText(repairRaw);
           if (repairText) {
-            state.appendAgent(agent, repairText);
+            state.appendAgent(agent, repairText, { role: "worker" });
             const repairParsed = parseWorkerResponse(repairText, expectedFiles);
             if (repairParsed.ok && repairParsed.hunks.length > 0 && !repairParsed.skip) {
               const repairResult = await applyAndCommit({

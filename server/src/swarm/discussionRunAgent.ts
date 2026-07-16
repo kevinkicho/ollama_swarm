@@ -14,7 +14,10 @@ import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import {
+  finalizeAgentOutput,
+  formatFinalizeAnomalyLine,
+} from "@ollama-swarm/shared/finalizeAgentOutput";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import {
   discussionDraftJsonNudge,
@@ -77,7 +80,7 @@ function resolvePartialStreamText(host: DiscussionRunAgentHost, agentId: string)
 }
 
 function buildFailedDraftBody(msg: string, partialRaw: string): string {
-  const stripped = stripAgentText(partialRaw);
+  const stripped = finalizeAgentOutput(partialRaw);
   const final = stripped.finalText.trim();
   if (final.length >= 40) {
     return (
@@ -101,7 +104,9 @@ function pushDiscussionEntry(
   opts: RunAgentOpts,
   rawText: string,
 ): string {
-  const stripped = stripAgentText(rawText);
+  const stripped = finalizeAgentOutput(rawText);
+  const anomalyLine = formatFinalizeAnomalyLine(agent.id, stripped.anomalies, stripped.stats);
+  if (anomalyLine) host.appendSystem(anomalyLine);
   const summary: TranscriptEntrySummary | undefined =
     typeof opts.enrichSummary === "function"
       ? opts.enrichSummary(stripped.finalText)

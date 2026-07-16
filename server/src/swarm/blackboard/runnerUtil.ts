@@ -14,7 +14,10 @@ import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
 import { parsePlannerBrief } from "../../../../shared/src/plannerBriefParse.js";
 import { summarizeAgentResponse } from "./transcriptSummary.js";
-import { stripAgentText } from "../../../../shared/src/stripAgentText.js";
+import {
+  finalizeAgentOutput,
+  formatFinalizeAnomalyLine,
+} from "@ollama-swarm/shared/finalizeAgentOutput";
 import { takePendingToolTrace, type ToolTraceEntry } from "../toolCallTranscript.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueue } from "./TodoQueue.js";
@@ -159,7 +162,13 @@ export function appendAgent(
   text: string,
   options?: AppendAgentOptions,
 ): void {
-  const { finalText, thoughts, toolCalls } = stripAgentText(text);
+  // Canonical post-stream policy (strip / collapse loops / hard-cap).
+  const finalized = finalizeAgentOutput(text, { role: "general" });
+  const { finalText, thoughts, toolCalls, anomalies, stats } = finalized;
+  const anomalyLine = formatFinalizeAnomalyLine(agent.id, anomalies, stats);
+  if (anomalyLine) {
+    ctx.appendSystem(anomalyLine);
+  }
   let summary = summarizeAgentResponse(finalText);
   if (options?.briefKind) {
     const parsed = parsePlannerBrief(finalText);

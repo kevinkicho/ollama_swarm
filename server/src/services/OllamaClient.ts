@@ -18,6 +18,8 @@
 // Caller passes baseUrl via opts; the integration site reads config
 // once and threads it through.
 
+import { mergeStreamField } from "@ollama-swarm/shared/streamFieldMerge";
+
 /** Hard ceiling on accumulated thinking+content while reading JSONL.
  *  Defense-in-depth vs streamThinkGuard (which aborts via AbortSignal).
  *  Kept in sync with STREAM_HARD_MAX_TOTAL_CHARS in shared/streamThinkGuard. */
@@ -279,18 +281,6 @@ export async function chat(opts: any): Promise<ChatResult> {
     opts.onChunk?.(snapshot);
   };
 
-  /** Merge a stream frame field that may be delta OR cumulative snapshot. */
-  const mergeField = (prev: string, next: string): string => {
-    if (!next) return prev;
-    if (!prev) return next;
-    // Cumulative snapshot: new frame is prev + more
-    if (next.startsWith(prev) && next.length >= prev.length) return next;
-    // Redundant shorter prefix rebroadcast — ignore
-    if (prev.startsWith(next) && next.length < prev.length) return prev;
-    // Normal delta
-    return prev + next;
-  };
-
   let streamCapped = false;
   try {
     while (true) {
@@ -333,11 +323,11 @@ export async function chat(opts: any): Promise<ChatResult> {
         }
         let frameTouched = false;
         if (parsed.message?.thinking) {
-          thinking = mergeField(thinking, parsed.message.thinking);
+          thinking = mergeStreamField(thinking, parsed.message.thinking);
           frameTouched = true;
         }
         if (parsed.message?.content) {
-          content = mergeField(content, parsed.message.content);
+          content = mergeStreamField(content, parsed.message.content);
           frameTouched = true;
         }
         if (

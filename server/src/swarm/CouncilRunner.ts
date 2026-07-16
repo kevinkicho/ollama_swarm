@@ -15,7 +15,10 @@ import { extractProviderText, parseJsonArrayFromResponse, createTimeoutControlle
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import {
+  finalizeAgentOutput,
+  formatFinalizeAnomalyLine,
+} from "@ollama-swarm/shared/finalizeAgentOutput";
 import { takePendingToolTrace } from "./toolCallTranscript.js";
 import { describeSdkError } from "./sdkError.js";
 import { resolveCouncilToolProfile } from "./toolProfiles.js";
@@ -168,9 +171,12 @@ export class CouncilRunner extends DiscussionRunnerBase {
   }
 
   /** Persist worker / drafter JSON to the server transcript (survives refresh). */
-  private appendCouncilAgent(agent: Agent, text: string): void {
+  private appendCouncilAgent(agent: Agent, text: string, role: "worker" | "general" = "general"): void {
     if (this.transcriptFrozen) return;
-    const { finalText, thoughts, toolCalls } = stripAgentText(text);
+    const finalized = finalizeAgentOutput(text, { role });
+    const { finalText, thoughts, toolCalls, anomalies, stats } = finalized;
+    const anomalyLine = formatFinalizeAnomalyLine(agent.id, anomalies, stats);
+    if (anomalyLine) this.appendSystem(anomalyLine);
     const summary = summarizeAgentResponse(finalText);
     const toolTrace = takePendingToolTrace(this.pendingToolTraceByAgent, agent.id);
     const entry: TranscriptEntry = {
@@ -212,7 +218,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
       this.opts.manager as any,
       this.opts.repos as any,
       (msg) => this.appendSystem(msg),
-      (agent, text) => this.appendCouncilAgent(agent, text),
+      (agent, text, opts) =>
+        this.appendCouncilAgent(agent, text, opts?.role === "worker" ? "worker" : "general"),
       (e) => this.opts.emit(e as SwarmEvent),
       (entry) => this.opts.logDiag?.(entry as any),
       this.pendingToolTraceByAgent,
