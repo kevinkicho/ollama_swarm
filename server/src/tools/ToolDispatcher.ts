@@ -970,7 +970,7 @@ export class ToolDispatcher {
       case "web_search": {
         const { preflightResearchTool } = await import("./researchPolicy.js");
         const blocked = preflightResearchTool("web_search", call.args);
-        result = blocked ?? (await webSearchTool(call.args));
+        result = blocked ?? (await webSearchTool(call.args, { cloneRoot: this.clonePath }));
         break;
       }
       default: {

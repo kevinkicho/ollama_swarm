@@ -130,6 +130,11 @@ Tools (via in-process `ToolDispatcher`, resolved in `shared/src/toolProfiles.ts`
 | `swarm-builder-research` | builder + `web_search`, `web_fetch`        | Build roles when web tools on  | Yes (opt-in) |
 
 - Web tools require explicit RunConfig flags; not enabled by default.
+- `web_search` backends (ordered, first success wins): DuckDuckGo HTML → DuckDuckGo lite → optional paid/free-key APIs when set:
+  - `BRAVE_API_KEY` — Brave Search API
+  - `SERPER_API_KEY` — Serper (Google SERP)
+  - `BING_SEARCH_KEY` — Bing Web Search v7
+  Default free path needs no keys. On total failure the tool hard-fails (no invented links) and may append local clone catalog notes when available. See `server/src/tools/searchAdapters.ts`.
 - Bash is heavily gated (see `buildCommandAllowlist.ts`).
 - MCP (GitHub tools, Playwright) is not generally available to swarm agents.
 - Special case: when `MCP_PLAYWRIGHT_ENABLED=true`, the auditor can get browser snapshots for UI criteria.

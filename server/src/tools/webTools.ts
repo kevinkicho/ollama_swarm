@@ -1,9 +1,20 @@
 /**
  * Built-in web_fetch / web_search for research profiles.
  * Extracted from ToolDispatcher.ts.
+ *
+ * web_search uses pluggable adapters (searchAdapters.ts): DDG HTML → DDG lite →
+ * optional BRAVE / SERPER / BING when keys are set. First success wins.
+ * Never invents results. Shared per-process rate limit with web_fetch.
  */
 
 import { isBlockedWebFetchUrl } from "./ssrfGuard.js";
+import {
+  GOV_DOMAINS,
+  getSearchAdapters,
+  searchWithAdapters,
+  type FetchLike,
+  type SearchLink,
+} from "./searchAdapters.js";
 
 export type ToolResult =
   | { ok: true; output: string }
@@ -20,17 +31,26 @@ export type ToolResult =
 const WEB_TIMEOUT_MS = 30_000;
 const WEB_OUTPUT_CAP = 100 * 1024; // 100KB max per fetch
 
-// Gov domain bias and filtering
-const GOV_DOMAINS = [".gov", ".eu", ".gob", ".gov.uk", ".data.gov", ".gov.au", "worldbank.org", "oecd.org", "imf.org", "eurostat.ec.europa.eu", "un.org", "bis.org", "ecb.europa.eu", "federalreserve.gov"];
 const RATE_LIMIT_MS = 2000; // simple per-process rate limit between searches
 let lastWebCall = 0;
-
-const BROWSER_UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 
 /** Placeholder / training-data URLs that never exist — refuse early with guidance. */
 const PLACEHOLDER_HOST_RE =
   /your-org|your-repo|example\.com|example\.org|localhost|127\.0\.0\.1|0\.0\.0\.0/i;
+
+/** Shared rate limit for web_fetch + web_search (per process). */
+export async function applyWebRateLimit(): Promise<void> {
+  const now = Date.now();
+  if (now - lastWebCall < RATE_LIMIT_MS) {
+    await new Promise((r) => setTimeout(r, RATE_LIMIT_MS - (now - lastWebCall)));
+  }
+  lastWebCall = Date.now();
+}
+
+/** Test helper — reset rate-limit clock. */
+export function _resetWebRateLimitForTests(): void {
+  lastWebCall = 0;
+}
 
 export async function webFetchTool(args: Record<string, unknown>): Promise<ToolResult> {
   const url = String(args.url ?? "").trim();
@@ -55,12 +75,7 @@ export async function webFetchTool(args: Record<string, unknown>): Promise<ToolR
     return { ok: false, error: `web_fetch refused: ${ssrf.reason}` };
   }
 
-  // Rate limit
-  const now = Date.now();
-  if (now - lastWebCall < RATE_LIMIT_MS) {
-    await new Promise(r => setTimeout(r, RATE_LIMIT_MS - (now - lastWebCall)));
-  }
-  lastWebCall = Date.now();
+  await applyWebRateLimit();
 
   // Gov domain preference (soft filter / note)
   const u = url.toLowerCase();
@@ -150,86 +165,6 @@ export async function webFetchTool(args: Record<string, unknown>): Promise<ToolR
   }
 }
 
-type SearchLink = { title: string; url: string; snippet?: string; score: number };
-
-function scoreLink(title: string, finalUrl: string, query: string): number {
-  let score = 0;
-  const u = finalUrl.toLowerCase();
-  if (GOV_DOMAINS.some((d) => u.includes(d))) score += 10;
-  if (u.includes(".gov") || u.includes(".eu")) score += 5;
-  const queryLower = query.toLowerCase();
-  const words = queryLower.split(/\s+/).filter((w) => w.length > 2);
-  const text = (title + " " + u).toLowerCase();
-  words.forEach((w) => {
-    if (text.includes(w)) score += 2;
-  });
-  return score;
-}
-
-function parseDdgHtml(html: string, query: string): SearchLink[] {
-  const titleLinkRe = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)<\/a>/gi;
-  const snippetRe = /<a[^>]+class="result__snippet"[^>]*>(.*?)<\/a>/gi;
-  const links: SearchLink[] = [];
-  let match;
-  while ((match = titleLinkRe.exec(html)) !== null) {
-    const rawUrl = match[1];
-    let title = match[2].replace(/<[^>]+>/g, "").trim();
-    title = title.replace(/&amp;/g, "&").replace(/&quot;/g, '"').slice(0, 200);
-    let finalUrl = rawUrl;
-    const uddg = rawUrl.match(/[?&]uddg=([^&]+)/);
-    if (uddg) finalUrl = decodeURIComponent(uddg[1]);
-    if (!finalUrl.startsWith("http") || finalUrl.includes("duckduckgo.com")) continue;
-    links.push({ title, url: finalUrl, score: scoreLink(title, finalUrl, query) });
-  }
-  let i = 0;
-  while ((match = snippetRe.exec(html)) !== null && i < links.length) {
-    let snip = match[1].replace(/<[^>]+>/g, "").trim().replace(/&amp;/g, "&");
-    links[i].snippet = snip.slice(0, 300);
-    i++;
-  }
-  return links;
-}
-
-/** Lite / alternate DDG markup used when primary HTML is blocked or empty. */
-function parseDdgLiteHtml(html: string, query: string): SearchLink[] {
-  const links: SearchLink[] = [];
-  // lite.duckduckgo.com uses simpler anchors
-  const re = /<a[^>]+rel="nofollow"[^>]+href="(https?:\/\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
-  let match;
-  while ((match = re.exec(html)) !== null) {
-    const url = match[1];
-    const title = match[2].replace(/&amp;/g, "&").trim().slice(0, 200);
-    if (!url || url.includes("duckduckgo.com")) continue;
-    links.push({ title, url, score: scoreLink(title, url, query) });
-  }
-  return links;
-}
-
-async function fetchSearchHtml(url: string): Promise<{ ok: true; html: string } | { ok: false; status: number; error: string }> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), WEB_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "User-Agent": BROWSER_UA,
-        Accept: "text/html,application/xhtml+xml",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      redirect: "follow",
-    });
-    clearTimeout(timer);
-    if (!res.ok) {
-      return { ok: false, status: res.status, error: `search backend HTTP ${res.status}` };
-    }
-    return { ok: true, html: await res.text() };
-  } catch (err: any) {
-    clearTimeout(timer);
-    const msg = err?.name === "AbortError" ? "timeout" : (err?.message || String(err));
-    return { ok: false, status: 0, error: `web_search failed: ${msg}` };
-  }
-}
-
 function formatSearchResults(query: string, links: SearchLink[], backend: string): ToolResult {
   const queryLower = query.toLowerCase();
   const isGovQuery = /gov|governmental|government|official|data endpoint|api|bis|imf|world bank/i.test(queryLower);
@@ -279,58 +214,73 @@ function formatSearchResults(query: string, links: SearchLink[], backend: string
   };
 }
 
-export async function webSearchTool(args: Record<string, unknown>): Promise<ToolResult> {
+/**
+ * Best-effort local catalog notes on total search failure (PR4).
+ * Dynamic import avoids circular deps if research layer ever imports tools.
+ */
+async function localCatalogFailNotes(
+  query: string,
+  cloneRoot: string | undefined,
+): Promise<string> {
+  if (!cloneRoot) return "";
+  try {
+    const mod = await import("../swarm/research/localCatalogIndex.js");
+    const notes = mod.localCatalogNotesOnResearchFail(query, cloneRoot);
+    return notes && notes.trim() ? `\n\n${notes.trim()}` : "";
+  } catch {
+    return "";
+  }
+}
+
+export interface WebSearchToolOpts {
+  /** Clone working tree for optional local catalog notes on total failure. */
+  cloneRoot?: string;
+  /** Env bag for optional API-key backends (tests). */
+  env?: NodeJS.ProcessEnv;
+  /** Injected fetch (tests). */
+  fetchFn?: FetchLike;
+  /** Skip shared rate limit (tests). */
+  skipRateLimit?: boolean;
+}
+
+export async function webSearchTool(
+  args: Record<string, unknown>,
+  opts?: WebSearchToolOpts,
+): Promise<ToolResult> {
   const query = String(args.query ?? "").trim();
   if (!query) return { ok: false, error: "web_search: query required" };
   if (query.length > 500) return { ok: false, error: "web_search: query too long" };
 
-  // Rate limit
-  const now = Date.now();
-  if (now - lastWebCall < RATE_LIMIT_MS) {
-    await new Promise((r) => setTimeout(r, RATE_LIMIT_MS - (now - lastWebCall)));
+  if (!opts?.skipRateLimit) {
+    await applyWebRateLimit();
   }
-  lastWebCall = Date.now();
 
-  const backends: Array<{
-    name: string;
-    url: string;
-    parse: (html: string, q: string) => SearchLink[];
-  }> = [
-    {
-      name: "duckduckgo-html",
-      url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
-      parse: parseDdgHtml,
-    },
-    {
-      name: "duckduckgo-lite",
-      url: `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
-      parse: parseDdgLiteHtml,
-    },
-  ];
+  const adapters = getSearchAdapters({
+    env: opts?.env,
+    fetchFn: opts?.fetchFn,
+  });
 
-  const errors: string[] = [];
-  for (const b of backends) {
-    const res = await fetchSearchHtml(b.url);
-    if (!res.ok) {
-      errors.push(`${b.name}: ${res.error}`);
-      continue;
-    }
-    const links = b.parse(res.html, query);
-    if (links.length === 0) {
-      errors.push(`${b.name}: 0 links parsed`);
-      continue;
-    }
-    return formatSearchResults(query, links, b.name);
+  const result = await searchWithAdapters(query, adapters);
+  if (result.ok) {
+    return formatSearchResults(query, result.links, result.backend);
   }
+
+  const cloneRoot =
+    opts?.cloneRoot ??
+    (typeof args.cloneRoot === "string" ? args.cloneRoot : undefined);
+  const catalogNotes = await localCatalogFailNotes(query, cloneRoot);
 
   // Hard error (not soft-ok): consecutive identical failures trip toolLoopStuck
   // so the agent cannot thrash web_search for minutes (9f449937 literature loop).
+  // Local catalog notes (PR4) may be appended when cloneRoot is available —
+  // never invent web links.
   return {
     ok: false,
     error:
       `web_search backends unavailable for "${query}". ` +
-      `Tried: ${errors.join("; ") || "none"}. ` +
+      `Tried: ${result.errors.join("; ") || "none"}. ` +
       `Do NOT retry the same query. Use read/grep/list on the clone, or web_fetch a known official https URL ` +
-      `(bis.org, worldbank.org, imf.org, fred.stlouisfed.org, data.gov). Never invent your-org/file:// placeholders.`,
+      `(bis.org, worldbank.org, imf.org, fred.stlouisfed.org, data.gov). Never invent your-org/file:// placeholders.` +
+      catalogNotes,
   };
 }
