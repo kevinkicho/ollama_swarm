@@ -15,6 +15,7 @@ import { buildResearchToolsNote } from "./prompts/planner.js";
 import { resolveBlackboardPromptExtras } from "./blackboardPromptContext.js";
 import { chatOnceWithStreaming, type ChatStreamingSurface } from "./promptRunner.js";
 import { isUsableResearchBrief } from "../researchBrief.js";
+import { localCatalogNotesOnResearchFail } from "../research/localCatalogIndex.js";
 import { isPromptHaltError } from "./lifecycleState.js";
 import {
   LITERATURE_RESEARCH_NUDGE_MESSAGE,
@@ -102,10 +103,22 @@ export async function runWorkerLiteratureResearch(
       ctx.appendAgent(agent, capped);
       return capped;
     }
+    ctx.appendSystem(
+      `[${agent.id}] Literature research: no usable brief — trying local endpoint catalog.`,
+    );
   } catch (err) {
     if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) return undefined;
     const msg = err instanceof Error ? err.message : String(err);
     ctx.appendSystem(`[${agent.id}] Literature research failed: ${msg}`);
+  }
+
+  // Hard search fail / unusable brief: offline catalog grounding (shared with council).
+  const localNotes = localCatalogNotesOnResearchFail(todo.description, clonePath);
+  if (localNotes) {
+    ctx.appendSystem(
+      `[${agent.id}] Local catalog: injected ${localNotes.length} chars of endpoint notes (literature fail path).`,
+    );
+    return localNotes;
   }
   return undefined;
 }

@@ -22,6 +22,7 @@ test("councilWorkerRunner — literature research + web tools profile", () => {
   assert.match(SRC, /isUsableResearchBrief/, "must reject JSON hunks and intent-only stubs");
   assert.match(SRC, /activity: \{ kind: "worker"/, "must label worker todo prompts");
   assert.match(SRC, /researchNotes/, "must pass research notes into worker prompt");
+  assert.match(SRC, /localCatalogNotesOnResearchFail/, "must inject local catalog on blackout/fail");
 });
 
 test("councilWorkerRunner — buffers tool trace on agent bubbles (not per-call system lines)", () => {

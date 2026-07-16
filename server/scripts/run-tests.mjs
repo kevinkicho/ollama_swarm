@@ -133,6 +133,7 @@ const TEST_FILES = [
   "src/swarm/sseAwareTurnWatchdog.test.ts",
   "src/swarm/promptWithRetry.test.ts",
   "src/swarm/researchBrief.test.ts",
+  "src/swarm/research/localCatalogIndex.test.ts",
   "src/swarm/runStateMachine.test.ts",
   "src/swarm/agentStatsCollector.test.ts",
   "src/swarm/runSummary.test.ts",

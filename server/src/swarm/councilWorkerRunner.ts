@@ -32,6 +32,7 @@ import {
   type ToolProfileId,
 } from "../../../shared/src/toolProfiles.js";
 import { isUsableResearchBrief } from "./researchBrief.js";
+import { localCatalogNotesOnResearchFail } from "./research/localCatalogIndex.js";
 import {
   emitCouncilTodoClaimed,
   emitCouncilTodoCommitted,
@@ -201,6 +202,15 @@ async function runCouncilLiteratureResearch(
       `[${agent.id}] Literature research skipped (run blackout after ${blackout.consecutiveFailures} failures` +
         `${blackout.lastReason ? `: ${blackout.lastReason.slice(0, 80)}` : ""}) — using local tools only.`,
     );
+    // Offline grounding: inject local endpoint catalog when web research is blacked out.
+    const localNotes = localCatalogNotesOnResearchFail(todo.description, state.clonePath);
+    if (localNotes) {
+      appendSystem(
+        `[${agent.id}] Local catalog: injected ${localNotes.length} chars of endpoint notes (blackout path).`,
+      );
+      cache.set(todo.id, localNotes);
+      return localNotes;
+    }
     cache.set(todo.id, null);
     return undefined;
   }
@@ -277,6 +287,17 @@ async function runCouncilLiteratureResearch(
         `further web research pre-passes skipped; workers use local read/grep only.`,
     );
   }
+
+  // Hard search / unusable brief: fall back to local endpoint catalog (zero network).
+  const localNotes = localCatalogNotesOnResearchFail(todo.description, state.clonePath);
+  if (localNotes) {
+    appendSystem(
+      `[${agent.id}] Local catalog: injected ${localNotes.length} chars of endpoint notes (literature fail path).`,
+    );
+    cache.set(todo.id, localNotes);
+    return localNotes;
+  }
+
   cache.set(todo.id, null);
   return undefined;
 }
