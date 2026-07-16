@@ -206,6 +206,22 @@ describe("applyFileHunks — structured ApplyMissReport", () => {
     assert.match(r.miss!.nearbyExcerpt, /## Start/);
   });
 
+  it("empty start marker → kind other with miss", () => {
+    const r = applyFileHunks("hello", [
+      {
+        op: "replace_between",
+        file: "f.md",
+        start: "",
+        replace: "x",
+      },
+    ]);
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.match(r.error, /empty "start" marker/);
+    assert.equal(r.miss?.kind, "other");
+    assert.deepEqual(r.miss?.uniqueCandidates, []);
+  });
+
   it("success path has no miss field", () => {
     const r = applyFileHunks("# Title\n\nHello world.\n", [
       {
@@ -284,6 +300,58 @@ describe("applyFileHunks — replace_between normalize parity", () => {
     assert.equal(r.ok, true);
     if (!r.ok) return;
     assert.equal(r.newText, "## A\nnew\n## B\nafter\n");
+  });
+
+  it("matches endExclusive with CRLF via normalization", () => {
+    const original = "## A\nmiddle\n## B\nafter\n";
+    const r = applyFileHunks(original, [
+      {
+        op: "replace_between",
+        file: "f.md",
+        start: "## A",
+        endExclusive: "## B\r\n",
+        replace: "## A\nnew\n",
+      },
+    ]);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.newText, "## A\nnew\n## B\nafter\n");
+  });
+
+  it("rejects whitespace-only endExclusive that normalizes to empty (fail-closed)", () => {
+    // indexOf("", from) always "matches" — must not accept empty normalized end.
+    // Repro from review: would otherwise yield ok:true newText="X\n\nline\n## End\n".
+    const original = "## Start\nline\n## End\n";
+    const r = applyFileHunks(original, [
+      {
+        op: "replace_between",
+        file: "f.md",
+        start: "## Start",
+        endExclusive: "   ",
+        replace: "X\n",
+      },
+    ]);
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.match(r.error, /"endExclusive" text not found after start/);
+    assert.equal(r.miss?.kind, "end_not_found");
+    assert.equal(r.miss?.needle, "   ");
+    assert.deepEqual(r.miss?.uniqueCandidates, []);
+  });
+
+  it("rejects tab-only endExclusive that normalizes to empty", () => {
+    const r = applyFileHunks("## Start\nbody\n", [
+      {
+        op: "replace_between",
+        file: "f.md",
+        start: "## Start",
+        endExclusive: "\t",
+        replace: "X\n",
+      },
+    ]);
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.equal(r.miss?.kind, "end_not_found");
   });
 
   it("still fails closed when normalized start matches multiple times", () => {

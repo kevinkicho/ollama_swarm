@@ -215,9 +215,12 @@ export function applyFileHunks(
           const from = startIdx + start.length;
           let rel = text.indexOf(end, from);
           // Port trailing-trim / CRLF normalize to endExclusive.
+          // Reject empty normalized needles: indexOf("", from) always
+          // returns `from`, which would falsely "match" and collapse the
+          // replace range to just the start marker (silent wrong apply).
           if (rel === -1) {
             const normalizedEnd = normalizeSearchWhitespace(end);
-            if (normalizedEnd !== end) {
+            if (normalizedEnd.length > 0 && normalizedEnd !== end) {
               rel = text.indexOf(normalizedEnd, from);
               if (rel !== -1) {
                 end = normalizedEnd;

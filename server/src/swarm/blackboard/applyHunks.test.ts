@@ -164,6 +164,10 @@ describe("applyFileHunks — create on existing file is rejected", () => {
     ]);
     assert.equal(r.ok, false);
     assert.match(r.ok ? "" : r.error, /file already exists/);
+    if (!r.ok) {
+      assert.equal(r.miss?.kind, "other");
+      assert.deepEqual(r.miss?.uniqueCandidates, []);
+    }
   });
 
   it("fails create even in a mixed batch (before any successful op applies)", () => {
@@ -173,6 +177,9 @@ describe("applyFileHunks — create on existing file is rejected", () => {
     ]);
     assert.equal(r.ok, false);
     assert.match(r.ok ? "" : r.error, /hunk\[1\].*file already exists/);
+    if (!r.ok) {
+      assert.equal(r.miss?.kind, "other");
+    }
   });
 });
 
