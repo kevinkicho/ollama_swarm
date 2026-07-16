@@ -4,8 +4,8 @@
 |-------|-------|
 | **Author** | Design for postmortem follow-through |
 | **Date** | 2026-07-16 |
-| **Revision** | 1 |
-| **Status** | Proposed — ready for `/execute-plan` |
+| **Revision** | 2 |
+| **Status** | Proposed — ready for `/execute-plan` (PR Plan labels normalized) |
 | **Related runs** | `eee6718f-03f3-45dd-a3a2-593076734102`, `9f449937-a060-49e6-9417-aba2774dfb16` |
 | **Related code** | `applyHunks.ts`, `windowFile.ts`, `autoAnchor.ts`, `worker.ts` prompts, `webTools.ts`, `researchPolicy.ts`, `councilWorkerRunner.ts`, `buildHunkRepairPrompt` |
 | **Already shipped (do not re-do)** | Stream loop abort/collapse, finalizeAgentOutput, research policy gate, literature false-positive fix (`isLiteratureTodo`), literature blackout/cache, think-aware `formatExpect` JSON sniff |
@@ -244,152 +244,102 @@ Populate from council + blackboard apply paths via a small counter on adapter st
 
 ---
 
+## Full postmortem inventory → execution status
+
+Everything raised across **9f449937** and **eee6718f** postmortems, mapped so nothing open is “detector-only.”
+
+| # | Postmortem item | Origin | Status | Execution plan |
+|---|-----------------|--------|--------|----------------|
+| 1 | ~300k stream balloon / final-text repetition | 9f449937 | **Shipped** | Stream guards, abort, collapse, WS/event caps |
+| 2 | DeepSeek `<function><name>…` raw in UI | 9f449937 | **Shipped** | `extractToolCallMarkers` shapes + display |
+| 3 | ```json fence / deliverable summary polish | 9f449937 | **Shipped** | tryPrettyJson + deliverable system path |
+| 4 | extractActionableTodos abort soft-empty | 9f449937 | **Shipped** | Longer timeout + clearer abort |
+| 5 | Placeholder `your-org` / `file://` web_fetch | 9f449937 | **Shipped** | `researchPolicy` preflight + webTools refuse |
+| 6 | Literature thrash / false `isLiteratureTodo` | eee6718f | **Shipped** | Strict research language + blackout/cache (`5248497`) |
+| 7 | Think-only JSON parse (formatExpect dead on Ollama) | eee6718f | **Shipped** | Think-aware JSON sniff wired (`5248497`) |
+| 8 | Research tool-loop stuck / fail streak | both | **Shipped** | researchPolicy + hard search fail + fail streak |
+| 9 | streamIntegrity summary + UI ribbon | both | **Shipped** | `e661536` |
+| 10 | **Real search-anchor misses** (`search`/`start` not in file) | both | **OPEN** | **PR 1–3** (report + candidates + grounded repair) |
+| 11 | **Non-unique `replace_between` / `replace`** | eee6718f | **OPEN** | **PR 1–2** (normalize + expand-to-unique) |
+| 12 | Wrap-up synthesizer 16→0 (stale anchors) | 9f449937 | **Partial** | Fallthrough exists; **PR 3** feeds ApplyMissReport + candidates |
+| 13 | **DDG 403 when true literature needed** | both | **OPEN** | **PR 4–5** (local catalog first, then pluggable backends) |
+| 14 | Cycle fail 20–36% (apply-dominated residual) | eee6718f | **OPEN metric** | Improves via PR 1–3; **PR 6** measures |
+| 15 | Wall-clock idle / no progress UI | eee6718f | **N/A here** | Observability only; not a code bug in this stack |
+
+**Hard problems that must not be “fixed away” with another detector (user guidance):**
+
+1. Real search-anchor misses → better **local file grounding** on repair (PR 1–3).  
+2. Unique `replace_between` → deterministic uniqueness recovery, still fail-closed (PR 1–2).  
+3. DDG 403 when true literature is needed → **local catalog + alternate search backends**, not more blackout-only (PR 4–5).
+
+---
+
 ## PR Plan
 
 Dependency order (linear stack for plain-git / Graphite):
 
 ```text
-PR1 ──► PR2 ──► PR3
-  │               │
-  └───────────────┴──► PR4 ──► PR5
+PR1 ──► PR2 ──► PR3 ──► PR6
+                │
+PR4 ──► PR5 ────┘   (PR4 can start after PR1 conceptually; stack order: PR1→PR2→PR3→PR4→PR5→PR6)
 ```
 
-Independent after PR1: PR4 can start once PR1 lands if PR2 is delayed; prefer full stack order.
+Linearized for `/execute-plan`: **PR1 → PR2 → PR3 → PR4 → PR5 → PR6**.
 
-### PR 1 — ApplyMissReport + replace_between normalize
+### PR 1: Structured apply miss reports and replace_between normalize
 
-**Title:** `feat(apply): structured apply miss reports and replace_between normalize`
+- **Files/components affected:** `server/src/swarm/blackboard/applyHunks.ts`, `server/src/swarm/blackboard/applyMissReport.ts`, `server/src/swarm/blackboard/applyHunks.test.ts`, `server/src/swarm/blackboard/applyMissReport.test.ts`
+- **Dependencies:** None
+- **Description:** Add structured `ApplyMissReport` on apply failure (`kind`, `needle`, `matchCount`, `nearbyExcerpt`, `uniqueCandidates`, human `message`/`error`). Port trailing-whitespace / CRLF normalize from `replace.search` to `replace_between.start` and `endExclusive`. Keep fail-closed multi-match semantics. Unit tests: not found, not unique, normalize parity; success path unchanged.
 
-**Files:**
-- `server/src/swarm/blackboard/applyHunks.ts`
-- `server/src/swarm/blackboard/applyHunks.test.ts` (or new `applyMissReport.test.ts`)
-- Optional: `server/src/swarm/blackboard/applyMissReport.ts` types
+### PR 2: Unique substring and expand-start candidates for repair
 
-**Description:**
-- Extend apply failure path with `ApplyMissReport` (kind, needle, matchCount, nearbyExcerpt, uniqueCandidates).
-- Port trailing-trim normalize to `replace_between` start/endExclusive.
-- Preserve existing human-readable `error` strings for transcript compatibility.
-- Unit tests for: not found, not unique, uniqueCandidates, normalize CRLF/trailing space.
+- **Files/components affected:** `server/src/swarm/blackboard/applyMissReport.ts`, `server/src/swarm/blackboard/applyMissReport.test.ts`, `server/src/swarm/blackboard/applyHunks.ts`
+- **Dependencies:** PR 1
+- **Description:** Pure helpers `findUniqueSubstrings(needle, fileText)` (min length 32) and `expandToUnique(start, fileText, maxExpandLines=5)`. Populate `uniqueCandidates` for `search_not_found` / `start_not_unique`. Fixtures shaped like eee6718f `panelRegistry` multi-section keys. No silent first-match apply.
 
-**Depends on:** none  
+### PR 3: Grounded hunk repair for council, blackboard, and wrap-up
 
-**Success:** tests green; no behavior change when apply succeeds.
+- **Files/components affected:** `server/src/swarm/blackboard/prompts/worker.ts`, `server/src/swarm/councilWorkerRunner.ts`, `server/src/swarm/blackboard/workerRunner.ts`, `server/src/swarm/wrapUpApplyPhase.ts`, related tests
+- **Dependencies:** PR 1, PR 2
+- **Description:** `buildHunkRepairPrompt` v2 includes failed op, needle, **fresh-disk** nearby excerpt, and unique candidate `search`/`start` suggestions. Wire on council worker apply miss, blackboard repair path, and wrap-up synthesizer total-miss fallthrough (9f449937 16→0). Never re-enter literature research on pure apply repair. Optional `[apply-miss]` system line with kind.
 
----
+### PR 4: Local endpoint catalog index for worker grounding
 
-### PR 2 — Deterministic unique-candidate recovery helpers
+- **Files/components affected:** `server/src/swarm/research/localCatalogIndex.ts`, `server/src/swarm/research/localCatalogIndex.test.ts`, `server/src/swarm/councilWorkerRunner.ts`, `server/src/swarm/blackboard/workerLiteratureResearch.ts`, optional worker/planner prompt inject sites
+- **Dependencies:** PR 3
+- **Description:** In-memory index of clone docs (`docs/API_ENDPOINTS.md`, `GOVERNMENT_API_CATALOG.md`, `docs/PANELS.md` if present). `lookupLocalCatalog(todoDescription, maxSnippets) → string`. Inject on literature blackout / hard search fail and for panel-ish todos so workers keep real gov URLs without DDG. Zero network.
 
-**Title:** `feat(apply): unique substring and expand-start candidates for repair`
+### PR 5: Pluggable web_search adapters beyond DDG
 
-**Files:**
-- `server/src/swarm/blackboard/applyMissReport.ts` (or helpers in `applyHunks.ts`)
-- Tests
+- **Files/components affected:** `server/src/tools/webTools.ts`, `server/src/tools/searchAdapters.ts`, `server/src/tools/searchAdapters.test.ts`, `docs/AGENT-GUIDE.md` (or env example), `server/src/tools/researchPolicy.ts` (docs only if needed)
+- **Dependencies:** PR 4
+- **Description:** `SearchAdapter` interface + ordered registry: DDG HTML → DDG lite → optional `BRAVE_API_KEY` / `SERPER_API_KEY` / `BING_SEARCH_KEY`. After adapter exhaustion, soft-fail with **local catalog notes** from PR 4 (never invent links). Shared rate limit; blackout-compatible errors. Default free path unchanged when no keys.
 
-**Description:**
-- Pure functions: `findUniqueSubstrings(needle, fileText)`, `expandToUnique(start, fileText, maxExpandLines)`.
-- Used by apply path when count≠1 and by repair prompt builders.
-- Document min length and max expand.
+### PR 6: applyIntegrity stats on run summary
 
-**Depends on:** PR 1  
-
-**Success:** unit tests cover not-found and multi-match fixtures from eee6718f-shaped strings (`panelRegistry` multi-section).
-
----
-
-### PR 3 — Wire miss reports into hunk repair (council + blackboard + wrap-up)
-
-**Title:** `feat(workers): grounded hunk repair using ApplyMissReport`
-
-**Files:**
-- `server/src/swarm/blackboard/prompts/worker.ts` (`buildHunkRepairPrompt` v2)
-- `server/src/swarm/councilWorkerRunner.ts`
-- `server/src/swarm/blackboard/workerRunner.ts` / parse cascade / repair call sites
-- `server/src/swarm/wrapUpApplyPhase.ts` (optional: pass miss report into worker re-prompt already partially there)
-- Tests: source-shape + pure prompt contains nearbyExcerpt + uniqueCandidates
-
-**Description:**
-- On apply miss, build repair prompt with: failed op, needle, nearby excerpt from **fresh** file, unique candidates as suggested `search`/`start`.
-- Skip re-literature on repair (already done for council; mirror blackboard if needed).
-- Transcript: keep short reason; optional `[apply-miss]` system line with kind.
-
-**Depends on:** PR 1, PR 2  
-
-**Success:** simulated apply miss → repair prompt includes file excerpt and at least one candidate when uniqueness allows.
-
----
-
-### PR 4 — Local API/catalog grounding for workers and literature blackout
-
-**Title:** `feat(research): local endpoint catalog index for worker grounding`
-
-**Files:**
-- New: `server/src/swarm/research/localCatalogIndex.ts` (+ tests)
-- `server/src/swarm/councilWorkerRunner.ts` (literature fail / blackout inject notes)
-- `server/src/swarm/blackboard/workerLiteratureResearch.ts` / worker seed
-- `server/src/swarm/blackboard/prompts/worker.ts` / planner seed optional share
-
-**Description:**
-- Index clone docs for routes/URLs (API_ENDPOINTS, GOVERNMENT_API_CATALOG, PANELS).
-- `lookupLocalCatalog(todoDescription, maxSnippets) → string` for prompt injection.
-- Always inject on literature skip/blackout and for panel-ish todos when web tools enabled but blackout active.
-- No network.
-
-**Depends on:** none (can parallelize after PR 1 conceptually; stack after PR 3 for simpler integration)
-
-**Success:** unit test with fixture markdown returns BIS/FRED snippets for relevant todos.
-
----
-
-### PR 5 — Pluggable search backends + optional keyed APIs
-
-**Title:** `feat(research): pluggable web_search adapters beyond DDG`
-
-**Files:**
-- `server/src/tools/webTools.ts` (refactor to adapters)
-- New: `server/src/tools/searchAdapters.ts` (+ tests with mock fetch)
-- `docs/AGENT-GUIDE.md` or env example for optional keys
-- `researchPolicy.ts` unchanged except docs
-
-**Description:**
-- Adapter interface + ordered registry.
-- Keep DDG HTML + lite; add optional Brave/Serper/Bing when env present.
-- Unified error → blackout-compatible message; never invent results.
-- Rate limit shared.
-
-**Depends on:** PR 4 preferred (local fallback already in place); can land after PR 4 only  
-
-**Success:** mock adapter order; without keys behavior = current DDG chain + local notes from PR 4.
-
----
-
-### PR 6 (optional) — Apply integrity summary field
-
-**Title:** `feat(summary): applyIntegrity stats on run summary`
-
-**Files:**
-- `summaryTypes.ts`, `buildSummary` / `buildDiscussionSummary`
-- Counters on council adapter / blackboard apply path
-- Web digest optional display
-
-**Depends on:** PR 3  
-
-**Success:** summary.json includes missByKind after a fixture run or unit assembly test.
+- **Files/components affected:** summary types (`summaryTypes` / discussion summary builders), council/blackboard apply counters, optional web digest UI
+- **Dependencies:** PR 3
+- **Description:** Add optional `applyIntegrity: { attempts, applied, missByKind, repairSuccesses, repairFailures }` on run summary (mirror `streamIntegrity`). Populate from apply + repair paths. Enables measuring ≥50% drop in search-not-found primary fails vs eee6718f baseline.
 
 ---
 
 ## Implementation notes for `/execute-plan`
 
 1. **Base branch:** `main` (includes stream integrity + literature fix + format sniff).
-2. **Do not regress:** literature blackout, `isLiteratureTodo` strictness, `finalizeAgentOutput`, research policy preflight.
-3. **Test priority:** pure apply/helpers first (PR1–2), then wiring (PR3), then research (PR4–5).
+2. **Do not regress:** literature blackout, `isLiteratureTodo` strictness, `finalizeAgentOutput`, research policy preflight, placeholder URL blocks.
+3. **Test priority:** pure apply/helpers first (PR1–2), then wiring (PR3), then research (PR4–5), then metrics (PR6).
 4. **Fixtures:** use strings from eee6718f-style errors:
    - `panelRegistry.js` multi-section keys
    - `marketPanels.js` replace miss
    - COMMERCIAL_PAPER naming (must not trigger literature)
+5. **Invoke:**  
+   `/execute-plan docs/design/eee6718f-grounding-and-research-resilience.md`  
+   Optional: `--dry-run` first; `--concurrency 2` if machine is busy; `--auto-pr` if plain-git + `gh`.
 
 ---
 
-## Out of scope reminders (already shipped)
+## Out of scope reminders (already shipped — do not re-implement)
 
 | Item | Commit / area |
 |------|----------------|
@@ -397,26 +347,30 @@ Independent after PR1: PR4 can start once PR1 lands if PR2 is delayed; prefer fu
 | finalizeAgentOutput + research policy | `6efa8ef` |
 | Literature false positives + blackout + JSON sniff | `5248497` |
 | streamIntegrity on summary + UI ribbon | `e661536` |
+| DeepSeek function strip / placeholder URL refuse | 9f449937 fix stack |
+| Wrap-up fallthrough re-prompt (basic) | partial; upgraded by PR 3 |
 
 ---
 
 ## Acceptance checklist for the stack
 
-- [ ] PR1–2: apply tests for miss kinds + candidates  
-- [ ] PR3: repair prompt grounded; no literature re-entry on repair  
-- [ ] PR4: local catalog injection when web blackout  
-- [ ] PR5: optional adapters; default free path works offline for catalog  
-- [ ] Manual: re-run panel-heavy council directive; literature noise near zero; apply miss rate down; true research still possible with key or catalog  
+- [ ] PR1–2: apply tests for miss kinds + candidates; replace_between normalize parity  
+- [ ] PR3: repair prompt grounded on council + blackboard + wrap-up; no literature re-entry on repair  
+- [ ] PR4: local catalog injection when web blackout / hard search fail  
+- [ ] PR5: optional adapters; default free path works; never invent results  
+- [ ] PR6: summary.json includes missByKind after apply activity  
+- [ ] Manual: re-run panel-heavy council directive; literature noise near zero; apply miss rate down; true research still possible with key **or** catalog  
 
 ---
 
-## Appendix: eee6718f evidence map
+## Appendix: evidence map (transcript → PR)
 
 | Transcript pattern | Design PR |
 |--------------------|-----------|
-| `search text not found` / `start text not found` | PR1–3 |
-| `start text matches 2 times` | PR1–2 |
-| `tool loop stuck: research` on panel todos | Shipped (`isLiteratureTodo`); PR4 for when research is real |
-| DDG 403 / backends unavailable | PR5 + PR4 |
+| `search text not found` / `start text not found` | PR 1–3 |
+| `start text matches 2 times` / `search text matches N times` | PR 1–2 |
+| Wrap-up: N hunks → 0 applied (stale anchors) | PR 3 |
+| `tool loop stuck: research` on panel todos | Shipped (`isLiteratureTodo`); PR 4 when research is real |
+| DDG 403 / backends unavailable | PR 4 + PR 5 |
 | `JSON parse failed: <think>` | Shipped (format sniff) |
-| Cycle 30% fail early, 20% late | Expected improvement from PR1–3 |
+| Cycle 30% fail early, 20% late | Expected improvement from PR 1–3; measure with PR 6 |
