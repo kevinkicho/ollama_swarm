@@ -20,6 +20,10 @@ import {
 } from "./toolFailureCoach.js";
 import { deterministicToolCoachHint } from "./deterministicToolCoach.js";
 import { recordDeliberationAsync } from "../deliberation/deliberationLog.js";
+import {
+  buildDeliberationSeed,
+  formatDeliberationForControlPrompt,
+} from "../deliberation/deliberationSeed.js";
 
 export const STALL_ARBITRATOR_MAX_CALLS = 6;
 
@@ -52,6 +56,8 @@ export class SwarmControlCenter {
   private toolCoachCalls = 0;
   private readonly coachedFingerprints = new Set<string>();
   private readonly adviceHistory: SwarmControlAdviceRecord[] = [];
+  /** Cached prior-deliberation summary for stall arbitrator (per run). */
+  private deliberationControlSummary = "";
 
   reset(): void {
     this.toolFailures.resetAll();
@@ -62,6 +68,7 @@ export class SwarmControlCenter {
     this.toolCoachCalls = 0;
     this.coachedFingerprints.clear();
     this.adviceHistory.length = 0;
+    this.deliberationControlSummary = "";
   }
 
   getAdviceHistory(): readonly SwarmControlAdviceRecord[] {
@@ -86,6 +93,13 @@ export class SwarmControlCenter {
         if (p.proposal?.description) parts.push(`fix: ${p.proposal.description}`);
         return parts.join(" — ");
       });
+    // Also cache deliberation deny/approve lessons for the stall arbitrator.
+    try {
+      const seed = await buildDeliberationSeed(clonePath);
+      this.deliberationControlSummary = formatDeliberationForControlPrompt(seed);
+    } catch {
+      this.deliberationControlSummary = "";
+    }
   }
 
   getPriorPatterns(): readonly string[] {
@@ -166,6 +180,16 @@ export class SwarmControlCenter {
         `[control] Stall arbitrator invoked (${this.stallArbitratorCalls}/${STALL_ARBITRATOR_MAX_CALLS}) — class=${ruleClass}.`,
       );
 
+      // Lazy-load deliberation summary if loadPriorPatterns was not called.
+      if (!this.deliberationControlSummary && input.clonePath) {
+        try {
+          const seed = await buildDeliberationSeed(input.clonePath);
+          this.deliberationControlSummary = formatDeliberationForControlPrompt(seed);
+        } catch {
+          /* ignore */
+        }
+      }
+
       const arb = await runStallArbitrator(snap, ruleClass, {
         agent: input.coachAgent,
         clonePath: input.clonePath,
@@ -173,6 +197,7 @@ export class SwarmControlCenter {
         manager: input.manager,
         recurringPatterns: patterns,
         interactionSummary: this.summarizeInteractions(input.interactionTracker),
+        deliberationSummary: this.deliberationControlSummary || undefined,
       });
       if (arb) {
         this.applyVerdictSideEffects(arb, input);

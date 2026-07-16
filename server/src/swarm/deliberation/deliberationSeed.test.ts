@@ -6,6 +6,8 @@ import path from "node:path";
 import {
   distillDeliberationSeed,
   buildDeliberationSeed,
+  todoMatchesDenyPattern,
+  filterTodosAgainstDeliberationDenies,
 } from "./deliberationSeed.js";
 import type { DeliberationTransaction } from "./deliberationTypes.js";
 
@@ -44,6 +46,35 @@ test("distillDeliberationSeed — ranks deny/approve patterns", () => {
   assert.match(g.text, /tests pass on auth/);
   assert.ok(g.denyCount >= 3);
   assert.ok(g.approveCount >= 1);
+});
+
+test("todoMatchesDenyPattern — matches token overlap", () => {
+  assert.equal(
+    todoMatchesDenyPattern(
+      "Fix hunk search not found in predict_tc again",
+      [{ sample: "hunk search not found in file", count: 3, layer: "hierarchy" }],
+    ),
+    true,
+  );
+  assert.equal(
+    todoMatchesDenyPattern(
+      "Add unit tests for auth middleware",
+      [{ sample: "hunk search not found in file", count: 3, layer: "hierarchy" }],
+    ),
+    false,
+  );
+});
+
+test("filterTodosAgainstDeliberationDenies — drops matches", () => {
+  const { kept, dropped } = filterTodosAgainstDeliberationDenies(
+    [
+      { description: "hunk search not found recovery" },
+      { description: "write new README section" },
+    ],
+    [{ sample: "hunk search not found recovery needed", count: 2, layer: "hierarchy" }],
+  );
+  assert.equal(dropped.length, 1);
+  assert.equal(kept.length, 1);
 });
 
 test("buildDeliberationSeed — reads logs tree", async () => {

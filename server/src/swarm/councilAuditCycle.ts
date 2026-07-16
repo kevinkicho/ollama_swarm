@@ -485,9 +485,32 @@ export async function runCouncilAuditCycle(
     return "stop";
   }
 
+  // Drop todos that rehash prior DENY deliberation patterns (cross-run memory).
+  let auditTodos = newTodos;
+  try {
+    const { buildDeliberationSeed, filterTodosAgainstDeliberationDenies } = await import(
+      "./deliberation/deliberationSeed.js"
+    );
+    const delibSeed = await buildDeliberationSeed(cfg.localPath ?? "");
+    if (delibSeed.denyPatterns.length > 0) {
+      const { kept, dropped } = filterTodosAgainstDeliberationDenies(
+        newTodos,
+        delibSeed.denyPatterns,
+      );
+      if (dropped.length > 0) {
+        host.appendSystem(
+          `[deliberation] Dropped ${dropped.length} audit todo(s) matching prior DENY patterns.`,
+        );
+        auditTodos = kept;
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+
   const auditEnqueued = postCouncilTodoBatch(
     (input) => host.postCouncilTodo(input),
-    newTodos.map((t) => ({
+    auditTodos.map((t) => ({
       description: t.description,
       expectedFiles: t.expectedFiles,
       createdBy: "auditor",
@@ -497,7 +520,7 @@ export async function runCouncilAuditCycle(
   );
   host.appendSystem(`[audit] Created ${auditEnqueued} todo(s) for unmet criteria.`);
 
-  if (newTodos.length === 0) {
+  if (auditTodos.length === 0) {
     // No new work — may still stop autonomous on zero-progress streak.
     const empty = host.getConsecutiveEmptyCycles() + 1;
     host.setConsecutiveEmptyCycles(empty);

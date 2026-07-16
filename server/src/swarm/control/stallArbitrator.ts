@@ -22,6 +22,8 @@ export interface StallArbitratorDeps {
   runId?: string;
   recurringPatterns?: string[];
   interactionSummary?: string;
+  /** Prior deny/approve deliberation summary for this clone. */
+  deliberationSummary?: string;
   /** When set, owns sidebar lifecycle for the arbitrator prompt. */
   manager?: AgentManager;
 }
@@ -48,6 +50,11 @@ export async function runStallArbitrator(
     deps.interactionSummary
       ? `\ninteractionChains:\n${deps.interactionSummary.slice(0, 2000)}`
       : "",
+    deps.deliberationSummary
+      ? `\n${deps.deliberationSummary.slice(0, 1200)}`
+      : "",
+    "",
+    "If priorDeliberation shows repeated DENYs for the same failure mode, prefer stop or a plannerHint that forbids re-proposing that pattern.",
     "",
     'Respond JSON only: {"action":"backoff|retry|stop","rationale":"...","backoffMs":120000,"plannerHint":"...","confidence":"high|medium|low"}',
   ].join("\n");
