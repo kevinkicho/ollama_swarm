@@ -17,6 +17,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 import {
   finalizeAgentOutput,
   formatFinalizeAnomalyLine,
+  streamIntegritySummaryFromAnomalies,
 } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import {
@@ -106,7 +107,17 @@ function pushDiscussionEntry(
 ): string {
   const stripped = finalizeAgentOutput(rawText);
   const anomalyLine = formatFinalizeAnomalyLine(agent.id, stripped.anomalies, stripped.stats);
-  if (anomalyLine) host.appendSystem(anomalyLine);
+  if (anomalyLine) {
+    host.appendSystem(
+      anomalyLine,
+      streamIntegritySummaryFromAnomalies(
+        agent.id,
+        stripped.anomalies,
+        stripped.stats,
+        anomalyLine,
+      ),
+    );
+  }
   const summary: TranscriptEntrySummary | undefined =
     typeof opts.enrichSummary === "function"
       ? opts.enrichSummary(stripped.finalText)

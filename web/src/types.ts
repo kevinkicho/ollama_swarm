@@ -239,6 +239,16 @@ export interface RunSummary {
   filesChanged: number;
   finalGitStatus: string;
   finalGitStatusTruncated: boolean;
+  /** Stream loop/truncate aggregate from transcript (optional, newer runs). */
+  streamIntegrity?: {
+    anomalyEventCount: number;
+    agentsAffected: string[];
+    maxAgentTextChars: number;
+    maxAgentThoughtChars: number;
+    events: Array<{ agentId?: string; kind: string; detail: string; ts?: number }>;
+    hadLoopCollapse: boolean;
+    hadHardTruncate: boolean;
+  };
   agents: PerAgentStat[];
   contract?: ExitContract;
   // Brain chat history persisted for recovery/FAB continuity (per-run).

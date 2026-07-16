@@ -103,7 +103,11 @@ export interface WorkerContext {
   setHypothesisDeferralTimestamps: (v: Map<string, number>) => void;
   getAuditor: () => Agent | undefined;
   appendSystem: (msg: string) => void;
-  appendAgent: (agent: Agent, text: string, options?: { assistKind?: "auditor-salvage" }) => void;
+  appendAgent: (
+    agent: Agent,
+    text: string,
+    options?: { assistKind?: "auditor-salvage"; role?: "worker" | "general" },
+  ) => void;
   pendingToolTraceByAgent: Map<string, ToolTraceEntry[]>;
   promptAgent: (
     agent: Agent,
@@ -442,7 +446,7 @@ export async function executeWorkerTodo(
     return "stale";
   }
   if (ctx.isStopping()) return "aborted";
-  ctx.appendAgent(agent, response);
+  ctx.appendAgent(agent, response, { role: "worker" });
 
   const parseResult = await runWorkerParseCascade(
     {

@@ -280,6 +280,16 @@ export type TranscriptEntrySummary =
       ok: boolean;
       preview: string;
     }
+  // Stream integrity: loop collapse / hard truncate / finalize anomaly.
+  | {
+      kind: "stream_integrity";
+      agentId: string;
+      /** Short machine tags e.g. "phrase_loop_collapsed", "hard_truncated". */
+      anomalyKinds: readonly string[];
+      rawChars: number;
+      finalChars: number;
+      detail: string;
+    }
   // Blackboard planner pre-pass: goal analysis or web research brief (prose, not JSON).
   | {
       kind: "planner_brief";

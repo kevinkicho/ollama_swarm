@@ -15,7 +15,11 @@ export interface BuildTodoCtx {
   getActive: () => RunConfig | undefined;
   getWrappers: () => TodoQueueWrappers;
   appendSystem: (msg: string) => void;
-  appendAgent: (agent: Agent, text: string) => void;
+  appendAgent: (
+    agent: Agent,
+    text: string,
+    options?: { role?: "worker" | "general" },
+  ) => void;
   promptAgent: (
     agent: Agent,
     prompt: string,
@@ -94,7 +98,7 @@ export async function executeBuildTodo(
     ctx.getWrappers().failTodoQ(todo.id, `build prompt failed: ${msg.slice(0, 200)}`);
     return "stale";
   }
-  ctx.appendAgent(agent, response);
+  ctx.appendAgent(agent, response, { role: "worker" });
 
   const dirty = await ctx.gitStatus(clonePath);
   if (!dirty.changedFiles || dirty.changedFiles === 0) {

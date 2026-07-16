@@ -41,8 +41,16 @@ test("councilWorkerRunner — routes build todos through executeCouncilBuildTodo
 });
 
 test("councilWorkerRunner — persists worker JSON to transcript via appendAgent", () => {
-  assert.match(SRC, /state\.appendAgent\(agent, res\)/, "must append primary worker response");
-  assert.match(SRC, /state\.appendAgent\(agent, repairText\)/, "must append hunk-repair response");
+  assert.match(
+    SRC,
+    /state\.appendAgent\(agent, res,\s*\{\s*role:\s*"worker"\s*\}\)/,
+    "must append primary worker response with worker finalize role",
+  );
+  assert.match(
+    SRC,
+    /state\.appendAgent\(agent, repairText,\s*\{\s*role:\s*"worker"\s*\}\)/,
+    "must append hunk-repair response with worker finalize role",
+  );
 });
 
 test("councilWorkerRunner — retry messages include real failure reasons", () => {

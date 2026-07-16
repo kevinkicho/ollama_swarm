@@ -17,6 +17,7 @@ import { summarizeAgentResponse } from "./transcriptSummary.js";
 import {
   finalizeAgentOutput,
   formatFinalizeAnomalyLine,
+  streamIntegritySummaryFromAnomalies,
 } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { takePendingToolTrace, type ToolTraceEntry } from "../toolCallTranscript.js";
 import type { RunConfig } from "../SwarmRunner.js";
@@ -154,6 +155,8 @@ export interface AppendAgentOptions {
   assistKind?: AgentAssistKind;
   /** Tags planner pre-pass output for PlannerBriefBubble rendering. */
   briefKind?: PlannerBriefKind;
+  /** worker: suppress long non-JSON prose after strip (hunk turns). */
+  role?: "worker" | "general";
 }
 
 export function appendAgent(
@@ -163,11 +166,16 @@ export function appendAgent(
   options?: AppendAgentOptions,
 ): void {
   // Canonical post-stream policy (strip / collapse loops / hard-cap).
-  const finalized = finalizeAgentOutput(text, { role: "general" });
+  const finalized = finalizeAgentOutput(text, {
+    role: options?.role === "worker" ? "worker" : "general",
+  });
   const { finalText, thoughts, toolCalls, anomalies, stats } = finalized;
   const anomalyLine = formatFinalizeAnomalyLine(agent.id, anomalies, stats);
   if (anomalyLine) {
-    ctx.appendSystem(anomalyLine);
+    ctx.appendSystem(
+      anomalyLine,
+      streamIntegritySummaryFromAnomalies(agent.id, anomalies, stats, anomalyLine),
+    );
   }
   let summary = summarizeAgentResponse(finalText);
   if (options?.briefKind) {

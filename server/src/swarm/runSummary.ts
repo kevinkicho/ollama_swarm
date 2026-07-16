@@ -33,6 +33,7 @@ import {
   type SummaryConfig,
 } from "./blackboard/summary.js";
 import type { TranscriptEntry } from "../types.js";
+import { collectStreamIntegrityReport } from "@ollama-swarm/shared/streamIntegrityReport";
 
 export interface DiscussionSummaryInput {
   config: SummaryConfig;
@@ -99,6 +100,7 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
     input.endedAt,
     input.config.runId,
   );
+  const streamIntegrity = collectStreamIntegrityReport(input.transcript);
   return {
     runId: input.config.runId,
     repoUrl: input.config.repoUrl,
@@ -120,6 +122,7 @@ export function buildDiscussionSummary(input: DiscussionSummaryInput): RunSummar
     finalGitStatusTruncated: truncated,
     totalPromptTokens,
     totalResponseTokens,
+    ...(streamIntegrity ? { streamIntegrity } : {}),
     agents: input.agents.slice(),
     transcript,
     transcriptTruncated,

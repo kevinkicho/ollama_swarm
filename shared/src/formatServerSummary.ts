@@ -148,6 +148,10 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
   if (s.kind === "web_tool") {
     return `${s.tool} ${s.ok ? "ok" : "error"}: ${s.preview}`;
   }
+  if (s.kind === "stream_integrity") {
+    const tags = s.anomalyKinds.length > 0 ? s.anomalyKinds.join(", ") : "anomaly";
+    return `Stream integrity · ${s.agentId} · ${tags} (${s.rawChars.toLocaleString()} → ${s.finalChars.toLocaleString()} chars)`;
+  }
   if (s.kind === "planner_brief") {
     const label = s.variant === "goal_analysis" ? "Goal analysis" : "Research brief";
     const sec = s.sections === 1 ? "1 section" : `${s.sections} sections`;

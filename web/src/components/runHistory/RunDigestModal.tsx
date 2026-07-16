@@ -189,6 +189,20 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
                   <DataValue>{head.stopReason}</DataValue>
                 </>
               ) : null}
+              {summary?.streamIntegrity ? (
+                <>
+                  <DataLabel>Stream integrity</DataLabel>
+                  <DataValue>
+                    {summary.streamIntegrity.anomalyEventCount} event
+                    {summary.streamIntegrity.anomalyEventCount === 1 ? "" : "s"}
+                    {summary.streamIntegrity.hadLoopCollapse ? " · loop collapse" : ""}
+                    {summary.streamIntegrity.hadHardTruncate ? " · hard truncate" : ""}
+                    {summary.streamIntegrity.maxAgentTextChars > 0
+                      ? ` · peak ${summary.streamIntegrity.maxAgentTextChars.toLocaleString()} chars`
+                      : ""}
+                  </DataValue>
+                </>
+              ) : null}
             </div>
             {summary?.startCommand ? (
               <details className="mt-2 group">

@@ -167,3 +167,27 @@ export function formatFinalizeAnomalyLine(
     `(raw ${stats.rawChars.toLocaleString()} → final ${stats.finalChars.toLocaleString()})`
   );
 }
+
+/** Structured summary for SystemBubble + transcript filters. */
+export function streamIntegritySummaryFromAnomalies(
+  agentId: string,
+  anomalies: AgentOutputAnomaly[],
+  stats: FinalizedAgentOutput["stats"],
+  detail: string,
+): {
+  kind: "stream_integrity";
+  agentId: string;
+  anomalyKinds: string[];
+  rawChars: number;
+  finalChars: number;
+  detail: string;
+} {
+  return {
+    kind: "stream_integrity",
+    agentId,
+    anomalyKinds: anomalies.map((a) => a.kind),
+    rawChars: stats.rawChars,
+    finalChars: stats.finalChars,
+    detail: detail.slice(0, 500),
+  };
+}

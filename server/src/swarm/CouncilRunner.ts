@@ -18,6 +18,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 import {
   finalizeAgentOutput,
   formatFinalizeAnomalyLine,
+  streamIntegritySummaryFromAnomalies,
 } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { takePendingToolTrace } from "./toolCallTranscript.js";
 import { describeSdkError } from "./sdkError.js";
@@ -176,7 +177,12 @@ export class CouncilRunner extends DiscussionRunnerBase {
     const finalized = finalizeAgentOutput(text, { role });
     const { finalText, thoughts, toolCalls, anomalies, stats } = finalized;
     const anomalyLine = formatFinalizeAnomalyLine(agent.id, anomalies, stats);
-    if (anomalyLine) this.appendSystem(anomalyLine);
+    if (anomalyLine) {
+      this.appendSystem(
+        anomalyLine,
+        streamIntegritySummaryFromAnomalies(agent.id, anomalies, stats, anomalyLine),
+      );
+    }
     const summary = summarizeAgentResponse(finalText);
     const toolTrace = takePendingToolTrace(this.pendingToolTraceByAgent, agent.id);
     const entry: TranscriptEntry = {

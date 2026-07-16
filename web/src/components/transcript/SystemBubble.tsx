@@ -121,6 +121,37 @@ export function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string
       </div>
     );
   }
+  // Stream integrity (loop collapse / hard truncate) — amber ribbon so
+  // multi-minute generation loops are visible without grepping logs.
+  if (
+    entry.summary?.kind === "stream_integrity"
+    || (entry.text && entry.text.startsWith("[stream-integrity]"))
+  ) {
+    const s = entry.summary?.kind === "stream_integrity" ? entry.summary : null;
+    const tags = s?.anomalyKinds?.join(", ") ?? "anomaly";
+    return (
+      <div className="rounded-md border-2 border-amber-700/60 bg-amber-950/20 px-3 py-2 text-xs space-y-1">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="inline-block bg-amber-900/60 text-amber-100 font-mono uppercase tracking-wider px-1.5 py-0.5 rounded text-[10px]">
+            stream integrity
+          </span>
+          {s ? (
+            <span className="text-ink-300 font-mono">
+              {s.agentId} · {tags}
+            </span>
+          ) : null}
+          <span className="text-ink-500">system · {ts}</span>
+        </div>
+        <div className="text-ink-200 font-mono break-words whitespace-pre-wrap">{entry.text}</div>
+        {s ? (
+          <div className="text-ink-500">
+            raw {s.rawChars.toLocaleString()} → final {s.finalChars.toLocaleString()} chars
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   // 2026-04-27: deliverable "Saved to <filename>" card for end-of-run
   // artifact exports. Previously fell through to the generic system bubble
   // — now renders a green-bordered card with filename, size, section count,

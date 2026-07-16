@@ -5,6 +5,7 @@ import type { ExitContract } from "./types.js";
 import { tokenTracker as tokenTrackerSingleton } from "../../services/ollamaProxy.js";
 import { generateRca } from "../autoRca.js";
 import { computeRunHealthScore } from "../runHealthScore.js";
+import { collectStreamIntegrityReport } from "@ollama-swarm/shared/streamIntegrityReport";
 export {
   FINAL_GIT_STATUS_MAX,
   TRANSCRIPT_MAX_ENTRIES,
@@ -87,6 +88,8 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     input.config.runId,
   );
 
+  const streamIntegrity = collectStreamIntegrityReport(input.transcript);
+
   return {
     runId: input.config.runId,
     repoUrl: input.config.repoUrl,
@@ -110,6 +113,7 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
     finalGitStatusTruncated: truncated,
     totalPromptTokens,
     totalResponseTokens,
+    ...(streamIntegrity ? { streamIntegrity } : {}),
     agents: input.agents.slice(),
     contract: input.contract ? cloneContract(input.contract) : undefined,
     // Task #65: cap transcript at TRANSCRIPT_MAX_ENTRIES (head) so a

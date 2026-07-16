@@ -124,6 +124,11 @@ export interface RunSummary {
   // with summaries written before this lands.
   totalPromptTokens?: number;
   totalResponseTokens?: number;
+  /**
+   * Stream-integrity aggregate (loop collapses, hard truncates, peak sizes).
+   * Optional for back-compat with older summary.json files.
+   */
+  streamIntegrity?: import("../../../../shared/src/streamIntegrityReport.js").StreamIntegrityReport;
   agents: PerAgentStat[];
   // Task #65 (2026-04-24): persist the in-memory transcript at run-end
   // so the history modal / review view can replay what happened.
