@@ -4,6 +4,7 @@ import {
   buildApplyMissReport,
   buildNearbyExcerpt,
   computeUniqueCandidates,
+  diversifyCandidates,
   expandToUnique,
   findUniqueSubstrings,
   lineIndexAtOffset,
@@ -13,6 +14,7 @@ import {
   NEARBY_EXCERPT_MAX_CHARS,
   NEARBY_LINE_RADIUS,
   UNIQUE_CANDIDATE_MAX,
+  UNIQUE_CANDIDATE_MAX_CHARS,
   UNIQUE_CANDIDATE_MIN_LENGTH,
 } from "./applyMissReport.js";
 import { applyFileHunks, applyHunks, type Hunk } from "./applyHunks.js";
@@ -141,29 +143,63 @@ describe("findUniqueSubstrings", () => {
     }
   });
 
-  it("prefers longer candidates and caps at UNIQUE_CANDIDATE_MAX", () => {
-    // One long unique line — prefixes/suffixes also unique; cap applies.
+  it("prefers whole-line uniqueness and does not burn cap on near-dup prefixes", () => {
+    // One long unique line — char prefixes are also unique but redundant.
     const unique =
       "UNIQUE_LINE_ABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789_EXTRA_TAIL";
     const fileText = `head\n${unique}\ntail\n`;
     const cands = findUniqueSubstrings(unique, fileText);
     assert.ok(cands.length >= 1);
     assert.ok(cands.length <= UNIQUE_CANDIDATE_MAX);
-    // Longest first
-    for (let i = 1; i < cands.length; i++) {
-      assert.ok(cands[i - 1]!.length >= cands[i]!.length);
+    // Whole line should be present; near-dup prefixes must not fill the cap.
+    assert.ok(cands.includes(unique) || cands.some((c) => unique.startsWith(c.slice(0, 20))));
+    // Diversity: no candidate is a strict prefix of another kept candidate.
+    for (let i = 0; i < cands.length; i++) {
+      for (let j = 0; j < cands.length; j++) {
+        if (i === j) continue;
+        assert.ok(
+          !(cands[j]!.startsWith(cands[i]!) && cands[j]!.length > cands[i]!.length),
+          `candidate ${cands[i]} is prefix of ${cands[j]}`,
+        );
+      }
     }
+  });
+
+  it("handles multi-KB unique lines without quadratic char scan", () => {
+    const unique = "U".repeat(20_000);
+    const fileText = `head\n${unique}\ntail\n`;
+    const t0 = performance.now();
+    const cands = findUniqueSubstrings(unique, fileText);
+    const ms = performance.now() - t0;
+    assert.ok(cands.length >= 1);
+    assert.ok(cands.length <= UNIQUE_CANDIDATE_MAX);
+    // Truncated for report size
+    assert.ok(cands.every((c) => c.length <= UNIQUE_CANDIDATE_MAX_CHARS));
+    // Sparse probes: should be well under the old ~745ms quadratic path
+    assert.ok(ms < 200, `expected <200ms for 20KB line, got ${ms.toFixed(1)}ms`);
   });
 
   it("respects minLength (default 32)", () => {
     const short = "short-unique-but-under-32"; // 25 chars
     const fileText = `aaa\n${short}\nbbb\n`;
     assert.deepEqual(findUniqueSubstrings(short, fileText), []);
-    // With lower minLength the full string (and its unique prefixes/suffixes) appear.
+    // With lower minLength the full string appears (sparse probes include full).
     const cands = findUniqueSubstrings(short, fileText, 10);
     assert.ok(cands.includes(short));
     assert.ok(cands.every((c) => c.length >= 10));
     assert.ok(cands.length <= UNIQUE_CANDIDATE_MAX);
+  });
+});
+
+describe("diversifyCandidates", () => {
+  it("keeps longer form and drops prefix/suffix near-duplicates", () => {
+    const long = "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
+    const prefix = long.slice(0, 30);
+    const other = "ZZZZ_DISTINCT_UNIQUE_LINE_XXXXX";
+    const out = diversifyCandidates([prefix, long, other]);
+    assert.ok(out.includes(long));
+    assert.ok(out.includes(other));
+    assert.ok(!out.includes(prefix));
   });
 });
 
@@ -240,6 +276,30 @@ describe("computeUniqueCandidates", () => {
       [],
     );
   });
+
+  it("whitespace-drift start_not_found falls back to expand on normalized needle", () => {
+    // Exact start with trailing spaces not found; normalized "## Sec" multi-matches.
+    // Apply still reports start_not_found (fail-closed); candidates should expand.
+    const fileText = "## Sec\none\n## Sec\ntwo\n";
+    const spaced = "## Sec  ";
+    assert.equal(fileText.includes(spaced), false);
+    assert.equal(normalizeSearchWhitespace(spaced), "## Sec");
+
+    const cands = computeUniqueCandidates("start_not_found", spaced, fileText);
+    assert.ok(
+      cands.length >= 1,
+      `expected expand candidates for spaced start, got ${JSON.stringify(cands)}`,
+    );
+    assert.ok(cands.some((c) => c.includes("one")));
+  });
+
+  it("whitespace-drift search_not_found falls back similarly", () => {
+    const fileText = "shared-anchor-line-xxx\nA\nshared-anchor-line-xxx\nB\n";
+    const spaced = "shared-anchor-line-xxx  ";
+    const cands = computeUniqueCandidates("search_not_found", spaced, fileText);
+    assert.ok(cands.length >= 1);
+    assert.ok(cands.some((c) => c.includes("A") || c.includes("shared-anchor")));
+  });
 });
 
 describe("buildApplyMissReport", () => {
@@ -302,6 +362,29 @@ describe("buildApplyMissReport", () => {
     assert.ok(
       r.uniqueCandidates.some((c) => c.includes("section rates unique")),
     );
+  });
+
+  it("size-caps each uniqueCandidates entry", () => {
+    const longLine = "L".repeat(2000);
+    // Two "shared" markers separated by huge lines so expand yields multi-KB strings.
+    const fileText = `${longLine}\nshared\n${longLine}\nshared\n`;
+    const r = buildApplyMissReport({
+      file: "big.ts",
+      hunkIndex: 0,
+      op: "replace",
+      kind: "search_not_unique",
+      needle: "shared",
+      matchCount: 2,
+      fileText,
+      message: "matches 2 times",
+    });
+    assert.ok(r.uniqueCandidates.length >= 1);
+    for (const c of r.uniqueCandidates) {
+      assert.ok(
+        c.length <= UNIQUE_CANDIDATE_MAX_CHARS,
+        `candidate length ${c.length} > ${UNIQUE_CANDIDATE_MAX_CHARS}`,
+      );
+    }
   });
 
   it("focuses nearby excerpt on first match when matchCount > 0", () => {

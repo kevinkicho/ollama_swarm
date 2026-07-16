@@ -48,6 +48,9 @@ export const UNIQUE_CANDIDATE_MIN_LENGTH = 32;
 /** Cap number of uniqueCandidates returned. */
 export const UNIQUE_CANDIDATE_MAX = 5;
 
+/** Cap each uniqueCandidates entry so repair payloads stay compact. */
+export const UNIQUE_CANDIDATE_MAX_CHARS = 400;
+
 /** Default max lines to expand above/below first match for expandToUnique. */
 export const EXPAND_MAX_LINES = 5;
 
@@ -135,10 +138,65 @@ export function countOccurrences(haystack: string, needle: string): number {
 }
 
 /**
+ * Sparse prefix/suffix lengths for a line — avoids O(n) char-by-char probes.
+ * Always includes full length and minLength when valid; plus ¾ and ½ cuts.
+ */
+function sparseProbeLengths(lineLen: number, minLength: number): number[] {
+  if (lineLen < minLength) return [];
+  const set = new Set<number>([
+    lineLen,
+    Math.max(minLength, Math.floor(lineLen * 0.75)),
+    Math.max(minLength, Math.floor(lineLen * 0.5)),
+    minLength,
+  ]);
+  return [...set]
+    .filter((len) => len >= minLength && len <= lineLen)
+    .sort((a, b) => b - a);
+}
+
+/**
+ * Drop near-duplicate candidates: if A is a strict prefix/suffix of B (or
+ * equal), keep only the longer/more structural one. Longest-first input order
+ * preferred so multi-line / whole-line anchors win over char trims.
+ */
+export function diversifyCandidates(
+  candidates: string[],
+  max: number = UNIQUE_CANDIDATE_MAX,
+): string[] {
+  const sorted = [...candidates].sort(
+    (a, b) => b.length - a.length || a.localeCompare(b),
+  );
+  const kept: string[] = [];
+  for (const c of sorted) {
+    const redundant = kept.some(
+      (k) =>
+        k === c ||
+        k.startsWith(c) ||
+        k.endsWith(c) ||
+        c.startsWith(k) ||
+        c.endsWith(k),
+    );
+    if (redundant) continue;
+    kept.push(c);
+    if (kept.length >= max) break;
+  }
+  return kept;
+}
+
+/** Truncate each candidate for transcript / repair-prompt size. */
+export function truncateCandidates(
+  candidates: string[],
+  maxChars: number = UNIQUE_CANDIDATE_MAX_CHARS,
+): string[] {
+  return candidates.map((c) => truncateForReport(c, maxChars));
+}
+
+/**
  * Find deterministic unique substrings of `needle` that appear exactly once
- * in `fileText`. Prefers longest multi-line prefixes/suffixes of the needle,
- * then longest per-line prefixes/suffixes. Only candidates ≥ minLength.
- * Capped at UNIQUE_CANDIDATE_MAX. Returns [] when none.
+ * in `fileText`. Prefers multi-line / whole-line anchors first; only falls
+ * back to a sparse set of char prefixes/suffixes when still under the cap.
+ * De-duplicates near-identical prefixes. Only candidates ≥ minLength.
+ * Capped at UNIQUE_CANDIDATE_MAX; each entry size-capped.
  *
  * Used for search_not_found / start_not_found repair suggestions — never
  * applied silently as a first-match substitute.
@@ -154,6 +212,7 @@ export function findUniqueSubstrings(
   const found: string[] = [];
 
   const consider = (s: string): void => {
+    if (found.length >= UNIQUE_CANDIDATE_MAX * 2) return; // soft bound before diversify
     if (s.length < minLength) return;
     if (seen.has(s)) return;
     if (countOccurrences(fileText, s) !== 1) return;
@@ -163,26 +222,32 @@ export function findUniqueSubstrings(
 
   const lines = needle.split("\n");
 
-  // Multi-line prefixes and suffixes of the whole needle (longest first).
+  // Phase 1: multi-line / whole-line prefixes and suffixes (structural first).
   for (let k = lines.length; k >= 1; k--) {
+    if (found.length >= UNIQUE_CANDIDATE_MAX) break;
     consider(lines.slice(0, k).join("\n"));
-    if (k < lines.length) {
+    if (k < lines.length && found.length < UNIQUE_CANDIDATE_MAX) {
       consider(lines.slice(lines.length - k).join("\n"));
     }
   }
 
-  // Per-line prefixes and suffixes (longest first).
-  for (const line of lines) {
-    if (line.length < minLength) continue;
-    for (let len = line.length; len >= minLength; len--) {
-      consider(line.slice(0, len));
-      consider(line.slice(line.length - len));
+  // Phase 2: sparse char prefixes/suffixes only if we still need diversity.
+  if (found.length < UNIQUE_CANDIDATE_MAX) {
+    for (const line of lines) {
+      if (found.length >= UNIQUE_CANDIDATE_MAX) break;
+      if (line.length < minLength) continue;
+      for (const len of sparseProbeLengths(line.length, minLength)) {
+        if (found.length >= UNIQUE_CANDIDATE_MAX) break;
+        // Whole line already considered in phase 1.
+        if (len === line.length) continue;
+        consider(line.slice(0, len));
+        if (found.length >= UNIQUE_CANDIDATE_MAX) break;
+        consider(line.slice(line.length - len));
+      }
     }
   }
 
-  // Prefer longest candidates; cap.
-  found.sort((a, b) => b.length - a.length || a.localeCompare(b));
-  return found.slice(0, UNIQUE_CANDIDATE_MAX);
+  return truncateCandidates(diversifyCandidates(found));
 }
 
 /**
@@ -215,6 +280,7 @@ export function expandToUnique(
   const found: string[] = [];
 
   const considerRange = (fromLine: number, toLine: number): void => {
+    if (found.length >= UNIQUE_CANDIDATE_MAX) return;
     const from = Math.max(0, fromLine);
     const to = Math.min(fileLines.length - 1, toLine);
     if (from > to) return;
@@ -227,6 +293,7 @@ export function expandToUnique(
 
   // Progressive expansion: prefer smaller windows; try down-only, up-only, both.
   for (let expand = 0; expand <= maxExpandLines; expand++) {
+    if (found.length >= UNIQUE_CANDIDATE_MAX) break;
     if (expand === 0) {
       // Full line(s) covering the first match (may already be unique if
       // start was a mid-line fragment of a unique line).
@@ -238,16 +305,15 @@ export function expandToUnique(
     considerRange(startLine - expand, endLine + expand); // both sides
   }
 
-  // Prefer shortest successful expansion (most specific), then longer if needed.
+  // Prefer shortest successful expansion (most specific).
   found.sort((a, b) => a.length - b.length || a.localeCompare(b));
-  return found.slice(0, UNIQUE_CANDIDATE_MAX);
+  return truncateCandidates(found.slice(0, UNIQUE_CANDIDATE_MAX));
 }
 
 /**
- * Compute uniqueCandidates for a miss kind. not-found → substrings of needle;
- * not-unique → expand first match; fall back to substrings if expand empty.
+ * Kind-primary candidate pass (no whitespace-normalize fallback).
  */
-export function computeUniqueCandidates(
+function computeUniqueCandidatesPrimary(
   kind: ApplyMissKind,
   needle: string,
   fileText: string,
@@ -265,6 +331,43 @@ export function computeUniqueCandidates(
     default:
       return [];
   }
+}
+
+/**
+ * Compute uniqueCandidates for a miss kind. not-found → substrings of needle;
+ * not-unique → expand first match; fall back to substrings if expand empty.
+ *
+ * When the primary pass is empty, retries with normalizeSearchWhitespace(needle)
+ * so whitespace/CRLF drift that became *_not_found (normalized multi-match is
+ * not auto-applied) still yields expand/substring repair anchors.
+ */
+export function computeUniqueCandidates(
+  kind: ApplyMissKind,
+  needle: string,
+  fileText: string,
+): string[] {
+  if (
+    kind !== "search_not_found" &&
+    kind !== "start_not_found" &&
+    kind !== "search_not_unique" &&
+    kind !== "start_not_unique"
+  ) {
+    return [];
+  }
+
+  const primary = computeUniqueCandidatesPrimary(kind, needle, fileText);
+  if (primary.length > 0) return primary;
+
+  const normalized = normalizeSearchWhitespace(needle);
+  if (!normalized || normalized === needle) return primary;
+
+  const normCount = countOccurrences(fileText, normalized);
+  if (normCount >= 2) {
+    const expanded = expandToUnique(normalized, fileText);
+    if (expanded.length > 0) return expanded;
+  }
+  // count 0 or 1 (or expand empty): unique substrings of normalized needle
+  return findUniqueSubstrings(normalized, fileText);
 }
 
 export interface BuildApplyMissReportInput {
@@ -302,9 +405,10 @@ export function buildApplyMissReport(
     }
   }
 
-  const uniqueCandidates =
+  const uniqueCandidates = truncateCandidates(
     input.uniqueCandidates ??
-    computeUniqueCandidates(input.kind, input.needle, input.fileText);
+      computeUniqueCandidates(input.kind, input.needle, input.fileText),
+  );
 
   return {
     file: input.file,

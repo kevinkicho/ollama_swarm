@@ -22,6 +22,7 @@
 
 import {
   buildApplyMissReport,
+  countOccurrences,
   normalizeSearchWhitespace,
   type ApplyMissKind,
   type ApplyMissReport,
@@ -393,15 +394,5 @@ export function applyHunks(
   return { ok: true, newTextsByFile: out };
 }
 
-// Simple non-overlapping occurrence count. We don't need regex — search
-// text is literal, and the schema has already rejected empty strings.
-function countOccurrences(haystack: string, needle: string): number {
-  if (needle.length === 0) return 0;
-  let count = 0;
-  let idx = 0;
-  while ((idx = haystack.indexOf(needle, idx)) !== -1) {
-    count++;
-    idx += needle.length;
-  }
-  return count;
-}
+// countOccurrences imported from applyMissReport (shared non-overlapping
+// literal count used by apply + unique-candidate helpers).
