@@ -9,6 +9,19 @@ import {
   parseHunkReviewResponse,
   buildHunkReviewRepairPrompt,
 } from "./prompts/hunkReview.js";
+import {
+  recordDeliberationAsync,
+  type DeliberationSink,
+} from "../deliberation/deliberationLog.js";
+
+function deliberationSink(ctx: AuditorContext): DeliberationSink {
+  return {
+    clonePath: ctx.getActive()?.localPath,
+    runId: ctx.getActive()?.runId,
+    appendSystem: (m) => ctx.appendSystem(m),
+    emit: (e) => ctx.emit(e as any),
+  };
+}
 
 /** Reject auditor batches that wrote no files or touch no unmet criterion paths. */
 export function batchAdvancesUnmetCriteria(
@@ -73,6 +86,22 @@ export async function reviewPendingCommits(
     if (!approval.approve) {
       ctx.wrappers.rejectCommitQ(todo.id, approval.reason || "Auditor rejected the proposed hunks");
       ctx.appendSystem(`[auditor-gate] ✗ Rejected commit for ${todo.id.slice(0, 8)}: ${approval.reason}`);
+      recordDeliberationAsync(
+        {
+          runId: ctx.getActive()?.runId ?? "unknown",
+          layer: "hierarchy",
+          preset: "blackboard",
+          subject: `commit:${todo.id.slice(0, 8)} ${todo.description.slice(0, 120)}`,
+          claim: `Worker proposed ${hunks.length} hunk(s) for ${(files as string[]).slice(0, 4).join(", ")}`,
+          proposer: "worker",
+          validator: "auditor",
+          verdict: "deny",
+          validationReason: approval.reason || "Auditor rejected the proposed hunks",
+          evidence: Array.isArray(files) ? (files as string[]).slice(0, 12) : [],
+          related: { todoId: todo.id },
+        },
+        deliberationSink(ctx),
+      );
       continue;
     }
 
@@ -83,9 +112,40 @@ export async function reviewPendingCommits(
         files: files as string[],
         message: `[auditor-approved] ${todo.description.slice(0, 80)}`,
       });
+      recordDeliberationAsync(
+        {
+          runId: ctx.getActive()?.runId ?? "unknown",
+          layer: "hierarchy",
+          preset: "blackboard",
+          subject: `commit:${todo.id.slice(0, 8)} ${todo.description.slice(0, 120)}`,
+          claim: `Worker proposed ${hunks.length} hunk(s) for ${(files as string[]).slice(0, 4).join(", ")}`,
+          proposer: "worker",
+          validator: "auditor",
+          verdict: "approve",
+          validationReason: approval.reason || "Auditor approved proposed hunks",
+          evidence: (files as string[]).slice(0, 12),
+          related: { todoId: todo.id },
+        },
+        deliberationSink(ctx),
+      );
     } else {
       ctx.wrappers.rejectCommitQ(todo.id, "No valid hunks or files proposed");
       ctx.appendSystem(`[auditor-gate] ✗ Rejected commit for ${todo.id.slice(0, 8)}: no valid hunks`);
+      recordDeliberationAsync(
+        {
+          runId: ctx.getActive()?.runId ?? "unknown",
+          layer: "hierarchy",
+          preset: "blackboard",
+          subject: `commit:${todo.id.slice(0, 8)}`,
+          claim: "Worker pending-commit without valid hunks/files",
+          proposer: "worker",
+          validator: "auditor",
+          verdict: "deny",
+          validationReason: "No valid hunks or files proposed",
+          related: { todoId: todo.id },
+        },
+        deliberationSink(ctx),
+      );
     }
   }
 

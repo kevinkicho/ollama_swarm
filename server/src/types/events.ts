@@ -209,6 +209,11 @@ export type SwarmEventBody =
       agentId?: string;
       tool?: string;
     }
+  /** Peer/hierarchy reason validation (approve|deny|…) for audit dissemination. */
+  | {
+      type: "deliberation_transaction";
+      transaction: import("../swarm/deliberation/deliberationTypes.js").DeliberationTransaction;
+    }
   // #302 Phase B (2026-04-28): live embedding-similarity drift sample.
   // Independent second signal alongside conformance_sample (LLM-judge).
   // Emitted by EmbeddingDriftMonitor when an embedding model is

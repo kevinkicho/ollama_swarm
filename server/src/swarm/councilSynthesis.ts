@@ -37,6 +37,7 @@ import {
   pickBestOfNSample,
   type BestOfNSample,
 } from "./bestOfNTurn.js";
+import { recordDeliberationAsync } from "./deliberation/deliberationLog.js";
 
 
 export interface SynthesisContext {
@@ -207,6 +208,33 @@ export async function runSynthesisPass(
                 }`
               : `[vote] agent-${voter.index} abstained (parse fail or self-vote)`,
           );
+          recordDeliberationAsync(
+            {
+              runId: cfg.runId ?? "unknown",
+              layer: "peer",
+              preset: "council",
+              subject: "peer-vote-ballot",
+              claim: parsed.rationale || "ballot without rationale",
+              proposer: `agent-${voter.index}`,
+              validator: `agent-${voter.index}`,
+              verdict: parsed.votedForIndex != null ? "validate" : "abstain",
+              validationReason:
+                parsed.votedForIndex != null
+                  ? `Voted for agent-${parsed.votedForIndex}`
+                  : "Abstained (parse fail or self-vote)",
+              related: {
+                agentIndex: voter.index,
+                votedForIndex: parsed.votedForIndex,
+              },
+            },
+            {
+              clonePath: cfg.localPath,
+              runId: cfg.runId ?? "unknown",
+              appendSystem: (m) => ctx.appendSystem(m),
+              emit: (e) => ctx.emit(e as any),
+              logDiag: (e) => ctx.logDiag(e),
+            },
+          );
         } catch (err) {
           votes.push({
             voterIndex: voter.index,
@@ -237,6 +265,31 @@ export async function runSynthesisPass(
       if (tally.winnerIndex != null) {
         const winnerDraft = drafts.find((d) => d.agentIndex === tally.winnerIndex);
         if (winnerDraft) {
+          recordDeliberationAsync(
+            {
+              runId: cfg.runId ?? "unknown",
+              layer: "peer",
+              preset: "council",
+              subject: `vote-winner:agent-${tally.winnerIndex}`,
+              claim: tallySummary,
+              proposer: "council-peers",
+              validator: "vote-tally",
+              verdict: "approve",
+              validationReason: `Peer majority selected agent-${tally.winnerIndex}`,
+              evidence: votes
+                .filter((v) => v.votedForIndex === tally.winnerIndex && v.rationale)
+                .map((v) => `agent-${v.voterIndex}: ${v.rationale}`)
+                .slice(0, 8),
+              related: { agentIndex: tally.winnerIndex },
+            },
+            {
+              clonePath: cfg.localPath,
+              runId: cfg.runId ?? "unknown",
+              appendSystem: (m) => ctx.appendSystem(m),
+              emit: (e) => ctx.emit(e as any),
+              logDiag: (e) => ctx.logDiag(e),
+            },
+          );
           prompt = buildVoteWinnerPresentPrompt({
             winnerIndex: tally.winnerIndex,
             winnerText: winnerDraft.text,

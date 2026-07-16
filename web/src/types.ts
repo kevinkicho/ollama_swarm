@@ -409,6 +409,24 @@ export type SwarmEvent =
       agentId?: string;
       tool?: string;
     }
+  | {
+      type: "deliberation_transaction";
+      transaction: {
+        id: string;
+        ts: number;
+        runId: string;
+        layer: "hierarchy" | "peer" | "control";
+        preset?: string;
+        subject: string;
+        claim: string;
+        proposer: string;
+        validator?: string;
+        verdict: "claim" | "challenge" | "validate" | "approve" | "deny" | "abstain";
+        validationReason?: string;
+        evidence?: string[];
+        schemaVersion: 1;
+      };
+    }
   // #295 + #301: live directive-conformance sample. Per-poll grader
   // metadata enriches the IdentityStrip tooltip infographic.
   | {

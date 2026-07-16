@@ -92,12 +92,14 @@ export function buildVotePrompt(args: {
     `Read every OTHER agent's final draft below. Pick the ONE you find most`,
     `compelling — best evidence, sharpest reasoning, most actionable.`,
     `You may NOT vote for yourself.`,
+    `Validate their reasons: if a draft asserts a fix without evidence, do not vote for it.`,
+    `Your rationale must state why their reasons are valid (or why others are not).`,
     ...(directive ? [``, `Directive: ${directive}`, ``] : []),
     ``,
     ...draftBlocks,
     ``,
     `Output STRICT JSON only (no prose, no fences):`,
-    `{"votedForIndex": <agent index, integer ≠ ${voterIndex}>, "rationale": "<one sentence why>"}`,
+    `{"votedForIndex": <agent index, integer ≠ ${voterIndex}>, "rationale": "<one sentence: why their reasons are valid / better evidence>"}`,
   ].join("\n");
 }
 

@@ -41,6 +41,11 @@ import {
   injectMentionContractsIntoPrompt,
   parseMentionContracts,
 } from "./agentMentionContract.js";
+import {
+  injectDeliberationProtocolIntoPrompt,
+  parseDeliberateEnvelopes,
+} from "./deliberation/deliberationProtocol.js";
+import { recordDeliberationAsync } from "./deliberation/deliberationLog.js";
 
 export interface DiscussionRunAgentHost {
   manager: AgentManager;
@@ -181,6 +186,16 @@ export async function runDiscussionAgentCore(
       }
     } catch {
       // best-effort — never block the turn
+    }
+  }
+
+  // Peer reason-validation protocol (claim → approve/deny/challenge/validate).
+  // Always available on discussion drafts so council peers can structure votes.
+  if (draftMode) {
+    try {
+      effectivePrompt = injectDeliberationProtocolIntoPrompt(effectivePrompt);
+    } catch {
+      /* best-effort */
     }
   }
 
@@ -359,6 +374,39 @@ export async function runDiscussionAgentCore(
       } catch {
         /* ignore */
       }
+    }
+
+    // Peer deliberation envelopes → durable transaction log.
+    try {
+      const deliberates = parseDeliberateEnvelopes(finalText);
+      for (const d of deliberates) {
+        recordDeliberationAsync(
+          {
+            runId: host.active?.runId ?? "unknown",
+            layer: "peer",
+            preset: host.active?.preset,
+            subject: d.subject,
+            claim: d.claim,
+            proposer: `agent-${agent.index}`,
+            validator: d.to ? d.to : `agent-${agent.index}`,
+            verdict: d.stance,
+            validationReason: d.why || undefined,
+            evidence: d.evidence,
+            related: { agentIndex: agent.index },
+          },
+          {
+            clonePath: host.active?.localPath,
+            runId: host.active?.runId,
+            appendSystem: (m) => host.appendSystem(m),
+            emit: (e) => host.emit(e as SwarmEvent),
+            logDiag: host.logDiag
+              ? (entry) => host.logDiag?.(entry)
+              : undefined,
+          },
+        );
+      }
+    } catch {
+      /* best-effort */
     }
 
     return finalText;
