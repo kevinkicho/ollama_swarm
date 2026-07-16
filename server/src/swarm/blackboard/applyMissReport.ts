@@ -3,7 +3,7 @@
 // Callers (repair prompts, council, wrap-up) need more than a free-text
 // error string: kind, needle, match counts, and a nearby file excerpt so
 // the next attempt can re-ground on real disk content. uniqueCandidates
-// is reserved for PR2 (findUniqueSubstrings / expandToUnique).
+// are deterministic repair anchors from findUniqueSubstrings / expandToUnique.
 
 export type ApplyMissKind =
   | "search_not_found"
@@ -24,8 +24,9 @@ export interface ApplyMissReport {
   /** ±N lines around best guess / first match / file head. */
   nearbyExcerpt: string;
   /**
-   * Deterministic unique substrings of needle that appear once in file.
-   * Empty in PR1; filled by PR2 findUniqueSubstrings / expandToUnique.
+   * Deterministic unique substrings / expanded anchors for repair.
+   * Filled by findUniqueSubstrings (not-found) or expandToUnique (not-unique).
+   * Empty when none, or for kinds that don't produce candidates.
    */
   uniqueCandidates: string[];
   /** Human one-liner for transcript (compatible with today's messages). */
@@ -40,6 +41,15 @@ export const NEARBY_EXCERPT_MAX_CHARS = 1200;
 
 /** Cap needle field so reports stay compact in transcripts. */
 export const NEEDLE_REPORT_MAX_CHARS = 200;
+
+/** Min length for unique substring candidates (repair anchors need enough context). */
+export const UNIQUE_CANDIDATE_MIN_LENGTH = 32;
+
+/** Cap number of uniqueCandidates returned. */
+export const UNIQUE_CANDIDATE_MAX = 5;
+
+/** Default max lines to expand above/below first match for expandToUnique. */
+export const EXPAND_MAX_LINES = 5;
 
 /**
  * Trailing-whitespace / CRLF normalize used by replace search fuzzy fallback.
@@ -110,6 +120,153 @@ export function buildNearbyExcerpt(
   return excerpt;
 }
 
+/**
+ * Non-overlapping literal occurrence count (same semantics as applyHunks).
+ */
+export function countOccurrences(haystack: string, needle: string): number {
+  if (needle.length === 0) return 0;
+  let count = 0;
+  let idx = 0;
+  while ((idx = haystack.indexOf(needle, idx)) !== -1) {
+    count++;
+    idx += needle.length;
+  }
+  return count;
+}
+
+/**
+ * Find deterministic unique substrings of `needle` that appear exactly once
+ * in `fileText`. Prefers longest multi-line prefixes/suffixes of the needle,
+ * then longest per-line prefixes/suffixes. Only candidates ≥ minLength.
+ * Capped at UNIQUE_CANDIDATE_MAX. Returns [] when none.
+ *
+ * Used for search_not_found / start_not_found repair suggestions — never
+ * applied silently as a first-match substitute.
+ */
+export function findUniqueSubstrings(
+  needle: string,
+  fileText: string,
+  minLength: number = UNIQUE_CANDIDATE_MIN_LENGTH,
+): string[] {
+  if (!needle || !fileText || minLength <= 0) return [];
+
+  const seen = new Set<string>();
+  const found: string[] = [];
+
+  const consider = (s: string): void => {
+    if (s.length < minLength) return;
+    if (seen.has(s)) return;
+    if (countOccurrences(fileText, s) !== 1) return;
+    seen.add(s);
+    found.push(s);
+  };
+
+  const lines = needle.split("\n");
+
+  // Multi-line prefixes and suffixes of the whole needle (longest first).
+  for (let k = lines.length; k >= 1; k--) {
+    consider(lines.slice(0, k).join("\n"));
+    if (k < lines.length) {
+      consider(lines.slice(lines.length - k).join("\n"));
+    }
+  }
+
+  // Per-line prefixes and suffixes (longest first).
+  for (const line of lines) {
+    if (line.length < minLength) continue;
+    for (let len = line.length; len >= minLength; len--) {
+      consider(line.slice(0, len));
+      consider(line.slice(line.length - len));
+    }
+  }
+
+  // Prefer longest candidates; cap.
+  found.sort((a, b) => b.length - a.length || a.localeCompare(b));
+  return found.slice(0, UNIQUE_CANDIDATE_MAX);
+}
+
+/**
+ * When `start` matches 2+ times in `fileText`, expand by adding surrounding
+ * full lines around the first match until the expanded string is unique
+ * (up to maxExpandLines each side). Returns unique expanded strings as
+ * repair candidates; [] if still not unique after max expansion.
+ *
+ * Does not apply the expansion — fail-closed multi-match still rejects.
+ */
+export function expandToUnique(
+  start: string,
+  fileText: string,
+  maxExpandLines: number = EXPAND_MAX_LINES,
+): string[] {
+  if (!start || !fileText || maxExpandLines < 0) return [];
+  if (countOccurrences(fileText, start) < 2) return [];
+
+  const firstIdx = fileText.indexOf(start);
+  if (firstIdx < 0) return [];
+
+  const fileLines = fileText.split("\n");
+  const startLine = lineIndexAtOffset(fileText, firstIdx);
+  const endLine = lineIndexAtOffset(
+    fileText,
+    firstIdx + Math.max(start.length - 1, 0),
+  );
+
+  const seen = new Set<string>();
+  const found: string[] = [];
+
+  const considerRange = (fromLine: number, toLine: number): void => {
+    const from = Math.max(0, fromLine);
+    const to = Math.min(fileLines.length - 1, toLine);
+    if (from > to) return;
+    const expanded = fileLines.slice(from, to + 1).join("\n");
+    if (expanded.length === 0 || seen.has(expanded)) return;
+    if (countOccurrences(fileText, expanded) !== 1) return;
+    seen.add(expanded);
+    found.push(expanded);
+  };
+
+  // Progressive expansion: prefer smaller windows; try down-only, up-only, both.
+  for (let expand = 0; expand <= maxExpandLines; expand++) {
+    if (expand === 0) {
+      // Full line(s) covering the first match (may already be unique if
+      // start was a mid-line fragment of a unique line).
+      considerRange(startLine, endLine);
+      continue;
+    }
+    considerRange(startLine, endLine + expand); // down only
+    considerRange(startLine - expand, endLine); // up only
+    considerRange(startLine - expand, endLine + expand); // both sides
+  }
+
+  // Prefer shortest successful expansion (most specific), then longer if needed.
+  found.sort((a, b) => a.length - b.length || a.localeCompare(b));
+  return found.slice(0, UNIQUE_CANDIDATE_MAX);
+}
+
+/**
+ * Compute uniqueCandidates for a miss kind. not-found → substrings of needle;
+ * not-unique → expand first match; fall back to substrings if expand empty.
+ */
+export function computeUniqueCandidates(
+  kind: ApplyMissKind,
+  needle: string,
+  fileText: string,
+): string[] {
+  switch (kind) {
+    case "search_not_found":
+    case "start_not_found":
+      return findUniqueSubstrings(needle, fileText);
+    case "search_not_unique":
+    case "start_not_unique": {
+      const expanded = expandToUnique(needle, fileText);
+      if (expanded.length > 0) return expanded;
+      return findUniqueSubstrings(needle, fileText);
+    }
+    default:
+      return [];
+  }
+}
+
 export interface BuildApplyMissReportInput {
   file: string;
   hunkIndex: number;
@@ -125,6 +282,11 @@ export interface BuildApplyMissReportInput {
    * - else file head
    */
   focusOffset?: number | null;
+  /**
+   * Optional override for uniqueCandidates. When omitted, computed from
+   * kind + needle + fileText via computeUniqueCandidates.
+   */
+  uniqueCandidates?: string[];
 }
 
 export function buildApplyMissReport(
@@ -140,6 +302,10 @@ export function buildApplyMissReport(
     }
   }
 
+  const uniqueCandidates =
+    input.uniqueCandidates ??
+    computeUniqueCandidates(input.kind, input.needle, input.fileText);
+
   return {
     file: input.file,
     hunkIndex: input.hunkIndex,
@@ -148,7 +314,7 @@ export function buildApplyMissReport(
     needle: truncateForReport(input.needle),
     matchCount: input.matchCount,
     nearbyExcerpt: buildNearbyExcerpt(input.fileText, { focusOffset: focus }),
-    uniqueCandidates: [],
+    uniqueCandidates,
     message: input.message,
   };
 }
