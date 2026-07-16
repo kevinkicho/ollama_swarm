@@ -274,7 +274,10 @@ test("ToolDispatcher — swarm-research profile exposes web tools", () => {
 });
 
 test("ToolDispatcher — bash backoff persists across dispatcher instances per agent", async () => {
-  const { resetAllAgentBashBackoff } = await import("./agentBashBackoff.js");
+  const {
+    resetAllAgentBashBackoff,
+    BASH_ERROR_BACKOFF_THRESHOLD,
+  } = await import("./agentBashBackoff.js");
   resetAllAgentBashBackoff();
   const root = await makeFixtureClone();
   try {
@@ -284,7 +287,7 @@ test("ToolDispatcher — bash backoff persists across dispatcher instances per a
       process.platform === "win32"
         ? "cmd /c exit 1"
         : "false";
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < BASH_ERROR_BACKOFF_THRESHOLD; i++) {
       const d = new ToolDispatcher("swarm-builder", root, undefined, agentId);
       const r = await d.dispatch({ tool: "bash", args: { command: failCmd } });
       assert.equal(r.ok, false);
@@ -292,7 +295,12 @@ test("ToolDispatcher — bash backoff persists across dispatcher instances per a
     const d2 = new ToolDispatcher("swarm-builder", root, undefined, agentId);
     const blocked = await d2.dispatch({ tool: "bash", args: { command: failCmd } });
     assert.equal(blocked.ok, false);
-    if (!blocked.ok) assert.match(blocked.error, /bash disabled after 4 consecutive failures/);
+    if (!blocked.ok) {
+      assert.match(
+        blocked.error,
+        new RegExp(`bash disabled after ${BASH_ERROR_BACKOFF_THRESHOLD} consecutive failures`),
+      );
+    }
   } finally {
     await fs.rm(root, { recursive: true, force: true });
     resetAllAgentBashBackoff();
