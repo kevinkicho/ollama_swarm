@@ -10,7 +10,7 @@ import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { softCap } from "./lenientParse.js";
 import { buildResearchNotesBlock, buildResearchToolsNote } from "./planner.js";
 import { buildBlackboardDirectiveBlock } from "../../directivePromptHelpers.js";
-import { JSON_ONLY_FINAL_RULE_LINES } from "./sharedSnippets.js";
+import { hostToolingConstraintLines, JSON_ONLY_FINAL_RULE_LINES } from "./sharedSnippets.js";
 
 // ---------------------------------------------------------------------------
 // Worker response schema (v2). Shape: {"hunks": [ ...discriminated on op ]}.
@@ -227,6 +227,8 @@ export const WORKER_SYSTEM_PROMPT = [
   "5. Hunks on one file apply in order. Missing expectedFiles → create them (do not skip). Skip only if verified already done or genuinely impossible.",
   "6. USER DIRECTIVE (when present) is authoritative — no mock/placeholder data; serve its intent.",
   "7. You may call propose_hunks mid-turn to dry-run anchors before the final JSON.",
+  "8. After a search/start miss: re-read the file and copy a unique anchor — do not re-emit the failed search or claim already-done without reading.",
+  ...hostToolingConstraintLines().map((line) => `   ${line}`),
   "",
   "WINDOWED files (large): head + gap + tail only — use replace_between/write or tools for middle sections; do not invent a search spanning the gap.",
   "",

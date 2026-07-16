@@ -99,6 +99,7 @@ function applyAuditorVerdicts(
   contract: ExitContract,
   verdicts: ReturnType<typeof parseAuditorResponse> & { ok: true },
   skipEvidence: readonly SkipEvidenceTodo[],
+  repoFiles: readonly string[] = [],
 ): {
   updatedCriteria: ExitCriterion[];
   newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }>;
@@ -120,7 +121,7 @@ function applyAuditorVerdicts(
     return { ...c, status: verdict.status as ExitCriterion["status"], rationale: verdict.rationale };
   });
 
-  updatedCriteria = promoteCriteriaFromSkipEvidence(updatedCriteria, skipEvidence);
+  updatedCriteria = promoteCriteriaFromSkipEvidence(updatedCriteria, skipEvidence, repoFiles);
   newTodos = filterAuditTodosAgainstSkips(newTodos, skipEvidence);
   const metIds = new Set(updatedCriteria.filter((c) => c.status === "met").map((c) => c.id));
   newTodos = newTodos.filter((t) => !t.criterionId || !metIds.has(t.criterionId));
@@ -269,6 +270,7 @@ Return ONLY a JSON object:
         contract,
         parsed,
         skipEvidence,
+        committedFiles,
       );
 
       const metCount = updatedCriteria.filter((c) => c.status === "met").length;
@@ -353,7 +355,8 @@ export async function fallbackAudit(
     }
   }
 
-  const reconciled = promoteCriteriaFromSkipEvidence(updatedCriteria, skipEvidence);
+  // No full repo inventory here — skip promote requires skip file overlap only.
+  const reconciled = promoteCriteriaFromSkipEvidence(updatedCriteria, skipEvidence, []);
   const filteredTodos = filterAuditTodosAgainstSkips(newTodos, skipEvidence);
   const metIds = new Set(reconciled.filter((c) => c.status === "met").map((c) => c.id));
   const finalTodos = filteredTodos.filter((t) => {

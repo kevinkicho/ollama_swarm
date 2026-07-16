@@ -288,20 +288,15 @@ export async function tryPromoteNextTier(
     }
   }
   if (parsed.contract.criteria.length === 0) {
-    // In continuous mode (rounds=0), 0 criteria doesn't mean stop —
-    // the planner just couldn't find new work this cycle. Keep going
-    // by NOT incrementing tierUpFailures. The run continues with the
-    // existing contract and the auditor will keep evaluating.
-    if (active?.rounds === 0 || (active?.rounds ?? 0) >= 1_000_000) {
-      ctx.appendSystem(
-        `Tier ${nextTier} produced 0 criteria — planner saw nothing left to add. In continuous mode, keeping existing contract active.`,
-      );
-      // Don't promote, but don't fail either — just continue with current tier
-      return false;
-    }
+    // Continuous mode still counts toward tierUpFailures so all-met
+    // cannot loop forever hoping the planner invents new work.
     ctx.setTierUpFailures(ctx.getTierUpFailures() + 1);
+    const isAuto = active?.rounds === 0 || (active?.rounds ?? 0) >= 1_000_000;
     ctx.appendSystem(
-      `Tier ${nextTier} produced 0 criteria — planner saw nothing left to do. Ratchet failure ${ctx.getTierUpFailures()}/3.`,
+      isAuto
+        ? `Tier ${nextTier} produced 0 criteria — planner saw nothing left to add. `
+          + `Continuous mode failure ${ctx.getTierUpFailures()}/3 (will stop after cap).`
+        : `Tier ${nextTier} produced 0 criteria — planner saw nothing left to do. Ratchet failure ${ctx.getTierUpFailures()}/3.`,
     );
     return false;
   }
@@ -325,13 +320,6 @@ export async function tryPromoteNextTier(
     return !degeneratePatterns.some((p) => p.test(desc));
   });
   if (realCriteria.length === 0) {
-    // In continuous mode, degenerate criteria don't count as failures either
-    if (active?.rounds === 0 || (active?.rounds ?? 0) >= 1_000_000) {
-      ctx.appendSystem(
-        `Tier ${nextTier} produced ${parsed.contract.criteria.length} degenerate criterion(crite)ria (no real file targets) — in continuous mode, keeping existing contract active.`,
-      );
-      return false;
-    }
     ctx.setTierUpFailures(ctx.getTierUpFailures() + 1);
     ctx.appendSystem(
       `Tier ${nextTier} produced ${parsed.contract.criteria.length} degenerate criterion(crite)ria (no real file targets) — rejecting. Ratchet failure ${ctx.getTierUpFailures()}/3.`,
@@ -453,19 +441,23 @@ export async function runAuditedExecution(
           promoted,
         });
         if (promoted) {
+          ctx.setZeroProgressStreak(0);
           continue;
         }
-        // In continuous mode, don't stop when tier-up fails — keep going
-        // with the existing contract. The auditor will keep evaluating.
+        // Continuous: allow a few failed promo attempts, then settle.
+        // Previously this continued forever with all criteria met.
         const activeCfg = ctx.getActive();
-        if (activeCfg?.rounds === 0 || (activeCfg?.rounds ?? 0) >= 1_000_000) {
+        const isAuto = activeCfg?.rounds === 0 || (activeCfg?.rounds ?? 0) >= 1_000_000;
+        if (isAuto && ctx.getTierUpFailures() < 3) {
           ctx.appendSystem(
-            `Tier promotion failed in continuous mode — keeping existing contract active.`,
+            `Tier promotion failed in continuous mode (${ctx.getTierUpFailures()}/3) — keeping existing contract for another attempt.`,
           );
           continue;
         }
         ctx.setCompletionDetail(
-          "all tier criteria met; tier-up failed after retries — ending run.",
+          isAuto
+            ? "ambition-complete: all criteria met; tier-up exhausted in continuous mode"
+            : "all tier criteria met; tier-up failed after retries — ending run.",
         );
         ctx.appendSystem(ctx.getCompletionDetail()!);
         return;
@@ -557,12 +549,14 @@ export async function runAuditedExecution(
     const openAfter = ctx.boardCounts().open;
     const newTodosApprox = Math.max(0, openAfter - openBefore);
     if (isAutonomousRun) {
+      // Durable only: commits / met flips. openΔ (new todos) alone does not
+      // reset the streak — prevents thrash with permanent re-posts.
       const { streak, shouldStop } = updateZeroProgressStreak(
         ctx.getZeroProgressStreak(),
         isProductiveCycle({
           metFlips,
           commitsThisCycle: commitsDelta,
-          newTodos: newTodosApprox,
+          newTodos: 0,
         }),
         DEFAULT_ZERO_PROGRESS_LIMIT,
       );
@@ -587,8 +581,8 @@ export async function runAuditedExecution(
       }
       if (streak > 0) {
         ctx.appendSystem(
-          `[progress] Zero productive progress streak ${streak}/${DEFAULT_ZERO_PROGRESS_LIMIT} ` +
-            `(commits+${commitsDelta}, met+${metFlips}, openΔ${newTodosApprox}).`,
+          `[progress] Zero durable progress streak ${streak}/${DEFAULT_ZERO_PROGRESS_LIMIT} ` +
+            `(commits+${commitsDelta}, met+${metFlips}, openΔ${newTodosApprox} ignored for gate).`,
         );
       }
     } else if (commitsDelta > 0 || metFlips > 0) {

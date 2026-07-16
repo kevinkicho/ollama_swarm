@@ -29,9 +29,10 @@ import { extractProviderText, parseJsonArrayFromResponse, createTimeoutControlle
 import { resolveCouncilToolProfile } from "./toolProfiles.js";
 import {
   formatNoProductiveProgressReason,
-  isProductiveCycle,
+  isDurableProgress,
   updateZeroProgressStreak,
   DEFAULT_ZERO_PROGRESS_LIMIT,
+  MAX_STRETCH_WAVES_PER_RUN,
 } from "./productiveProgress.js";
 import { notifyGuardTrip } from "./guardNotify.js";
 
@@ -67,29 +68,48 @@ export interface CouncilAuditHost {
   setConsecutiveEmptyCycles: (n: number) => void;
   getTierPromotionRetries: () => number;
   setTierPromotionRetries: (n: number) => void;
+  getStretchWaves: () => number;
+  setStretchWaves: (n: number) => void;
   getZeroProgressStreak: () => number;
   setZeroProgressStreak: (n: number) => void;
   setEarlyStopDetail: (s: string) => void;
   logDiag?: (entry: unknown) => void;
 }
 
-/** Open-ended stretch work so autonomous runs continue after "all met". */
+/**
+ * Open-ended stretch work after all-met / empty planner.
+ * Capped per run so stretch cannot infinite-spin autonomous mode.
+ * Prefer grounded expectedFiles from commits so workers can settle.
+ */
 function enqueueStretchTodos(
   host: CouncilAuditHost,
   cfg: RunConfig,
   cycle: number,
   reason: string,
 ): number {
+  if (host.getStretchWaves() >= MAX_STRETCH_WAVES_PER_RUN) {
+    host.appendSystem(
+      `[ambition] Stretch wave cap reached (${MAX_STRETCH_WAVES_PER_RUN}/run) — not enqueueing more open-ended work.`,
+    );
+    return 0;
+  }
   const directive = (cfg.userDirective ?? "").trim() || "the user directive";
+  const committedDocs = host.state.committedFiles
+    .filter((f) => /\.(md|txt|rst)$/i.test(f) || f.startsWith("docs/"))
+    .slice(0, 6);
+  const grounded = committedDocs.length > 0 ? committedDocs : ["README.md"];
   const todos = [
     {
-      description: `Deepen research and documentation for: ${directive.slice(0, 200)}. Add citable findings and close remaining gaps.`,
-      expectedFiles: [] as string[],
+      description:
+        `Deepen research and documentation for: ${directive.slice(0, 200)}. `
+        + `Edit existing docs only; add citable findings and close remaining gaps.`,
+      expectedFiles: grounded.slice(0, 3),
       createdBy: "stretch-research",
     },
     {
-      description: `Consolidate, deduplicate, and improve structure of docs produced so far for: ${directive.slice(0, 160)}.`,
-      expectedFiles: [] as string[],
+      description:
+        `Consolidate, deduplicate, and improve structure of docs produced so far for: ${directive.slice(0, 160)}.`,
+      expectedFiles: grounded.slice(0, 3),
       createdBy: "stretch-consolidate",
     },
   ];
@@ -98,12 +118,16 @@ function enqueueStretchTodos(
     todos,
     (msg) => host.appendSystem(msg),
   );
+  if (n > 0) {
+    host.setStretchWaves(host.getStretchWaves() + 1);
+  }
   host.logDiag?.({
     type: "council_stretch_todos",
     runId: host.getActiveRunId() || cfg.runId,
     cycle,
     reason,
     enqueued: n,
+    wave: host.getStretchWaves(),
   });
   return n;
 }
@@ -212,29 +236,37 @@ export async function runCouncilAuditCycle(
     (o) => o.kind === "commit" && o.cycle === cycle,
   ).length;
 
-  /** Autonomous: stop after N cycles with no real progress (commits/met/todos). */
+  /**
+   * Autonomous: stop after N cycles without *durable* progress
+   * (commits / durable met flips / tier promotion). New todos alone
+   * no longer reset the streak (prevents stretch/audit spin).
+   */
   const maybeStopNoProgress = (
     signals: {
       metFlips: number;
       commitsThisCycle: number;
       newTodos: number;
       tierPromoted?: boolean;
+      skipOnlyMetFlips?: number;
     },
   ): "stop" | null => {
     if (!isAutonomous) {
-      if (isProductiveCycle(signals)) host.setZeroProgressStreak(0);
+      if (isDurableProgress(signals)) host.setZeroProgressStreak(0);
       return null;
     }
+    const durable = isDurableProgress(signals);
     const { streak, shouldStop } = updateZeroProgressStreak(
       host.getZeroProgressStreak(),
-      isProductiveCycle(signals),
+      durable,
       DEFAULT_ZERO_PROGRESS_LIMIT,
     );
     host.setZeroProgressStreak(streak);
     if (!shouldStop) {
       if (streak > 0) {
         host.appendSystem(
-          `[audit] Zero productive progress streak ${streak}/${DEFAULT_ZERO_PROGRESS_LIMIT}.`,
+          `[audit] Zero durable progress streak ${streak}/${DEFAULT_ZERO_PROGRESS_LIMIT}`
+            + ` (commits+${signals.commitsThisCycle}, met+${signals.metFlips}`
+            + `, todos+${signals.newTodos}${signals.tierPromoted ? ", tier↑" : ""}).`,
         );
       }
       return null;
@@ -402,7 +434,8 @@ export async function runCouncilAuditCycle(
       const retries = host.getTierPromotionRetries() + 1;
       host.setTierPromotionRetries(retries);
       if (retries >= 3) {
-        // Prefer stretch work over hard stop on autonomous runs.
+        // Prefer one stretch wave over hard stop on autonomous runs.
+        // Stretch does NOT reset the durable-progress streak.
         if (isAutonomous) {
           const stretch = enqueueStretchTodos(host, cfg, cycle, "ambition-promotion-failed");
           if (stretch > 0) {
@@ -410,7 +443,6 @@ export async function runCouncilAuditCycle(
               `[ambition] Tier promotion failed ${retries} times — enqueued ${stretch} stretch todo(s); continuing.`,
             );
             host.setTierPromotionRetries(0);
-            host.setZeroProgressStreak(0);
             return "retry";
           }
         }
@@ -437,7 +469,7 @@ export async function runCouncilAuditCycle(
         host.appendSystem(
           `[ambition] All criteria met (no further tiers) — enqueued ${stretch} stretch todo(s) for open-ended directive; continuing.`,
         );
-        host.setZeroProgressStreak(0);
+        // Do not reset zero-progress streak — stretch alone is not durable progress.
         return "retry";
       }
     }
@@ -521,7 +553,7 @@ export async function runCouncilAuditCycle(
                 host.appendSystem(`[planner] Fallback created ${fallbackEnqueued} todo(s).`);
                 if (fallbackEnqueued > 0) {
                   cleanup();
-                  host.setZeroProgressStreak(0);
+                  // Todos alone are not durable progress; streak continues.
                   return "retry";
                 }
               }
@@ -539,7 +571,6 @@ export async function runCouncilAuditCycle(
               `[planner] Fallback produced nothing — enqueued ${stretch} stretch todo(s); continuing autonomous.`,
             );
             host.setConsecutiveEmptyCycles(0);
-            host.setZeroProgressStreak(0);
             return "retry";
           }
         }
@@ -566,9 +597,14 @@ export async function runCouncilAuditCycle(
     host.setConsecutiveEmptyCycles(0);
   }
 
-  // Todos enqueued — productive; reset streak when any new work.
+  // Todos enqueued → retry, but only durable signals reset the streak.
   if (auditEnqueued > 0) {
-    host.setZeroProgressStreak(0);
+    const todoOnlyStop = maybeStopNoProgress({
+      metFlips,
+      commitsThisCycle,
+      newTodos: auditEnqueued,
+    });
+    if (todoOnlyStop) return todoOnlyStop;
     return "retry";
   }
   const noWorkStop = maybeStopNoProgress({

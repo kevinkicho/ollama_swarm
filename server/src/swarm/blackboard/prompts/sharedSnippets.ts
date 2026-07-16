@@ -20,11 +20,28 @@ export const JSON_ONLY_FINAL_RULES = JSON_ONLY_FINAL_RULE_LINES.join("\n");
 export const JSON_ARRAY_ONLY_LINE =
   "Return ONLY a JSON array — no markdown, no prose.";
 
+/**
+ * Host-aware tooling constraints. Injected into tool-using roles so Windows
+ * agents stop burning turns on `wc`/`grep` via bash.
+ */
+export function hostToolingConstraintLines(): readonly string[] {
+  if (process.platform === "win32") {
+    return [
+      "HOST=Windows: never use bash for Unix utilities (wc, grep, cat, find, head, tail, ls, sed, awk).",
+      "Use built-in read/grep/glob/list for inspection. Edits go through hunk JSON / propose_hunks only.",
+    ];
+  }
+  return [
+    "Prefer built-in read/grep/glob/list over shell one-liners when inspecting the repo.",
+  ];
+}
+
 /** Short tools preamble for roles that may call read/grep/glob/list mid-turn. */
 export function buildRepoToolsNote(extraLines: readonly string[] = []): string {
   return [
     "=== TOOLS ===",
     "read, grep, glob, list (and others when enabled). Use tools for evidence; final reply is still the role's JSON.",
+    ...hostToolingConstraintLines(),
     ...extraLines,
     "=== end TOOLS ===",
   ].join("\n");

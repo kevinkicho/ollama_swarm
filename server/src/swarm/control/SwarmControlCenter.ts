@@ -18,6 +18,7 @@ import {
   TOOL_COACH_MAX_CALLS_PER_RUN,
   TOOL_COACH_THRESHOLD,
 } from "./toolFailureCoach.js";
+import { deterministicToolCoachHint } from "./deterministicToolCoach.js";
 
 export const STALL_ARBITRATOR_MAX_CALLS = 6;
 
@@ -208,7 +209,8 @@ export class SwarmControlCenter {
   }
 
   /**
-   * Record a tool failure; may async-fetch a coach hint for the next agent turn.
+   * Record a tool failure; may inject a deterministic coach hint or async LLM coach.
+   * Known Windows/bash/grep thrash paths use zero-token deterministic hints first.
    */
   recordToolFailure(
     agentId: string,
@@ -225,14 +227,12 @@ export class SwarmControlCenter {
 
     this.coachedFingerprints.add(fp);
     this.toolCoachCalls++;
-    void runToolFailureCoach(record, preview, {
-      ...deps,
-      priorPatterns: this.priorPatterns.slice(0, 6),
-    }).then((hint) => {
-      if (!hint) return;
+
+    const applyHint = (hint: string, source: "rule" | "llm") => {
       this.agentHints.set(agentId, hint);
       deps.appendSystem?.(
-        `[control] Tool coach (${tool}, ${record.count}×): ${hint.slice(0, 200)}${hint.length > 200 ? "…" : ""}`,
+        `[control] Tool coach (${tool}, ${record.count}×${source === "rule" ? ", rule" : ""}): `
+          + `${hint.slice(0, 200)}${hint.length > 200 ? "…" : ""}`,
       );
       const advice: SwarmControlAdviceRecord = {
         ts: Date.now(),
@@ -246,6 +246,20 @@ export class SwarmControlCenter {
         type: "swarm_control_advice",
         ...advice,
       });
+    };
+
+    const ruleHint = deterministicToolCoachHint(tool, error);
+    if (ruleHint) {
+      applyHint(ruleHint, "rule");
+      return;
+    }
+
+    void runToolFailureCoach(record, preview, {
+      ...deps,
+      priorPatterns: this.priorPatterns.slice(0, 6),
+    }).then((hint) => {
+      if (!hint) return;
+      applyHint(hint, "llm");
     });
   }
 }

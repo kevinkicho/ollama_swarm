@@ -84,8 +84,12 @@ export function ModelSelect({
             ← Use dropdown ({models.length} model{models.length === 1 ? "" : "s"} available)
           </button>
         ) : null}
-        {error && !loading ? (
-          <div className="text-xs text-amber-400">Discovery error: {error}</div>
+        {/* Only surface discovery errors when we have no models to offer.
+            Offline catalog fallbacks already keep the dropdown usable. */}
+        {error && !loading && models.length === 0 ? (
+          <div className="text-xs text-amber-400" title={error}>
+            Discovery error: {error}
+          </div>
         ) : null}
       </div>
     );

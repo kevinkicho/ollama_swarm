@@ -1,6 +1,10 @@
 /** Session-scoped bash failure count — survives per-prompt ToolDispatcher instances. */
 
-export const BASH_ERROR_BACKOFF_THRESHOLD = 4;
+/**
+ * Disable bash after this many consecutive failures for the agent.
+ * Windows defaults lower: Unix-cli thrash burns turns before coaches fire.
+ */
+export const BASH_ERROR_BACKOFF_THRESHOLD = process.platform === "win32" ? 3 : 4;
 
 const bashErrorsByAgent = new Map<string, number>();
 

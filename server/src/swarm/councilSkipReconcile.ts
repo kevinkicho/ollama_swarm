@@ -38,15 +38,58 @@ export function skipCoversCriterionFiles(
 /** True when a worker skip reason indicates the work is already satisfied. */
 export function isAlreadyDoneSkipReason(reason: string): boolean {
   const lower = reason.toLowerCase();
-  return /\b(already\s+(present|implemented|done|exists|complete|contains)|no\s+(additional\s+content|changes?\s+needed)|nothing\s+to\s+do|work\s+already|content\s+already|feature\s+already|appears\s+complete|all\s+phases\s+already\s+have)\b/.test(
+  return /\b(already\s+(present|implemented|done|exists|complete|contains|applied)|all\s+changes?\s+(are\s+)?already|no\s+(additional\s+content|changes?\s+needed)|nothing\s+to\s+do|work\s+already|content\s+already|feature\s+already|appears\s+complete|all\s+phases\s+already\s+have|no\s+change\s+needed)\b/.test(
     lower,
   );
 }
 
 /**
+ * When repo inventory is known, require at least one criterion expectedFile to
+ * exist on disk (exact or basename) before skip→met. Prevents hallucinated
+ * "already done" promotions for missing paths.
+ *
+ * Empty expectedFiles → never promote (no grounded target).
+ * Empty repoFiles → cannot verify; require linked criterionId + file overlap
+ * on the skip todo (stricter than promoting on reason alone).
+ */
+export function criterionGroundedForSkipPromote(
+  criterion: ExitCriterion,
+  skipFiles: readonly string[],
+  repoFiles: readonly string[],
+): boolean {
+  if (criterion.expectedFiles.length === 0) {
+    // No file targets — skip→met is too weak (pure prose "already done").
+    return false;
+  }
+
+  if (repoFiles.length === 0) {
+    // No inventory: id-linked skips with criterion file targets may promote;
+    // otherwise require skip todo files to overlap the criterion.
+    if (skipFiles.length === 0) return criterion.expectedFiles.length > 0;
+    return skipCoversCriterionFiles(skipFiles, criterion.expectedFiles);
+  }
+
+  const repoNorm = new Set(repoFiles.map(normalizePath));
+  const repoBases = new Set(repoFiles.map(basename));
+  const critFiles = canonicalizeExpectedFiles(criterion.expectedFiles, repoFiles);
+  // At least one expected path must exist in the repo inventory.
+  const anyExists = critFiles.some((f) => {
+    const nf = normalizePath(f);
+    return repoNorm.has(nf) || repoBases.has(basename(nf));
+  });
+  if (!anyExists) return false;
+
+  // Prefer overlap between skip files and criterion files when skip names files.
+  if (skipFiles.length > 0) {
+    return skipCoversCriterionFiles(skipFiles, critFiles);
+  }
+  // Linked-by-id skip without files: allow only if criterion files exist on disk.
+  return true;
+}
+
+/**
  * Promote unmet contract criteria to met when linked todos were skipped with
- * an "already done" reason. Falls back to expectedFiles overlap when no
- * criterionId is wired.
+ * an "already done" reason **and** files are grounded in the repo inventory.
  */
 export function reconcileCriteriaFromSkips(
   criteria: ExitCriterion[],
@@ -66,20 +109,19 @@ export function reconcileCriteriaFromSkips(
           : [];
 
     for (const id of linkedIds) {
-      metIds.add(id);
+      const c = criteria.find((x) => x.id === id);
+      if (!c || c.status !== "unmet") continue;
+      if (criterionGroundedForSkipPromote(c, todo.expectedFiles, repoFiles)) {
+        metIds.add(id);
+      }
     }
 
     if (linkedIds.length === 0 && todo.expectedFiles.length > 0) {
       const todoFiles = canonicalizeExpectedFiles(todo.expectedFiles, repoFiles);
-      const todoSet = new Set(todoFiles.map(normalizePath));
-      const todoBases = new Set(todoFiles.map(basename));
       for (const c of criteria) {
         if (c.status !== "unmet") continue;
-        const critFiles = canonicalizeExpectedFiles(c.expectedFiles, repoFiles);
-        const overlaps =
-          critFiles.some((f) => todoSet.has(normalizePath(f))) ||
-          critFiles.some((f) => todoBases.has(basename(f)));
-        if (overlaps) {
+        if (!skipCoversCriterionFiles(todoFiles, c.expectedFiles)) continue;
+        if (criterionGroundedForSkipPromote(c, todo.expectedFiles, repoFiles)) {
           metIds.add(c.id);
         }
       }
@@ -97,7 +139,7 @@ export function reconcileCriteriaFromSkips(
       return {
         ...c,
         status: "met" as const,
-        rationale: "Worker skip: work already present",
+        rationale: "Worker skip: work already present (disk-grounded)",
       };
     }
     return c;
@@ -123,26 +165,34 @@ export function filterAuditTodosAgainstSkips<
   });
 }
 
-/** Promote criteria to met when skip evidence covers their files with an already-done reason. */
+/**
+ * Promote criteria to met when skip evidence covers their files with an
+ * already-done reason. Optional repoFiles enforces disk grounding.
+ */
 export function promoteCriteriaFromSkipEvidence(
   criteria: ExitCriterion[],
   skipEvidence: readonly SkipEvidenceTodo[],
+  repoFiles: readonly string[] = [],
 ): ExitCriterion[] {
   const doneSkips = skipEvidence.filter((s) => s.reason && isAlreadyDoneSkipReason(s.reason));
   if (doneSkips.length === 0) return criteria;
 
   return criteria.map((c) => {
     if (c.status !== "unmet") return c;
-    const covered = doneSkips.some(
+    const covering = doneSkips.filter(
       (s) =>
-        (s.criterionId === c.id || s.criteriaIds?.includes(c.id)) ||
-        skipCoversCriterionFiles(s.expectedFiles, c.expectedFiles),
+        (s.criterionId === c.id || s.criteriaIds?.includes(c.id))
+        || skipCoversCriterionFiles(s.expectedFiles, c.expectedFiles),
     );
-    if (!covered) return c;
+    if (covering.length === 0) return c;
+    const grounded = covering.some((s) =>
+      criterionGroundedForSkipPromote(c, s.expectedFiles, repoFiles),
+    );
+    if (!grounded) return c;
     return {
       ...c,
       status: "met" as const,
-      rationale: "Worker skip: work already present",
+      rationale: "Worker skip: work already present (disk-grounded)",
     };
   });
 }

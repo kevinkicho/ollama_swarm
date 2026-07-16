@@ -117,7 +117,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private stuckCycleCount = 0;
   private consecutiveEmptyCycles = 0;
   private tierPromotionRetries = 0;
-  /** Autonomous: consecutive cycles with no commits / met flips / new todos. */
+  /** Autonomous: stretch waves used this run (capped). */
+  private stretchWaves = 0;
+  /** Autonomous: consecutive cycles without durable progress (commits / durable met / tier). */
   private zeroProgressStreak = 0;
   private maxTiers = Infinity;
 
@@ -627,6 +629,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
       getTierPromotionRetries: () => this.tierPromotionRetries,
       setTierPromotionRetries: (n) => {
         this.tierPromotionRetries = n;
+      },
+      getStretchWaves: () => this.stretchWaves,
+      setStretchWaves: (n) => {
+        this.stretchWaves = n;
       },
       getZeroProgressStreak: () => this.zeroProgressStreak,
       setZeroProgressStreak: (n) => {

@@ -6,6 +6,7 @@ import {
   skipCoversCriterionFiles,
   filterAuditTodosAgainstSkips,
   promoteCriteriaFromSkipEvidence,
+  criterionGroundedForSkipPromote,
 } from "./councilSkipReconcile.js";
 import type { ExitCriterion } from "./blackboard/types.js";
 
@@ -17,6 +18,8 @@ test("isAlreadyDoneSkipReason — matches common worker phrases", () => {
   assert.equal(isAlreadyDoneSkipReason("no changes needed"), true);
   assert.equal(isAlreadyDoneSkipReason("implementation appears complete"), true);
   assert.equal(isAlreadyDoneSkipReason("all phases already have content"), true);
+  assert.equal(isAlreadyDoneSkipReason("All changes are already applied to dft_calculator.py"), true);
+  assert.equal(isAlreadyDoneSkipReason("No change needed."), true);
   assert.equal(isAlreadyDoneSkipReason("out of scope"), false);
 });
 
@@ -26,6 +29,31 @@ test("skipCoversCriterionFiles — basename overlap for docs/foo vs foo", () => 
     true,
   );
   assert.equal(skipCoversCriterionFiles(["other.md"], ["synthesis_methods.md"]), false);
+});
+
+test("criterionGroundedForSkipPromote — rejects empty expectedFiles", () => {
+  const c: ExitCriterion = {
+    id: "c0",
+    description: "vague",
+    expectedFiles: [],
+    status: "unmet",
+    addedAt: 1,
+  };
+  assert.equal(criterionGroundedForSkipPromote(c, ["x.md"], ["x.md"]), false);
+});
+
+test("criterionGroundedForSkipPromote — rejects missing files when inventory known", () => {
+  const c: ExitCriterion = {
+    id: "c0",
+    description: "Add missing",
+    expectedFiles: ["does-not-exist.md"],
+    status: "unmet",
+    addedAt: 1,
+  };
+  assert.equal(
+    criterionGroundedForSkipPromote(c, ["does-not-exist.md"], ["README.md"]),
+    false,
+  );
 });
 
 test("reconcileCriteriaFromSkips — promotes linked criterion on valid skip", () => {
@@ -87,6 +115,24 @@ test("reconcileCriteriaFromSkips — basename overlap with repoFiles canonicaliz
   assert.equal(updated[0]!.status, "met");
 });
 
+test("reconcileCriteriaFromSkips — does not promote missing disk files", () => {
+  const criteria: ExitCriterion[] = [
+    {
+      id: "cX",
+      description: "Create phantom",
+      expectedFiles: ["phantom_only.md"],
+      status: "unmet",
+      addedAt: 1,
+    },
+  ];
+  const { promotedIds } = reconcileCriteriaFromSkips(
+    criteria,
+    [{ criterionId: "cX", reason: "already done", expectedFiles: ["phantom_only.md"] }],
+    ["README.md", "app.py"],
+  );
+  assert.deepEqual(promotedIds, []);
+});
+
 test("filterAuditTodosAgainstSkips — drops duplicate todos for skipped work", () => {
   const filtered = filterAuditTodosAgainstSkips(
     [
@@ -113,4 +159,20 @@ test("promoteCriteriaFromSkipEvidence — promotes covered unmet criteria", () =
     { reason: "content already present", expectedFiles: ["api.ts"] },
   ]);
   assert.equal(updated[0]!.status, "met");
+});
+
+test("promoteCriteriaFromSkipEvidence — refuses empty expectedFiles criteria", () => {
+  const criteria: ExitCriterion[] = [
+    {
+      id: "c5",
+      description: "Vague work",
+      expectedFiles: [],
+      status: "unmet",
+      addedAt: 1,
+    },
+  ];
+  const updated = promoteCriteriaFromSkipEvidence(criteria, [
+    { criterionId: "c5", reason: "already done", expectedFiles: [] },
+  ]);
+  assert.equal(updated[0]!.status, "unmet");
 });
