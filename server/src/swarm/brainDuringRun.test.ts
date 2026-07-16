@@ -55,12 +55,27 @@ describe("buildRunSnapshotMarkdown", () => {
         todos: [{ id: "todo-1", description: "fix auth", status: "open" } as any],
       },
     };
-    const md = buildRunSnapshotMarkdown(status);
+    const md = buildRunSnapshotMarkdown(status, {
+      deliberation: [
+        {
+          ts: Date.now(),
+          layer: "hierarchy",
+          verdict: "approve",
+          subject: "commit:todo-1",
+          validationReason: "hunks grounded",
+          proposer: "worker",
+          validator: "auditor",
+        },
+      ],
+    });
     assert.match(md, /## Active run/);
     assert.match(md, /abc-123/);
     assert.match(md, /blackboard/);
     assert.match(md, /agent-1/);
     assert.match(md, /fix auth/);
+    assert.match(md, /### Deliberation/);
+    assert.match(md, /APPROVE/);
+    assert.match(md, /commit:todo-1/);
   });
 });
 

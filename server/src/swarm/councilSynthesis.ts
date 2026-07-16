@@ -38,6 +38,12 @@ import {
   type BestOfNSample,
 } from "./bestOfNTurn.js";
 import { recordDeliberationAsync } from "./deliberation/deliberationLog.js";
+import {
+  collectPeerStancesFromTranscript,
+  formatPeerStandingBlock,
+  preferNonRejectedWinner,
+  standingsFromPeerStances,
+} from "./deliberation/peerDeliberationAggregate.js";
 
 
 export interface SynthesisContext {
@@ -94,20 +100,39 @@ export async function runSynthesisPass(
       .slice(-Math.max(3, cfg.agentCount * 2))
       .map((e) => ({ agentIndex: e.agentIndex as number, text: e.text }));
 
+  // Peer ```deliberate``` approve/deny → standing block for synthesis prompts.
+  const peerStances = collectPeerStancesFromTranscript(transcript);
+  const draftIndexes = [
+    ...new Set(
+      recentDrafts().map((d) => d.agentIndex).filter((n) => Number.isFinite(n)),
+    ),
+  ];
+  const peerStandings = standingsFromPeerStances(draftIndexes, peerStances);
+  const peerBlock = formatPeerStandingBlock(peerStandings);
+  if (peerBlock) {
+    ctx.appendSystem(
+      `[deliberation] Peer reason validation active — ${
+        peerStandings.filter((s) => s.peerRejected).length
+      } peer-rejected draft(s).`,
+    );
+  }
+  const withPeerBlock = (base: string) =>
+    peerBlock ? `${peerBlock}\n\n${base}` : base;
+
   if (cfg.preserveDissent) {
     const drafts = recentDrafts();
-    prompt = buildDissentSynthesisPrompt({
+    prompt = withPeerBlock(buildDissentSynthesisPrompt({
       question: cfg.userDirective?.trim() || "Synthesize the council discussion.",
       drafts,
       userDirective: cfg.userDirective,
-    });
+    }));
     ctx.appendSystem("[Q5] Dissent-preserving synthesis prompt (majority + minority + open questions).");
   } else if (cfg.councilReconcile === "judge") {
     const drafts = recentDrafts();
-    prompt = buildJudgePickPrompt({
+    prompt = withPeerBlock(buildJudgePickPrompt({
       drafts,
       userDirective: cfg.userDirective,
-    });
+    }));
     ctx.appendSystem("[councilReconcile=judge] Lead picks ONE draft as canonical (not merge).");
   } else if (cfg.councilReconcile === "vote" && !stopping) {
     const drafts = latestDraftsByAgent(recentDrafts());
@@ -116,7 +141,7 @@ export async function runSynthesisPass(
       ctx.appendSystem(
         "[councilReconcile=vote] Fewer than 2 drafts — falling back to revise+merge synthesis.",
       );
-      prompt = buildCouncilSynthesisPrompt(
+      prompt = withPeerBlock(buildCouncilSynthesisPrompt(
         cfg.rounds,
         transcript,
         cfg.userDirective,
@@ -126,7 +151,7 @@ export async function runSynthesisPass(
         repoFiles,
         codeContextExcerpts,
         cfg.model,
-      );
+      ));
     } else {
       ctx.appendSystem(
         `[councilReconcile=vote] Collecting ballots from ${drafts.length} drafter(s)…`,
@@ -262,25 +287,61 @@ export async function runSynthesisPass(
       const tallySummary = formatVoteTallySummary(tally);
       ctx.appendSystem(`[councilReconcile=vote] Tally: ${tallySummary}`);
 
-      if (tally.winnerIndex != null) {
-        const winnerDraft = drafts.find((d) => d.agentIndex === tally.winnerIndex);
+      // Honor peer ```deliberate``` denies: don't let a peer-rejected draft win
+      // when a supported/clean alternative exists.
+      const voteStandings = standingsFromPeerStances(validIndexes, peerStances);
+      const adjusted = preferNonRejectedWinner(
+        tally.winnerIndex,
+        voteStandings,
+        validIndexes,
+      );
+      if (adjusted.overridden && adjusted.reason) {
+        ctx.appendSystem(`[deliberation] ${adjusted.reason}`);
+        recordDeliberationAsync(
+          {
+            runId: cfg.runId ?? "unknown",
+            layer: "peer",
+            preset: "council",
+            subject: `vote-override:agent-${tally.winnerIndex}→agent-${adjusted.winnerIndex}`,
+            claim: tallySummary,
+            proposer: "peer-deliberation",
+            validator: "vote-tally",
+            verdict: "deny",
+            validationReason: adjusted.reason,
+            related: { agentIndex: tally.winnerIndex ?? undefined },
+          },
+          {
+            clonePath: cfg.localPath,
+            runId: cfg.runId ?? "unknown",
+            appendSystem: (m) => ctx.appendSystem(m),
+            emit: (e) => ctx.emit(e as any),
+            logDiag: (e) => ctx.logDiag(e),
+          },
+        );
+      }
+      const effectiveWinner = adjusted.winnerIndex;
+
+      if (effectiveWinner != null) {
+        const winnerDraft = drafts.find((d) => d.agentIndex === effectiveWinner);
         if (winnerDraft) {
           recordDeliberationAsync(
             {
               runId: cfg.runId ?? "unknown",
               layer: "peer",
               preset: "council",
-              subject: `vote-winner:agent-${tally.winnerIndex}`,
+              subject: `vote-winner:agent-${effectiveWinner}`,
               claim: tallySummary,
               proposer: "council-peers",
               validator: "vote-tally",
               verdict: "approve",
-              validationReason: `Peer majority selected agent-${tally.winnerIndex}`,
+              validationReason: adjusted.overridden
+                ? `Peer-deliberation override → agent-${effectiveWinner}`
+                : `Peer majority selected agent-${effectiveWinner}`,
               evidence: votes
-                .filter((v) => v.votedForIndex === tally.winnerIndex && v.rationale)
+                .filter((v) => v.votedForIndex === effectiveWinner && v.rationale)
                 .map((v) => `agent-${v.voterIndex}: ${v.rationale}`)
                 .slice(0, 8),
-              related: { agentIndex: tally.winnerIndex },
+              related: { agentIndex: effectiveWinner },
             },
             {
               clonePath: cfg.localPath,
@@ -290,17 +351,17 @@ export async function runSynthesisPass(
               logDiag: (e) => ctx.logDiag(e),
             },
           );
-          prompt = buildVoteWinnerPresentPrompt({
-            winnerIndex: tally.winnerIndex,
+          prompt = withPeerBlock(buildVoteWinnerPresentPrompt({
+            winnerIndex: effectiveWinner,
             winnerText: winnerDraft.text,
             tallySummary,
             userDirective: cfg.userDirective,
-          });
+          }));
           ctx.appendSystem(
-            `[councilReconcile=vote] Winner agent-${tally.winnerIndex} — lead presents winning draft.`,
+            `[councilReconcile=vote] Winner agent-${effectiveWinner} — lead presents winning draft.`,
           );
         } else {
-          prompt = buildCouncilSynthesisPrompt(
+          prompt = withPeerBlock(buildCouncilSynthesisPrompt(
             cfg.rounds,
             transcript,
             cfg.userDirective,
@@ -310,13 +371,13 @@ export async function runSynthesisPass(
             repoFiles,
             codeContextExcerpts,
             cfg.model,
-          );
+          ));
           ctx.appendSystem(
             "[councilReconcile=vote] Winner draft missing — falling back to revise+merge.",
           );
         }
       } else {
-        prompt = buildCouncilSynthesisPrompt(
+        prompt = withPeerBlock(buildCouncilSynthesisPrompt(
           cfg.rounds,
           transcript,
           cfg.userDirective,
@@ -326,14 +387,24 @@ export async function runSynthesisPass(
           repoFiles,
           codeContextExcerpts,
           cfg.model,
-        );
+        ));
         ctx.appendSystem(
           "[councilReconcile=vote] No decisive winner — falling back to revise+merge synthesis.",
         );
       }
     }
   } else {
-    prompt = buildCouncilSynthesisPrompt(cfg.rounds, transcript, cfg.userDirective, committedFiles, ambitionTier, cfg.localPath, repoFiles, codeContextExcerpts, cfg.model);
+    prompt = withPeerBlock(buildCouncilSynthesisPrompt(
+      cfg.rounds,
+      transcript,
+      cfg.userDirective,
+      committedFiles,
+      ambitionTier,
+      cfg.localPath,
+      repoFiles,
+      codeContextExcerpts,
+      cfg.model,
+    ));
   }
 
   // Vote ballots may have left the lead idle — restore synthesis status.

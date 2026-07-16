@@ -25,6 +25,19 @@ export function buildRunContext(runId: string, storeState: any, boardState?: any
     contextStr = JSON.stringify({ recentTranscript: recent, boardCounts: boardState?.counts });
   }
 
+  const deliberation = (storeState.deliberation || [])
+    .slice(-12)
+    .map((d: any) => ({
+      ts: d.ts,
+      layer: d.layer,
+      verdict: d.verdict,
+      subject: d.subject,
+      claim: d.claim,
+      validationReason: d.validationReason,
+      proposer: d.proposer,
+      validator: d.validator,
+    }));
+
   return {
     runId,
     preset: cfg.preset,
@@ -44,6 +57,7 @@ export function buildRunContext(runId: string, storeState: any, boardState?: any
     agentCount: cfg.agentCount,
     activeAgents: activeCount,
     wallClockMs: storeState.startedAt ? Date.now() - storeState.startedAt : undefined,
+    deliberation: deliberation.length ? deliberation : undefined,
   };
 }
 

@@ -31,6 +31,17 @@ export interface BrainRunContextClient {
   agentCount?: number;
   activeAgents?: number;
   wallClockMs?: number;
+  /** Live deliberation tail from the web store (peer/hierarchy/control). */
+  deliberation?: Array<{
+    ts?: number;
+    layer?: string;
+    verdict?: string;
+    subject?: string;
+    claim?: string;
+    validationReason?: string;
+    proposer?: string;
+    validator?: string;
+  }>;
 }
 
 export interface EnrichedBrainRunContext {
@@ -200,6 +211,84 @@ function formatBoardSection(status: SwarmStatus): string {
   return lines.join("\n");
 }
 
+type DelibRow = {
+  ts?: number;
+  layer?: string;
+  verdict?: string;
+  subject?: string;
+  claim?: string;
+  validationReason?: string;
+  proposer?: string;
+  validator?: string;
+};
+
+/** Sync read of deliberation.jsonl (Brain snapshot path is sync). */
+export function readDeliberationJsonlSync(
+  clonePath: string | undefined,
+  runId: string | undefined,
+  limit = 24,
+): DelibRow[] {
+  if (!clonePath || !runId) return [];
+  const candidates = [
+    path.join(clonePath, "logs", runId, "deliberation.jsonl"),
+    path.join(clonePath, "logs", runId.slice(0, 8), "deliberation.jsonl"),
+  ];
+  for (const file of candidates) {
+    try {
+      if (!fs.existsSync(file)) continue;
+      const raw = fs.readFileSync(file, "utf8");
+      const rows: DelibRow[] = [];
+      for (const line of raw.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        try {
+          rows.push(JSON.parse(line) as DelibRow);
+        } catch {
+          /* skip */
+        }
+      }
+      if (rows.length) return rows.slice(-limit);
+    } catch {
+      /* try next */
+    }
+  }
+  return [];
+}
+
+export function formatDeliberationSection(
+  clientRows: DelibRow[] | undefined,
+  clonePath: string | undefined,
+  runId: string | undefined,
+): string {
+  const fromClient = (clientRows ?? []).slice(-16);
+  const fromDisk = readDeliberationJsonlSync(clonePath, runId, 16);
+  // Prefer richer of the two by count; merge unique by subject+verdict+ts
+  const merged = new Map<string, DelibRow>();
+  for (const r of [...fromDisk, ...fromClient]) {
+    const key = `${r.ts ?? 0}|${r.layer}|${r.verdict}|${r.subject}`;
+    merged.set(key, r);
+  }
+  const rows = [...merged.values()]
+    .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0))
+    .slice(-16);
+  if (rows.length === 0) {
+    return "_No peer/hierarchy deliberation recorded yet._";
+  }
+  const lines = [
+    "Claim → validate → **approve/deny** trail (peer votes, auditor gate, control).",
+    "Use this when advising: respect denies, amplify peer-supported claims.",
+    "",
+  ];
+  for (const r of rows) {
+    const who = [r.proposer, r.validator].filter(Boolean).join(" → ") || "?";
+    const why = (r.validationReason || r.claim || "").replace(/\s+/g, " ").slice(0, 140);
+    lines.push(
+      `- **${(r.verdict ?? "?").toUpperCase()}** [${r.layer ?? "?"}] ${r.subject ?? "?"} · ${who}`
+        + (why ? ` — ${why}` : ""),
+    );
+  }
+  return lines.join("\n");
+}
+
 export function buildRunSnapshotMarkdown(
   status: SwarmStatus,
   clientCtx?: BrainRunContextClient,
@@ -275,6 +364,16 @@ export function buildRunSnapshotMarkdown(
       sections.push(`- **${id}**: ${preview}${preview.length >= 100 ? "…" : ""}`);
     }
   }
+
+  sections.push(
+    "",
+    "### Deliberation (approve / deny)",
+    formatDeliberationSection(
+      clientCtx?.deliberation,
+      cfg?.clonePath ?? status.localPath ?? clientCtx?.clonePath,
+      status.runId ?? clientCtx?.runId,
+    ),
+  );
 
   sections.push("", "### Recent transcript (newest last)");
   if (recent.length === 0) {

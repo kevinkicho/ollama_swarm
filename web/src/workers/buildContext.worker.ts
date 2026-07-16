@@ -27,6 +27,19 @@ self.onmessage = (e: MessageEvent) => {
   const agents = storeState.agents || {};
   const activeCount = Object.values(agents).filter((a: any) => a.status !== 'done').length;
 
+  const deliberation = (storeState.deliberation || [])
+    .slice(-12)
+    .map((d: any) => ({
+      ts: d.ts,
+      layer: d.layer,
+      verdict: d.verdict,
+      subject: d.subject,
+      claim: d.claim,
+      validationReason: d.validationReason,
+      proposer: d.proposer,
+      validator: d.validator,
+    }));
+
   const context = {
     runId,
     preset: cfg.preset,
@@ -46,6 +59,7 @@ self.onmessage = (e: MessageEvent) => {
     agentCount: cfg.agentCount,
     activeAgents: activeCount,
     wallClockMs: storeState.startedAt ? Date.now() - storeState.startedAt : undefined,
+    deliberation: deliberation.length ? deliberation : undefined,
   };
 
   // @ts-ignore

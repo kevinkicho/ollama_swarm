@@ -33,6 +33,17 @@ export interface RunBrainContext {
   // Additional metadata
   activeAgents?: number;
   wallClockMs?: number;
+  /** Peer/hierarchy/control deliberation tail for Brain governance awareness. */
+  deliberation?: Array<{
+    ts?: number;
+    layer?: string;
+    verdict?: string;
+    subject?: string;
+    claim?: string;
+    validationReason?: string;
+    proposer?: string;
+    validator?: string;
+  }>;
 }
 
 export type RunReconfigPatch = {
