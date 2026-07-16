@@ -118,4 +118,13 @@ describe("stripAgentText", () => {
     assert.equal(result.toolCalls.length, 1);
     assert.match(result.finalText, /"ok"/);
   });
+
+  it("collapses final-text generation loops (9f449937)", () => {
+    const phrase =
+      "I'll fetch the BIS API to understand the raw SDMX JSON structure, then craft a transformation that yields an array of objects with length > 0. response";
+    const result = stripAgentText(`<think>short</think>${phrase.repeat(80)}`);
+    assert.equal(result.loopCollapsed, true);
+    assert.ok(result.finalText.length < phrase.length * 10);
+    assert.match(result.finalText, /stream loop collapsed/);
+  });
 });
