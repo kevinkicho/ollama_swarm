@@ -433,6 +433,22 @@ export function SetupForm() {
             </span>
           </label>
 
+          <label className="mt-2 flex items-center gap-2 text-xs text-ink-300 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={form.autoApprove}
+              onChange={(e) => form.setAutoApprove(e.target.checked)}
+              className="rounded border-ink-600 bg-ink-900 text-amber-500 focus:ring-amber-500/40"
+            />
+            <span>
+              Auto-approve (high trust)
+              <span className="text-ink-500 ml-1">
+                (all roles get bash + web + propose_hunks; auditor auto-accepts pending commits;
+                5m bash wall; no bash fail lockout; skips prior-DENY todo filters — trusted local only)
+              </span>
+            </span>
+          </label>
+
           {form.preset.id === "council" || form.preset.id === "blackboard" ? (
             <div className="mt-2 space-y-1.5 pl-1 border-l border-ink-700/60">
               <label className="flex items-center gap-2 text-xs text-ink-300 cursor-pointer select-none">

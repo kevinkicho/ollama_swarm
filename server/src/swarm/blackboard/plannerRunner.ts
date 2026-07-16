@@ -291,34 +291,38 @@ export async function runPlanner(
     }
     redundancyGroundedTodos.push(t);
   }
-  // Cross-run: drop todos that match repeated DENY deliberation patterns.
+  // Cross-run: drop todos that match repeated DENY deliberation patterns
+  // (skipped in autoApprove high-trust mode).
   let delibFilteredTodos = redundancyGroundedTodos;
-  try {
-    const { buildDeliberationSeed, filterTodosAgainstDeliberationDenies } = await import(
-      "../deliberation/deliberationSeed.js"
-    );
-    const delibSeed = await buildDeliberationSeed(seed.clonePath);
-    if (delibSeed.denyPatterns.length > 0) {
-      const { kept, dropped } = filterTodosAgainstDeliberationDenies(
-        redundancyGroundedTodos,
-        delibSeed.denyPatterns,
+  const autoApprove = !!ctx.getActive()?.autoApprove;
+  if (!autoApprove) {
+    try {
+      const { buildDeliberationSeed, filterTodosAgainstDeliberationDenies } = await import(
+        "../deliberation/deliberationSeed.js"
       );
-      if (dropped.length > 0) {
-        ctx.appendSystem(
-          `[deliberation] Dropped ${dropped.length} planner todo(s) matching prior DENY patterns.`,
+      const delibSeed = await buildDeliberationSeed(seed.clonePath);
+      if (delibSeed.denyPatterns.length > 0) {
+        const { kept, dropped } = filterTodosAgainstDeliberationDenies(
+          redundancyGroundedTodos,
+          delibSeed.denyPatterns,
         );
-        for (const t of dropped) {
-          ctx.findingsPost({
-            agentId: agent.id,
-            text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": dropped — matches prior deliberation DENY pattern.`,
-            createdAt: Date.now(),
-          });
+        if (dropped.length > 0) {
+          ctx.appendSystem(
+            `[deliberation] Dropped ${dropped.length} planner todo(s) matching prior DENY patterns.`,
+          );
+          for (const t of dropped) {
+            ctx.findingsPost({
+              agentId: agent.id,
+              text: `Todo "${t.description.slice(0, 80)}${t.description.length > 80 ? "…" : ""}": dropped — matches prior deliberation DENY pattern.`,
+              createdAt: Date.now(),
+            });
+          }
+          delibFilteredTodos = kept;
         }
-        delibFilteredTodos = kept;
       }
+    } catch {
+      /* best-effort */
     }
-  } catch {
-    /* best-effort */
   }
 
   if (redundancyDropped > 0) {

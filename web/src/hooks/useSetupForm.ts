@@ -96,6 +96,11 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [roundsInput, setRoundsInput] = useState(0);
   const [userDirective, setUserDirective] = useState("");
   const [webTools, setWebTools] = useState(true);
+  /**
+   * High-trust: max tools for every role + auto-approve auditor commits.
+   * Default off — operator must opt in.
+   */
+  const [autoApprove, setAutoApprove] = useState(false);
   /** Council: shared contract explore (default off — independent explore). */
   const [councilSharedExplore, setCouncilSharedExplore] = useState(false);
   /** Council: collective research standup each cycle (default off). */
@@ -301,6 +306,7 @@ export function useSetupForm(navigate: (path: string) => void) {
         ...(writeMode === "multi" ? { conflictPolicy } : {}),
         ...(directiveTrimmed ? { userDirective: directiveTrimmed } : {}),
         webTools,
+        ...(autoApprove ? { autoApprove: true } : {}),
         ...(preset.id === "council" || preset.id === "blackboard"
           ? {
               councilSharedExplore: councilSharedExplore || undefined,
@@ -437,6 +443,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     roundsInput, setRoundsInput,
     userDirective, setUserDirective,
     webTools, setWebTools,
+    autoApprove, setAutoApprove,
     councilSharedExplore, setCouncilSharedExplore,
     councilSharedResearch, setCouncilSharedResearch,
     councilReconcile, setCouncilReconcile,

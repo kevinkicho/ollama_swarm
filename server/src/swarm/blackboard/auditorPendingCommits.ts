@@ -61,7 +61,12 @@ export async function reviewPendingCommits(
   const pendingTodos = ctx.boardListTodos().filter((t) => t.status === "pending-commit");
   if (pendingTodos.length === 0) return;
 
-  ctx.appendSystem(`[auditor-gate] Reviewing ${pendingTodos.length} pending commit(s)...`);
+  const autoApprove = !!ctx.getActive()?.autoApprove;
+  ctx.appendSystem(
+    autoApprove
+      ? `[auditor-gate] Auto-approve mode: accepting ${pendingTodos.length} pending commit(s) without LLM review.`
+      : `[auditor-gate] Reviewing ${pendingTodos.length} pending commit(s)...`,
+  );
 
   const approved: Array<{ todo: Todo; hunks: any[]; files: string[]; message: string }> = [];
 
@@ -71,9 +76,9 @@ export async function reviewPendingCommits(
     const hunks = (todo as any).proposedHunks ?? [];
     const files = (todo as any).proposedFiles ?? todo.expectedFiles;
 
-    // explicit hunk review step
-    let approval = { approve: true, reason: "" };
-    if (hunks.length > 0 && files.length > 0 && auditorAgent) {
+    // explicit hunk review step (skipped under autoApprove)
+    let approval = { approve: true, reason: autoApprove ? "autoApprove mode" : "" };
+    if (!autoApprove && hunks.length > 0 && files.length > 0 && auditorAgent) {
       try {
         approval = await reviewProposedHunks(ctx, auditorAgent, todo, hunks as any, files);
       } catch (e) {
@@ -122,7 +127,7 @@ export async function reviewPendingCommits(
           proposer: "worker",
           validator: "auditor",
           verdict: "approve",
-          validationReason: approval.reason || "Auditor approved proposed hunks",
+          validationReason: approval.reason || (autoApprove ? "autoApprove mode" : "Auditor approved proposed hunks"),
           evidence: (files as string[]).slice(0, 12),
           related: { todoId: todo.id },
         },

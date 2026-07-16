@@ -485,27 +485,29 @@ export async function runCouncilAuditCycle(
     return "stop";
   }
 
-  // Drop todos that rehash prior DENY deliberation patterns (cross-run memory).
+  // Drop todos that rehash prior DENY deliberation patterns (skipped in autoApprove).
   let auditTodos = newTodos;
-  try {
-    const { buildDeliberationSeed, filterTodosAgainstDeliberationDenies } = await import(
-      "./deliberation/deliberationSeed.js"
-    );
-    const delibSeed = await buildDeliberationSeed(cfg.localPath ?? "");
-    if (delibSeed.denyPatterns.length > 0) {
-      const { kept, dropped } = filterTodosAgainstDeliberationDenies(
-        newTodos,
-        delibSeed.denyPatterns,
+  if (!cfg.autoApprove) {
+    try {
+      const { buildDeliberationSeed, filterTodosAgainstDeliberationDenies } = await import(
+        "./deliberation/deliberationSeed.js"
       );
-      if (dropped.length > 0) {
-        host.appendSystem(
-          `[deliberation] Dropped ${dropped.length} audit todo(s) matching prior DENY patterns.`,
+      const delibSeed = await buildDeliberationSeed(cfg.localPath ?? "");
+      if (delibSeed.denyPatterns.length > 0) {
+        const { kept, dropped } = filterTodosAgainstDeliberationDenies(
+          newTodos,
+          delibSeed.denyPatterns,
         );
-        auditTodos = kept;
+        if (dropped.length > 0) {
+          host.appendSystem(
+            `[deliberation] Dropped ${dropped.length} audit todo(s) matching prior DENY patterns.`,
+          );
+          auditTodos = kept;
+        }
       }
+    } catch {
+      /* best-effort */
     }
-  } catch {
-    /* best-effort */
   }
 
   const auditEnqueued = postCouncilTodoBatch(

@@ -5,6 +5,12 @@ export type AgentToolRole = "planner" | "worker" | "worker-build" | "auditor" | 
 export interface WebToolsConfig {
   webTools?: boolean;
   plannerTools?: boolean;
+  /**
+   * Auto-approve / high-trust mode: every role gets the max toolkit
+   * (bash + web + propose_hunks), auditor gates auto-pass, bash backoff
+   * is relaxed. Prefer for trusted local runs only.
+   */
+  autoApprove?: boolean;
 }
 
 export type ToolProfileId =
@@ -13,16 +19,24 @@ export type ToolProfileId =
   | "swarm-planner"
   | "swarm-builder"
   | "swarm-builder-research"
-  | "swarm-research";
+  | "swarm-research"
+  | "swarm-auto";
 
 export function isWebToolsEnabled(cfg?: WebToolsConfig | null): boolean {
   return !!(cfg?.webTools || cfg?.plannerTools);
+}
+
+export function isAutoApproveEnabled(cfg?: WebToolsConfig | null): boolean {
+  return !!cfg?.autoApprove;
 }
 
 export function resolveToolProfileId(
   role: AgentToolRole,
   cfg?: WebToolsConfig | null,
 ): ToolProfileId {
+  // Auto-approve: elevates *every* role to the max local toolkit.
+  if (isAutoApproveEnabled(cfg)) return "swarm-auto";
+
   const web = isWebToolsEnabled(cfg);
   switch (role) {
     case "planner":
@@ -57,16 +71,18 @@ const KNOWN_PROFILES: ReadonlySet<string> = new Set([
   "swarm-builder",
   "swarm-builder-research",
   "swarm-research",
+  "swarm-auto",
 ]);
 
 /**
- * Upgrade legacy profile names when web tools are enabled.
+ * Upgrade legacy profile names when web tools / autoApprove are enabled.
  * Lets discussion runners keep passing "swarm-read" while gaining web_search/web_fetch.
  */
 export function effectiveToolProfileId(
   agentName: string,
   cfg?: WebToolsConfig | null,
 ): ToolProfileId {
+  if (isAutoApproveEnabled(cfg)) return "swarm-auto";
   const base = (KNOWN_PROFILES.has(agentName) ? agentName : "swarm") as ToolProfileId;
   if (!isWebToolsEnabled(cfg)) return base;
   if (base === "swarm-read") return "swarm-research";
@@ -145,7 +161,11 @@ export function resolveWorkerPromptWallClockMs(opts?: {
 export function workerJsonNudgeForProfile(
   profile: string | null | undefined,
 ): { atTurn: number; message: string } | undefined {
-  if (profile === "swarm-builder" || profile === "swarm-builder-research") {
+  if (
+    profile === "swarm-builder"
+    || profile === "swarm-builder-research"
+    || profile === "swarm-auto"
+  ) {
     return { atTurn: WORKER_JSON_NUDGE_TURN, message: WORKER_JSON_NUDGE_MESSAGE };
   }
   return undefined;
@@ -201,12 +221,14 @@ export function allowsUnboundedToolTurns(profile: ToolProfileId): boolean {
     || profile === "swarm-planner"
     || profile === "swarm-research"
     || profile === "swarm-builder-research"
+    || profile === "swarm-auto"
   );
 }
 
 /** Tool-loop cap for a profile, or undefined to use the provider default (10). */
 export function resolveMaxToolTurnsForProfile(profile: ToolProfileId): number | undefined {
   if (!allowsUnboundedToolTurns(profile)) return undefined;
+  if (profile === "swarm-auto") return EXPLORE_MAX_BUILDER_RESEARCH_TOOL_TURNS;
   if (profile === "swarm-builder-research") return EXPLORE_MAX_BUILDER_RESEARCH_TOOL_TURNS;
   if (profile === "swarm-research") return EXPLORE_MAX_RESEARCH_TOOL_TURNS;
   return EXPLORE_MAX_TOOL_TURNS;
@@ -218,6 +240,17 @@ export const PROFILE_TOOLS: Record<ToolProfileId, readonly string[]> = {
   "swarm-planner": ["read", "grep", "glob", "list", "bash", "web_search", "web_fetch"],
   "swarm-builder": ["read", "grep", "glob", "list", "bash", "propose_hunks"],
   "swarm-builder-research": [
+    "read",
+    "grep",
+    "glob",
+    "list",
+    "bash",
+    "web_search",
+    "web_fetch",
+    "propose_hunks",
+  ],
+  /** Auto-approve / high-trust: max toolkit for every role. */
+  "swarm-auto": [
     "read",
     "grep",
     "glob",

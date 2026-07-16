@@ -375,6 +375,7 @@ export function registerStartRoute(
         verifyCommand: parsed.data.verifyCommand,
         auditorOnlyMutations: parsed.data.auditorOnlyMutations,
         requireAuditorVerification: parsed.data.requireAuditorVerification,
+        autoApprove: parsed.data.autoApprove,
         plannerTools: parsed.data.plannerTools,
         webTools: parsed.data.webTools,
         projectGraphContext: parsed.data.projectGraphContext,

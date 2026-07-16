@@ -53,6 +53,7 @@ export interface AuditorContext {
     verifyCommand?: string;
     requireAuditorVerification?: boolean;
     auditorOnlyMutations?: boolean;
+    autoApprove?: boolean;
     /** Q11: record successful hunks for few-shot store. */
     hunkRag?: boolean;
     runId?: string;

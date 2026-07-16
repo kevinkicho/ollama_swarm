@@ -62,6 +62,8 @@ export function tokenizeAllowlistedCommand(command: string): string[] {
   return tokens;
 }
 const BASH_TIMEOUT_MS = 60_000;
+/** Auto-approve / high-trust runs get a longer bash wall for proprietary scripts. */
+const BASH_TIMEOUT_AUTO_MS = 300_000;
 const BASH_OUTPUT_CAP = 200 * 1024;
 
 export type ToolName = "read" | "grep" | "glob" | "list" | "bash" | "write" | "edit" | "propose_hunks" | "web_fetch" | "web_search";
@@ -71,12 +73,17 @@ export type ProfileName =
   | "swarm-planner"
   | "swarm-builder"
   | "swarm-builder-research"
+  | "swarm-auto"
   | "swarm-write"
   | "swarm-research";
 export type Permission = "allow" | "deny";
 
 function unrestrictedReadTools(profile: ProfileName): boolean {
-  return profile === "swarm-planner" || profile === "swarm-research";
+  return (
+    profile === "swarm-planner"
+    || profile === "swarm-research"
+    || profile === "swarm-auto"
+  );
 }
 
 // Default tools list to advertise to the model per profile. Mirrors
@@ -96,6 +103,8 @@ export function defaultToolsForProfile(
     case "swarm-builder":
       return ["read", "grep", "glob", "list", "bash", "propose_hunks"];
     case "swarm-builder-research":
+      return ["read", "grep", "glob", "list", "bash", "web_fetch", "web_search", "propose_hunks"];
+    case "swarm-auto":
       return ["read", "grep", "glob", "list", "bash", "web_fetch", "web_search", "propose_hunks"];
     case "swarm-write":
       return ["read", "grep", "glob", "list", "propose_hunks"];
@@ -157,6 +166,19 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     web_search: "deny",
   },
   "swarm-builder-research": {
+    read: "allow",
+    grep: "allow",
+    glob: "allow",
+    list: "allow",
+    bash: "allow",
+    write: "deny",
+    edit: "deny",
+    propose_hunks: "allow",
+    web_fetch: "allow",
+    web_search: "allow",
+  },
+  /** High-trust auto-approve: max toolkit (mutations via propose_hunks apply). */
+  "swarm-auto": {
     read: "allow",
     grep: "allow",
     glob: "allow",
@@ -644,7 +666,11 @@ function windowsUnixBashHint(binary: string): string {
   );
 }
 
-async function bashTool(clone: string, args: Record<string, unknown>): Promise<ToolResult> {
+async function bashTool(
+  clone: string,
+  args: Record<string, unknown>,
+  opts?: { timeoutMs?: number },
+): Promise<ToolResult> {
   const command = String(args.command ?? "");
   if (!command) return { ok: false, error: "bash: missing `command` arg" };
   // Policy: any non-empty shell command is allowed (including &&, pipes, cd).
@@ -664,6 +690,8 @@ async function bashTool(clone: string, args: Record<string, unknown>): Promise<T
     // with guidance instead of spamming cmd.exe "'grep' is not recognized".
     return { ok: false, error: windowsUnixBashHint(binary) };
   }
+
+  const timeoutMs = opts?.timeoutMs ?? BASH_TIMEOUT_MS;
 
   try {
     // Validate cwd so we don't get opaque "The system cannot find the path specified."
@@ -700,7 +728,7 @@ async function bashTool(clone: string, args: Record<string, unknown>): Promise<T
             /* ignore */
           }
         }, 2_000).unref?.();
-      }, BASH_TIMEOUT_MS);
+      }, timeoutMs);
       child.stdout?.on("data", (c: Buffer) => {
         if (stdout.length < BASH_OUTPUT_CAP) stdout += c.toString();
       });
@@ -755,7 +783,7 @@ async function bashTool(clone: string, args: Record<string, unknown>): Promise<T
     if (e.killed) {
       return {
         ok: false,
-        error: `bash killed after ${Math.round(BASH_TIMEOUT_MS / 1000)}s timeout: ${detail.slice(-500)}`,
+        error: `bash killed after ${Math.round(timeoutMs / 1000)}s timeout: ${detail.slice(-500)}`,
       };
     }
     return { ok: false, error: `bash exited non-zero: ${detail.slice(-700)}` };
@@ -907,17 +935,23 @@ export class ToolDispatcher {
         result = await grepTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
         break;
       case "bash": {
-        const prior = getAgentBashErrors(this.agentId);
-        if (prior >= BASH_ERROR_BACKOFF_THRESHOLD) {
-          result = {
-            ok: false,
-            error:
-              `bash disabled after ${prior} consecutive failures — use read, grep, or glob instead`,
-          };
-          break;
+        // Auto-approve (swarm-auto): no consecutive-fail lockout; longer timeout.
+        const auto = this.profile === "swarm-auto";
+        if (!auto) {
+          const prior = getAgentBashErrors(this.agentId);
+          if (prior >= BASH_ERROR_BACKOFF_THRESHOLD) {
+            result = {
+              ok: false,
+              error:
+                `bash disabled after ${prior} consecutive failures — use read, grep, or glob instead`,
+            };
+            break;
+          }
         }
-        result = await bashTool(this.clonePath, call.args);
-        recordAgentBashResult(this.agentId, result.ok);
+        result = await bashTool(this.clonePath, call.args, {
+          timeoutMs: auto ? BASH_TIMEOUT_AUTO_MS : BASH_TIMEOUT_MS,
+        });
+        if (!auto) recordAgentBashResult(this.agentId, result.ok);
         break;
       }
       case "propose_hunks":

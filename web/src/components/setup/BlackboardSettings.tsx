@@ -313,11 +313,15 @@ export function AuditorControlFlags({
   setAuditorOnlyMutations,
   requireAuditorVerification,
   setRequireAuditorVerification,
+  autoApprove,
+  setAutoApprove,
 }: {
   auditorOnlyMutations: boolean;
   setAuditorOnlyMutations: (v: boolean) => void;
   requireAuditorVerification: boolean;
   setRequireAuditorVerification: (v: boolean) => void;
+  autoApprove?: boolean;
+  setAutoApprove?: (v: boolean) => void;
 }) {
   return (
     <Field
@@ -325,6 +329,14 @@ export function AuditorControlFlags({
       hint="When auditor-only mutations are enabled, workers can only propose hunks (via pending-commit). The auditor performs an explicit hunk review prompt, then (with verification) applies changes and creates **one batched git commit** for the round. This makes the auditor the sole writer to the repo."
     >
       <div className="space-y-3 pt-1">
+        {setAutoApprove != null && autoApprove != null ? (
+          <ToggleField
+            label="Auto-approve (high trust)"
+            checked={autoApprove}
+            onChange={setAutoApprove}
+            hint="Every role gets max tools (bash + web + propose_hunks). Auditor auto-accepts pending commits. Bash lockout off, 5m bash wall. Skips prior-DENY todo filters. Use only on trusted local clones."
+          />
+        ) : null}
         <ToggleField
           label="Auditor-only mutations"
           checked={auditorOnlyMutations}

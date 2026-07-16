@@ -257,6 +257,8 @@ export const StartBody = z.object({
   auditorOnlyMutations: z.boolean().optional(),
   // NEW: force verification in auditor path.
   requireAuditorVerification: z.boolean().optional(),
+  // High-trust: max tools for all roles + auto-approve auditor gates.
+  autoApprove: z.boolean().optional(),
   // Unit 59 (59a): per-worker role bias (correctness / simplicity /
   // consistency cycling). Blackboard-only.
   specializedWorkers: z.boolean().optional(),

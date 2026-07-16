@@ -120,6 +120,7 @@ async function chatOnceOnce(
         || opts.agentName === "swarm-planner"
         || opts.agentName === "swarm-builder"
         || opts.agentName === "swarm-builder-research"
+        || opts.agentName === "swarm-auto"
         || opts.agentName === "swarm-research"
         ? effectiveToolProfileId(opts.agentName, opts.webToolsConfig) as ProfileName
         : opts.agentName === "swarm-ui"

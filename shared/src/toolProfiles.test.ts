@@ -32,6 +32,15 @@ describe("toolProfiles", () => {
     assert.equal(resolveToolProfileId("worker-build", { webTools: true }), "swarm-builder-research");
   });
 
+  it("autoApprove elevates every role to swarm-auto", () => {
+    for (const role of ["planner", "worker", "worker-build", "auditor", "read"] as const) {
+      assert.equal(resolveToolProfileId(role, { autoApprove: true }), "swarm-auto");
+    }
+    assert.equal(effectiveToolProfileId("swarm-read", { autoApprove: true }), "swarm-auto");
+    assert.equal(allowsUnboundedToolTurns("swarm-auto"), true);
+    assert.equal(resolveMaxToolTurnsForProfile("swarm-auto"), 40);
+  });
+
   it("toolingMatrix lists all blackboard roles", () => {
     const rows = toolingMatrix({ webTools: true });
     assert.equal(rows.length, 4);

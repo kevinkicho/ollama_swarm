@@ -63,6 +63,13 @@ export interface RunConfigBlackboard {
    */
   requireAuditorVerification?: boolean;
   /**
+   * High-trust mode: every agent role gets the max toolkit (bash + web +
+   * propose_hunks), auditor hunk review auto-approves, bash fail lockout is
+   * disabled, bash wall-clock extends to 5m, and prior-DENY todo filters are
+   * skipped. Prefer local/trusted operators only.
+   */
+  autoApprove?: boolean;
+  /**
    * Legacy compatibility flag. Blackboard planners now always use the
    * read-only swarm-planner profile and may inspect repository files as
    * needed. This flag is retained for saved-run/config compatibility.
