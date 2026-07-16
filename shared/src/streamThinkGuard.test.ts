@@ -30,6 +30,22 @@ describe("createThinkStreamGuard", () => {
     const guard = createThinkStreamGuard();
     assert.equal(guard.check("<think>lots</think>{\"ok\":true}"), null);
   });
+
+  it("trips on total stream size even with visible final text (9f449937)", () => {
+    const guard = createThinkStreamGuard();
+    const phrase =
+      "I'll fetch the BIS API to understand the raw SDMX JSON structure, then craft a transformation. ";
+    const raw = phrase.repeat(2500); // ~225k chars
+    assert.match(guard.check(raw) ?? "", /total chars|repetitive final-text/i);
+  });
+
+  it("trips on final-text suffix repetition after leaked </think>", () => {
+    const guard = createThinkStreamGuard();
+    const phrase =
+      "I'll fetch the BIS API endpoint to understand the raw SDMX JSON structure, then craft a transformation that yields an array of objects with length > 0. ";
+    const raw = `short thought</think>${phrase.repeat(400)}`;
+    assert.match(guard.check(raw) ?? "", /repetitive final-text|total chars/i);
+  });
 });
 
 function nonRepeatingThink(chars: number): string {

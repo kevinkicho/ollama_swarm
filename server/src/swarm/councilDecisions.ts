@@ -6,7 +6,14 @@ import type { Agent } from "../services/AgentManager.js";
 import type { RunConfig } from "./SwarmRunner.js";
 import type { TranscriptEntry } from "../types.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
-import { extractProviderText, createTimeoutController, parseJsonArrayFromResponse, gatherProjectContext, type RealManager } from "./councilUtils.js";
+import {
+  extractProviderText,
+  createTimeoutController,
+  COUNCIL_TODO_EXTRACT_TIMEOUT_MS,
+  parseJsonArrayFromResponse,
+  gatherProjectContext,
+  type RealManager,
+} from "./councilUtils.js";
 import { classifyExpectedFiles } from "./blackboard/prompts/pathValidation.js";
 import { resolveSafe } from "./blackboard/resolveSafe.js";
 import { promises as fs } from "node:fs";
@@ -221,7 +228,7 @@ export async function extractActionableTodos(
   });
 
   try {
-    const { controller, cleanup } = createTimeoutController();
+    const { controller, cleanup } = createTimeoutController(COUNCIL_TODO_EXTRACT_TIMEOUT_MS);
     try {
       const raw = await promptWithFailoverAuto(lead, prompt, {
         manager: manager as any,
@@ -323,7 +330,17 @@ export async function extractActionableTodos(
       cleanup();
     }
   } catch (err) {
-    appendSystem(`[extractActionableTodos] extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    const aborted =
+      (err instanceof Error && err.name === "AbortError") ||
+      /operation was aborted|aborted/i.test(msg);
+    if (aborted) {
+      appendSystem(
+        `[extractActionableTodos] extraction timed out/aborted after budget — continuing without synthesis todos (audit can still enqueue).`,
+      );
+    } else {
+      appendSystem(`[extractActionableTodos] extraction failed: ${msg}`);
+    }
     return [];
   }
 }

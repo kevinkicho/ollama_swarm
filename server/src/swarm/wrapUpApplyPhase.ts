@@ -125,22 +125,47 @@ export async function runWrapUpApplyPhase(
     `Wrap-up apply (${input.presetName}): turning the synthesized next-action into a single best-effort commit. Directive: "${directive.slice(0, 120)}${directive.length > 120 ? "..." : ""}"`,
   );
 
-  // Phase 1 extension: if hunksFromSynthesizer is provided, skip the
-  // worker prompt and use the pre-computed hunks directly.
-  let hunksToApply: import("./blackboard/applyHunks.js").Hunk[];
+  // Phase 1 extension: try synthesizer hunks first. On total apply miss
+  // (stale search anchors — run 9f449937: 16→0), fall through to a worker
+  // re-prompt that includes the failure reasons so anchors can be re-read.
+  let hunksToApply: import("./blackboard/applyHunks.js").Hunk[] = [];
+  let synthesizerMissReasons: string[] = [];
+  /** When set, files already written by a successful synthesizer apply. */
+  let preApplied: { applied: number; reasons: string[] } | null = null;
+
   if (input.hunksFromSynthesizer && input.hunksFromSynthesizer.length > 0) {
-    hunksToApply = input.hunksFromSynthesizer;
+    const synthHunks = input.hunksFromSynthesizer;
     input.appendSystem(
-      `Wrap-up apply: using ${hunksToApply.length} hunk(s) from synthesizer directly.`,
+      `Wrap-up apply: using ${synthHunks.length} hunk(s) from synthesizer directly.`,
     );
-  } else {
+    const fsProbe = realFilesystemAdapter(input.clonePath);
+    const probe = await applyBaselineHunks({ hunks: synthHunks, fs: fsProbe });
+    if (probe.applied > 0) {
+      hunksToApply = synthHunks;
+      preApplied = probe;
+    } else {
+      synthesizerMissReasons = probe.reasons;
+      input.appendSystem(
+        `Wrap-up apply: synthesizer ${synthHunks.length} hunk(s) returned, 0 applied — ${probe.reasons.join("; ").slice(0, 500)}. ` +
+          `Falling through to worker re-prompt with live file anchors.`,
+      );
+    }
+  }
+
+  if (hunksToApply.length === 0 && !preApplied) {
     // Build the prompt — same shape as BaselineRunner uses, so any
     // future improvements to baseline-style prompting flow here for free.
     const repoFiles = await input.repos.listRepoFiles(input.clonePath, {
       maxFiles: 50,
     });
     const readme = await input.repos.readReadme(input.clonePath);
-    const prompt = buildBaselinePrompt({ directive, repoFiles, readme });
+    const failureBlock =
+      synthesizerMissReasons.length > 0
+        ? `\n\nPRIOR ATTEMPT FAILED (search anchors not found). Reasons:\n- ${synthesizerMissReasons.slice(0, 8).join("\n- ")}\n` +
+          `Re-read the listed files and emit replace hunks whose "search" text exists EXACTLY in the current file contents.\n`
+        : "";
+    const prompt =
+      buildBaselinePrompt({ directive, repoFiles, readme }) + failureBlock;
 
     // Run the prompt
     let raw: string;
@@ -202,7 +227,11 @@ export async function runWrapUpApplyPhase(
     }
     if (parsed.hunks.length === 0) {
       const skipNote = parsed.skip ? ` — ${parsed.skip}` : "";
-      input.appendSystem(`Wrap-up apply: 0 hunks${skipNote}`);
+      // Distinguish "worker produced nothing" from "synthesizer hunks failed to land"
+      // so UI doesn't look like a silent no-op after a prior "N hunks from synthesizer".
+      input.appendSystem(
+        `Wrap-up apply: worker returned 0 hunks (nothing to apply)${skipNote}`,
+      );
       return {
         ok: true,
         hunksAttempted: 0,
@@ -218,9 +247,12 @@ export async function runWrapUpApplyPhase(
   // T171: snapshot pre-hunk content of touched files BEFORE applying.
   // Required for the verify-failure revert path. Skipped when no
   // verify command is configured (don't pay the read cost).
+  // When synthesizer already applied (preApplied), snapshot is too late for
+  // full revert fidelity — verify still runs; failure is reported without
+  // inventing pre-images.
   const touchedFiles = Array.from(new Set(hunksToApply.map((h) => h.file)));
   const preHunkContents: Record<string, string | null> = {};
-  if (input.verifyCommand) {
+  if (input.verifyCommand && !preApplied) {
     for (const f of touchedFiles) {
       try {
         preHunkContents[f] = await fsAdapter.read(f);
@@ -230,10 +262,12 @@ export async function runWrapUpApplyPhase(
     }
   }
   try {
-    const apply = await applyBaselineHunks({
-      hunks: hunksToApply,
-      fs: fsAdapter,
-    });
+    const apply = preApplied
+      ? { applied: preApplied.applied, reasons: preApplied.reasons }
+      : await applyBaselineHunks({
+          hunks: hunksToApply,
+          fs: fsAdapter,
+        });
     if (apply.applied === 0) {
       input.appendSystem(
         `Wrap-up apply: ${hunksToApply.length} hunk(s) returned, 0 applied — ${apply.reasons.join("; ")}`,

@@ -18,6 +18,11 @@
 // Caller passes baseUrl via opts; the integration site reads config
 // once and threads it through.
 
+/** Hard ceiling on accumulated thinking+content while reading JSONL.
+ *  Defense-in-depth vs streamThinkGuard (which aborts via AbortSignal).
+ *  Kept in sync with STREAM_HARD_MAX_TOTAL_CHARS in shared/streamThinkGuard. */
+export const OLLAMA_STREAM_HARD_MAX_CHARS = 120_000;
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
@@ -274,8 +279,22 @@ export async function chat(opts: any): Promise<ChatResult> {
     opts.onChunk?.(snapshot);
   };
 
+  /** Merge a stream frame field that may be delta OR cumulative snapshot. */
+  const mergeField = (prev: string, next: string): string => {
+    if (!next) return prev;
+    if (!prev) return next;
+    // Cumulative snapshot: new frame is prev + more
+    if (next.startsWith(prev) && next.length >= prev.length) return next;
+    // Redundant shorter prefix rebroadcast — ignore
+    if (prev.startsWith(next) && next.length < prev.length) return prev;
+    // Normal delta
+    return prev + next;
+  };
+
+  let streamCapped = false;
   try {
     while (true) {
+      if (streamCapped) break;
       let chunk: { done: boolean; value?: Uint8Array };
       try {
         chunk = await reader.read();
@@ -314,11 +333,11 @@ export async function chat(opts: any): Promise<ChatResult> {
         }
         let frameTouched = false;
         if (parsed.message?.thinking) {
-          thinking += parsed.message.thinking;
+          thinking = mergeField(thinking, parsed.message.thinking);
           frameTouched = true;
         }
         if (parsed.message?.content) {
-          content += parsed.message.content;
+          content = mergeField(content, parsed.message.content);
           frameTouched = true;
         }
         if (
@@ -328,7 +347,20 @@ export async function chat(opts: any): Promise<ChatResult> {
           mergeToolCalls(parsed.message.tool_calls);
           frameTouched = true;
         }
-        if (frameTouched) emitStream();
+        if (frameTouched) {
+          if (thinking.length + content.length > OLLAMA_STREAM_HARD_MAX_CHARS) {
+            // Stop reading further frames — fail-closed on runaway loops
+            // even if the AbortSignal path is slow/missing.
+            streamCapped = true;
+            finishReason = "idle-timeout";
+            emitStream();
+            try {
+              await reader.cancel();
+            } catch { /* */ }
+            break;
+          }
+          emitStream();
+        }
         if (parsed.done) {
           // Native Ollama fields (local + many cloud models).
           if (typeof parsed.prompt_eval_count === "number") {

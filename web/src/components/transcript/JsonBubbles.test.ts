@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { splitProseAndJson } from "./JsonBubbles.js";
+import { splitProseAndJson, tryPrettyJson } from "./JsonBubbles.js";
 
 describe("splitProseAndJson", () => {
   it("splits at first { for standard JSON object", () => {
@@ -84,5 +84,31 @@ describe("splitProseAndJson", () => {
     const result = splitProseAndJson('{"first":1} and {"second":2}');
     assert.ok(result.json.startsWith('{"first":1}'));
     assert.notEqual(result.json, '{"second":2}');
+  });
+});
+
+describe("tryPrettyJson", () => {
+  it("pretty-prints whole-string fenced JSON", () => {
+    const r = tryPrettyJson('```json\n{"a":1}\n```');
+    assert.equal(r, '{\n  "a": 1\n}');
+  });
+
+  it("strips embedded ```json fence after prose preamble (9f449937)", () => {
+    const r = tryPrettyJson(
+      'Now I have a complete understanding.\n\n```json\n{\n  "missionStatement": "Add panels"\n}\n```',
+    );
+    assert.ok(r);
+    assert.match(r!, /"missionStatement"/);
+    assert.doesNotMatch(r!, /```/);
+    assert.doesNotMatch(r!, /Now I have/);
+  });
+
+  it("pretty-prints bare object", () => {
+    const r = tryPrettyJson('{"x":[1]}');
+    assert.equal(r, '{\n  "x": [\n    1\n  ]\n}');
+  });
+
+  it("returns null for non-JSON prose", () => {
+    assert.equal(tryPrettyJson("just some notes"), null);
   });
 });

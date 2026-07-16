@@ -26,7 +26,12 @@ export type RealManager = { list: () => Agent[]; [key: string]: unknown };
  * Create an AbortController with a timeout.
  * Returns both the controller and a cleanup function to prevent timer leaks.
  */
-export function createTimeoutController(ms = 90_000): { controller: AbortController; cleanup: () => void } {
+/** Default for most council LLM helpers. Todo extraction gets a longer budget. */
+export const COUNCIL_LLM_TIMEOUT_MS = 90_000;
+/** extractActionableTodos often needs a second full synthesis-scale pass (run 9f449937 aborted at 90s). */
+export const COUNCIL_TODO_EXTRACT_TIMEOUT_MS = 180_000;
+
+export function createTimeoutController(ms = COUNCIL_LLM_TIMEOUT_MS): { controller: AbortController; cleanup: () => void } {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), ms);
   return {

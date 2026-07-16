@@ -235,3 +235,52 @@ final prose`;
     assert.match(r.finalText, /still typing/);
   });
 });
+
+// DeepSeek shape B + multi-name shape A — run 9f449937 (2026-07-16)
+describe("extractToolCallMarkers — DeepSeek <function> shapes (9f449937)", () => {
+  it("strips <function><name>…</name><parameters><value>… shape", () => {
+    const text = `pre
+<function>
+<name>read</name>
+<parameters>
+<value>{
+  "path": "src/data/panelRegistry.js",
+  "offset": 0,
+  "limit": 200
+}</value>
+</parameters>
+</function>
+post`;
+    const r = extractToolCallMarkers(text);
+    assert.equal(r.toolCalls.length, 1);
+    assert.match(r.toolCalls[0]!, /<name>read<\/name>/);
+    assert.match(r.finalText, /pre/);
+    assert.match(r.finalText, /post/);
+    assert.doesNotMatch(r.finalText, /<function>/);
+    assert.doesNotMatch(r.finalText, /panelRegistry/);
+  });
+
+  it("strips shape A with duplicated <function name> tags", () => {
+    const text = `pre
+<function>
+<function name>grep</function>
+<function name>grep</function>
+<parameter name="pattern">^\\s+fx</parameter>
+<parameter name="path">src/data/panelRegistry.js</parameter>
+</function>
+post`;
+    const r = extractToolCallMarkers(text);
+    assert.equal(r.toolCalls.length, 1);
+    assert.match(r.finalText, /pre.*post/s);
+    assert.doesNotMatch(r.finalText, /<function>/);
+  });
+
+  it("strips classic shape A (single function name + parameter)", () => {
+    const text =
+      "pre\n<function>\n<function name>read</function>\n<parameter name=\"path\">src/foo.ts</parameter>\n</function>\npost";
+    const r = extractToolCallMarkers(text);
+    assert.equal(r.toolCalls.length, 1);
+    assert.match(r.finalText, /pre/);
+    assert.match(r.finalText, /post/);
+  });
+});

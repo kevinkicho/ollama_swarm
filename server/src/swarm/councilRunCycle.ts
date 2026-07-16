@@ -375,7 +375,11 @@ async function runCycle1Discussion(
         manager: host.manager as any,
         repos: host.repos as any,
         emit: host.emit as any,
-        appendSystem: ((text: string) => host.appendSystem(text)) as any,
+        // Must forward summary so deliverable gets kind:"deliverable"
+        // (green card UI). Dropping it made "Deliverable saved → …" a
+        // plain system line (run 9f449937 post-mortem).
+        appendSystem: ((text: string, summary?: unknown) =>
+          host.appendSystem(text, summary as any)) as any,
       },
     );
     const wrapLead = host.manager.list().find((a) => a.index === 1);
@@ -387,7 +391,7 @@ async function runCycle1Discussion(
         manager: host.manager,
         repos: host.repos,
         emit: host.emit,
-        appendSystem: (text) => host.appendSystem(text),
+        appendSystem: (text: string) => host.appendSystem(text),
         relevantFiles: [],
       });
     }

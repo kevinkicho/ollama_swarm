@@ -21,14 +21,18 @@ function shortenPath(path: string): string {
 export function summarizePseudoToolMarker(raw: string): PseudoToolIntent {
   const fnName =
     raw.match(/<function\s+name>([^<]+)<\/function\s*>/i)?.[1]?.trim() ??
-    raw.match(/<function_name>([^<]+)<\/function_name>/i)?.[1]?.trim();
+    raw.match(/<function_name>([^<]+)<\/function_name>/i)?.[1]?.trim() ??
+    // Shape B (run 9f449937): <function><name>read</name><parameters>…
+    raw.match(/<name>([^<]+)<\/name>/i)?.[1]?.trim();
   if (fnName) {
     const path =
       raw.match(/<parameter\s+name=["']path["']>([^<]+)<\/parameter>/i)?.[1]?.trim() ??
-      raw.match(/<parameter\s+name=["']file["']>([^<]+)<\/parameter>/i)?.[1]?.trim();
-    const pattern = raw.match(
-      /<parameter\s+name=["']pattern["']>([^<]+)<\/parameter>/i,
-    )?.[1]?.trim();
+      raw.match(/<parameter\s+name=["']file["']>([^<]+)<\/parameter>/i)?.[1]?.trim() ??
+      raw.match(/"path"\s*:\s*"([^"]+)"/i)?.[1]?.trim() ??
+      raw.match(/"file"\s*:\s*"([^"]+)"/i)?.[1]?.trim();
+    const pattern =
+      raw.match(/<parameter\s+name=["']pattern["']>([^<]+)<\/parameter>/i)?.[1]?.trim() ??
+      raw.match(/"pattern"\s*:\s*"([^"]+)"/i)?.[1]?.trim();
     const detail = path ? shortenPath(path) : pattern ? `/${pattern}/` : undefined;
     return { name: fnName, detail, raw };
   }

@@ -1,4 +1,5 @@
 import { extractThinkTags } from "./extractThinkTags.js";
+import { isDominantStreamLoop } from "./streamLoopDetect.js";
 import type { ThinkGuardSession, ThinkGuardTrip, ThinkGuardTripMetrics } from "./thinkGuardErrors.js";
 
 export { createThinkGuardSession } from "./thinkGuardErrors.js";
@@ -6,6 +7,17 @@ export type { ThinkGuardSession, ThinkGuardTrip } from "./thinkGuardErrors.js";
 
 /** Hard abort think-only streams before they grow into multi-minute loops. */
 export const THINK_STREAM_HARD_MAX_CHARS = 160_000;
+/**
+ * Absolute ceiling on cumulative stream text (think + final).
+ * Run 9f449937 agent-3 grew to ~299k over ~4 min of continuous deltas while
+ * idle-wall kept resetting — fail-closed well before multi-minute loops.
+ */
+export const STREAM_HARD_MAX_TOTAL_CHARS = 120_000;
+/**
+ * Min final-text length before suffix/phrase loop is a hard abort.
+ * At ~20k the 9f449937 loop already had 100+ identical phrases.
+ */
+export const FINAL_STREAM_REP_MIN_CHARS = 12_000;
 /**
  * Idle MS without a new stream chunk while still think-only.
  * While the provider keeps streaming, this clock resets — absolute ceiling
@@ -203,7 +215,76 @@ export function checkSoft(raw: string, session: ThinkGuardSession): ThinkGuardTr
   return null;
 }
 
+function finalStreamHardTrip(raw: string, session: ThinkGuardSession): ThinkGuardTrip | null {
+  const { thoughts, finalText } = extractThinkTags(raw);
+  const elapsed = Math.max(0, Date.now() - session.startedAt);
+  const baseMetrics: ThinkGuardTripMetrics = {
+    thinkChars: thoughts.trim().length,
+    thinkElapsedMs: elapsed,
+    repetition: null,
+  };
+
+  // Total-size ceiling targets mixed/final bloat (9f449937). Pure think-only
+  // streams still use THINK_STREAM_HARD_MAX_CHARS (160k) below — don't trip
+  // a long but healthy think block early.
+  // Note: extractThinkTags falls back to raw when final is empty, so treat
+  // "finalText === raw with non-empty thoughts" as think-only.
+  const thinkLen = thoughts.trim().length;
+  const postThink = finalText.trim();
+  const thinkOnly =
+    thinkLen > 0
+    && (postThink.length === 0 || postThink === raw.trim() || postThink.includes("</think>"));
+  if (
+    !thinkOnly
+    && raw.length >= STREAM_HARD_MAX_TOTAL_CHARS
+    && postThink.length >= FINAL_STREAM_REP_MIN_CHARS
+  ) {
+    return makeTrip(
+      2,
+      `stream exceeded ${STREAM_HARD_MAX_TOTAL_CHARS.toLocaleString()} total chars (think+final)`,
+      baseMetrics,
+    );
+  }
+
+  // Phrase-loop detector works on full raw (think+final) — catches loops that
+  // leak </think> into content and then spin (9f449937).
+  const loop = isDominantStreamLoop(raw, {
+    minLen: FINAL_STREAM_REP_MIN_CHARS,
+    minRatio: 0.4,
+    minCount: 6,
+  });
+  if (loop) {
+    return makeTrip(
+      2,
+      `repetitive stream loop (${loop.count}×${loop.phraseLen} char phrase, ` +
+        `${Math.round(loop.coveredRatio * 100)}% coverage, ${raw.length.toLocaleString()} total chars)`,
+      {
+        ...baseMetrics,
+        repetition: { repeats: loop.count, rLen: loop.phraseLen },
+      },
+    );
+  }
+
+  const final = finalText.trim();
+  if (final.length < FINAL_STREAM_REP_MIN_CHARS) return null;
+  const rep = detectRepetitiveTailHard(final, {
+    minThinkLen: FINAL_STREAM_REP_MIN_CHARS,
+    minRepeats: 5,
+    includeLineRepeat: true,
+  });
+  if (!rep) return null;
+  return makeTrip(
+    2,
+    `repetitive final-text loop (${rep.repeats}×${rep.rLen} char tail, ${final.length.toLocaleString()} final chars)`,
+    { ...baseMetrics, repetition: rep },
+  );
+}
+
 export function checkHard(raw: string, session: ThinkGuardSession): ThinkGuardTrip | null {
+  // Always enforce total-size + final-text loops, even when not think-only.
+  const finalTrip = finalStreamHardTrip(raw, session);
+  if (finalTrip) return finalTrip;
+
   const metrics = thinkMetrics(raw, session);
   if (!metrics) return null;
   const lim = effectiveLimits(session);

@@ -21,11 +21,14 @@
 
 import { extractThinkTags } from "./extractThinkTags.js";
 import { extractToolCallMarkers } from "./extractToolCallMarkers.js";
+import { collapsePhraseLoop } from "./streamLoopDetect.js";
 
 export interface StrippedAgentText {
   finalText: string;
   thoughts: string;
   toolCalls: string[];
+  /** True when a generation loop was collapsed out of finalText. */
+  loopCollapsed?: boolean;
 }
 
 // After stripping think tags and tool-call markers, the remaining text can
@@ -43,10 +46,20 @@ export function stripAgentText(text: string): StrippedAgentText {
     ? extractToolCallMarkers(rawThoughts)
     : { toolCalls: [] as string[], finalText: "" };
   const rawFinal = fromBody.finalText;
-  const finalText = SEMANTICALLY_EMPTY_RE.test(rawFinal) ? "" : rawFinal;
+  let finalText = SEMANTICALLY_EMPTY_RE.test(rawFinal) ? "" : rawFinal;
+  // Collapse generation loops before they hit the transcript / summary JSON
+  // (9f449937 stored 298k of near-identical phrases despite modest cloud tokens).
+  let loopCollapsed = false;
+  if (finalText.length >= 8_000) {
+    const collapsed = collapsePhraseLoop(finalText, { minLenToCollapse: 8_000, maxKeep: 2 });
+    if (collapsed.collapsed) {
+      finalText = collapsed.text;
+      loopCollapsed = true;
+    }
+  }
   const thoughts = fromThoughts.finalText.trim();
   const toolCalls = [...fromThoughts.toolCalls, ...fromBody.toolCalls];
-  return { finalText, thoughts, toolCalls };
+  return { finalText, thoughts, toolCalls, ...(loopCollapsed ? { loopCollapsed: true } : {}) };
 }
 
 /** Text to feed JSON.parse / extractJsonFromText — strips thinking + pseudo-tool XML first. */

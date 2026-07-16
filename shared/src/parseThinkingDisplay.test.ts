@@ -18,6 +18,18 @@ describe("parseThinkingDisplay", () => {
 });
 
 describe("summarizePseudoToolMarker", () => {
+  it("labels DeepSeek name/parameters/value shape (9f449937)", () => {
+    const raw = `<function>
+<name>read</name>
+<parameters>
+<value>{"path": "src/data/panelRegistry.js", "limit": 200}</value>
+</parameters>
+</function>`;
+    const r = summarizePseudoToolMarker(raw);
+    assert.equal(r.name, "read");
+    assert.match(r.detail ?? "", /panelRegistry/);
+  });
+
   it("labels bare read tags with path", () => {
     const raw = "<read path='src/foo.ts' />";
     const s = summarizePseudoToolMarker(raw);

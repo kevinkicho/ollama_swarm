@@ -607,10 +607,18 @@ export function recordChatUsage(input: {
   const promptTokens = hadPrompt
     ? input.promptTokens!
     : estimateTokensFromText(input.promptText);
-  const responseTokens = hadResponse
+  let responseTokens = hadResponse
     ? input.responseTokens!
     : estimateTokensFromText(input.responseText);
-  const estimated = !hadPrompt || !hadResponse;
+  // 9f449937: cloud sometimes reports a modest eval_count while the cumulative
+  // stream buffer is 100k+ of looped text. Prefer the larger of reported vs
+  // text estimate when the gap is extreme so the topbar/stats stay honest,
+  // but never *under*-count real usage when the provider reports more.
+  const fromText = estimateTokensFromText(input.responseText);
+  if (hadResponse && fromText > responseTokens * 4 && fromText - responseTokens > 2_000) {
+    responseTokens = fromText;
+  }
+  const estimated = !hadPrompt || !hadResponse || (hadResponse && responseTokens === fromText && fromText > (input.responseTokens ?? 0));
   tokenTracker.add(
     {
       ts: Date.now(),

@@ -19,17 +19,30 @@ export const MAX_BUBBLE_HEIGHT_PX = 384;
 export function tryPrettyJson(text: string): string | null {
   const trimmed = text.trim();
   if (trimmed.length === 0) return null;
-  const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/m.exec(trimmed);
-  const candidate = fenced ? fenced[1] : trimmed;
-  const first = candidate.charAt(0);
-  if (first !== "{" && first !== "[") return null;
-  try {
-    const parsed = JSON.parse(candidate) as unknown;
-    if (parsed === null || typeof parsed !== "object") return null;
-    return JSON.stringify(parsed, null, 2);
-  } catch {
-    return null;
+  // Candidates: whole-string fence, embedded fence (prose + ```json … ```),
+  // then raw text. Embedded fences were previously left as raw ```json in
+  // CollapsibleBlock fallbacks (run 9f449937 council drafts/synthesis).
+  const wholeFence = /^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/i.exec(trimmed);
+  const embeddedFence = /```(?:json)?\s*\n?([\s\S]*?)\n?```/i.exec(trimmed);
+  const candidates = [
+    wholeFence?.[1],
+    embeddedFence && embeddedFence[0] !== wholeFence?.[0] ? embeddedFence[1] : null,
+    trimmed,
+  ];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const candidate = raw.trim();
+    const first = candidate.charAt(0);
+    if (first !== "{" && first !== "[") continue;
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (parsed === null || typeof parsed !== "object") continue;
+      return JSON.stringify(parsed, null, 2);
+    } catch {
+      /* try next candidate */
+    }
   }
+  return null;
 }
 
 export interface AgentJsonBubbleProps {

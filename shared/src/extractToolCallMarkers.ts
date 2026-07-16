@@ -95,15 +95,29 @@ const PAIRED_TAG_RE = new RegExp(
 );
 
 // DeepSeek v4 explore turns emit nested <function> wrappers instead of bare
-// <read path='...'/> markers. Observed in blackboard run 94224a3e (2026-07-07):
+// <read path='...'/> markers. Two shapes observed in production:
+//
+// Shape A — blackboard run 94224a3e (2026-07-07):
 //   <function>
 //   <function name>read</function>
 //   <parameter name="path">C:\...\GOVERNMENT_API_CATALOG.md</parameter>
 //   </function>
+// (Sometimes re-emits <function name> twice — run 9f449937.)
 // Must match the full outer wrapper; a naive non-greedy </function> stops at the
-// inner <function name>…</function> child (run 94224a3e).
-const DEEPSEEK_FUNCTION_BLOCK_RE =
-  /<function>\s*<function\s+name>[^<]+<\/function>\s*<parameter\s+name=["'][^"']+["']>[^<]*<\/parameter>\s*<\/function>/gi;
+// inner <function name>…</function> child.
+//
+// Shape B — council run 9f449937 (2026-07-16):
+//   <function>
+//   <name>read</name>
+//   <parameters>
+//   <value>{ "path": "src/data/panelRegistry.js", ... }</value>
+//   </parameters>
+//   </function>
+// Older RE only matched shape A → raw XML leaked into the agent bubble.
+const DEEPSEEK_FUNCTION_NAME_PARAM_RE =
+  /<function>\s*(?:<function\s+name>[^<]*<\/function>\s*)+(?:<parameter\b[\s\S]*?<\/parameter>\s*)+<\/function>/gi;
+const DEEPSEEK_FUNCTION_NAME_VALUE_RE =
+  /<function>\s*<name>[^<]+<\/name>\s*<parameters>[\s\S]*?<\/parameters>\s*<\/function>/gi;
 
 /**
  * Split agent text into tool-call markers + the rest.
@@ -135,7 +149,12 @@ export function extractToolCallMarkers(text: string): {
   };
 
   // Pass 0: DeepSeek <function>...</function> wrappers (before bare XML tags).
-  let stripped = text.replace(DEEPSEEK_FUNCTION_BLOCK_RE, (match) => {
+  // Shape B first (no nested </function> children), then shape A (inner name tags).
+  let stripped = text.replace(DEEPSEEK_FUNCTION_NAME_VALUE_RE, (match) => {
+    pushMarker(match);
+    return "";
+  });
+  stripped = stripped.replace(DEEPSEEK_FUNCTION_NAME_PARAM_RE, (match) => {
     pushMarker(match);
     return "";
   });
