@@ -96,21 +96,34 @@ export const TOOL_SCHEMAS: Record<
     },
   },
   web_fetch: {
-    description: "Fetch the text content of a public URL (HTML, JSON, or plain text). Use for following links from search results or directly accessing known data endpoints. Output is truncated.",
+    description:
+      "Fetch public https URL text (HTML/JSON/plain). Use for official data APIs after web_search. " +
+      "NEVER invent placeholders (raw.githubusercontent.com/your-org/..., example.com, file://). " +
+      "For files inside the clone use read/grep/list instead. Output is truncated.",
     input_schema: {
       type: "object",
       properties: {
-        url: { type: "string", description: "Full http or https URL to fetch" },
+        url: {
+          type: "string",
+          description: "Full https URL to an official/public page or API (not a local path)",
+        },
       },
       required: ["url"],
     },
   },
   web_search: {
-    description: "Perform an internet search (DuckDuckGo). Returns top results with titles, URLs and snippets. Prefer .gov, .eu, data.gov, worldbank, oecd, eurostat, imf etc for governmental/intra-governmental. Use to discover data endpoints, then web_fetch specific URLs.",
+    description:
+      "Internet search (DuckDuckGo + fallback). Prefer .gov/.eu/worldbank/imf/bis/oecd. " +
+      "If search fails, do NOT retry the same query — use read/grep on the clone or web_fetch a known official URL. " +
+      "Then web_fetch top results.",
     input_schema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "search query, e.g. 'US government open data APIs economic financial labor housing production site:.gov' or 'Eurostat OECD data endpoints'" },
+        query: {
+          type: "string",
+          description:
+            "search query, e.g. 'BIS statistics API SDMX site:bis.org' or 'FRED API documentation site:stlouisfed.org'",
+        },
       },
       required: ["query"],
     },

@@ -32,7 +32,7 @@ import path from "node:path";
 import type { Agent, AgentManager } from "../services/AgentManager.js";
 import type { SwarmEvent } from "../types.js";
 import type { RepoService } from "../services/RepoService.js";
-import type { Hunk } from "./blackboard/applyHunks.js";
+import { applyHunks, type Hunk } from "./blackboard/applyHunks.js";
 import { extractText } from "./extractText.js";
 import { parseWorkerResponse } from "./blackboard/prompts/worker.js";
 import {
@@ -46,6 +46,34 @@ import {
   collectAllFiles,
 } from "./BaselineRunner.js";
 import { pickProvider } from "../providers/pickProvider.js";
+
+/** Pure dry-run: would these hunks apply? Does not write disk. */
+async function dryRunHunks(
+  clonePath: string,
+  hunks: Hunk[],
+): Promise<{ wouldApply: number; reasons: string[] }> {
+  const fsAdapter = realFilesystemAdapter(clonePath);
+  const byFile = new Map<string, Hunk[]>();
+  for (const h of hunks) {
+    const list = byFile.get(h.file) ?? [];
+    list.push(h);
+    byFile.set(h.file, list);
+  }
+  let wouldApply = 0;
+  const reasons: string[] = [];
+  for (const [file, fileHunks] of byFile) {
+    let current: string | null = null;
+    try {
+      current = await fsAdapter.read(file);
+    } catch {
+      current = null;
+    }
+    const r = applyHunks({ [file]: current }, fileHunks);
+    if (r.ok) wouldApply += fileHunks.length;
+    else reasons.push(`${file}: ${r.error}`);
+  }
+  return { wouldApply, reasons };
+}
 
 
 export interface WrapUpApplyInput {
@@ -125,34 +153,33 @@ export async function runWrapUpApplyPhase(
     `Wrap-up apply (${input.presetName}): turning the synthesized next-action into a single best-effort commit. Directive: "${directive.slice(0, 120)}${directive.length > 120 ? "..." : ""}"`,
   );
 
-  // Phase 1 extension: try synthesizer hunks first. On total apply miss
-  // (stale search anchors — run 9f449937: 16→0), fall through to a worker
-  // re-prompt that includes the failure reasons so anchors can be re-read.
-  let hunksToApply: import("./blackboard/applyHunks.js").Hunk[] = [];
+  // Phase 1 extension: dry-run synthesizer hunks (no disk write). On total
+  // miss (stale search anchors — run 9f449937: 16→0), fall through to a
+  // worker re-prompt that includes the failure reasons so anchors re-read.
+  let hunksToApply: Hunk[] = [];
   let synthesizerMissReasons: string[] = [];
-  /** When set, files already written by a successful synthesizer apply. */
-  let preApplied: { applied: number; reasons: string[] } | null = null;
 
   if (input.hunksFromSynthesizer && input.hunksFromSynthesizer.length > 0) {
     const synthHunks = input.hunksFromSynthesizer;
     input.appendSystem(
-      `Wrap-up apply: using ${synthHunks.length} hunk(s) from synthesizer directly.`,
+      `Wrap-up apply: dry-running ${synthHunks.length} synthesizer hunk(s)…`,
     );
-    const fsProbe = realFilesystemAdapter(input.clonePath);
-    const probe = await applyBaselineHunks({ hunks: synthHunks, fs: fsProbe });
-    if (probe.applied > 0) {
+    const dry = await dryRunHunks(input.clonePath, synthHunks);
+    if (dry.wouldApply > 0) {
       hunksToApply = synthHunks;
-      preApplied = probe;
-    } else {
-      synthesizerMissReasons = probe.reasons;
       input.appendSystem(
-        `Wrap-up apply: synthesizer ${synthHunks.length} hunk(s) returned, 0 applied — ${probe.reasons.join("; ").slice(0, 500)}. ` +
+        `Wrap-up apply: synthesizer dry-run ok (${dry.wouldApply}/${synthHunks.length} would land) — applying.`,
+      );
+    } else {
+      synthesizerMissReasons = dry.reasons;
+      input.appendSystem(
+        `Wrap-up apply: synthesizer ${synthHunks.length} hunk(s) dry-run 0 would land — ${dry.reasons.join("; ").slice(0, 500)}. ` +
           `Falling through to worker re-prompt with live file anchors.`,
       );
     }
   }
 
-  if (hunksToApply.length === 0 && !preApplied) {
+  if (hunksToApply.length === 0) {
     // Build the prompt — same shape as BaselineRunner uses, so any
     // future improvements to baseline-style prompting flow here for free.
     const repoFiles = await input.repos.listRepoFiles(input.clonePath, {
@@ -247,12 +274,9 @@ export async function runWrapUpApplyPhase(
   // T171: snapshot pre-hunk content of touched files BEFORE applying.
   // Required for the verify-failure revert path. Skipped when no
   // verify command is configured (don't pay the read cost).
-  // When synthesizer already applied (preApplied), snapshot is too late for
-  // full revert fidelity — verify still runs; failure is reported without
-  // inventing pre-images.
   const touchedFiles = Array.from(new Set(hunksToApply.map((h) => h.file)));
   const preHunkContents: Record<string, string | null> = {};
-  if (input.verifyCommand && !preApplied) {
+  if (input.verifyCommand) {
     for (const f of touchedFiles) {
       try {
         preHunkContents[f] = await fsAdapter.read(f);
@@ -262,12 +286,10 @@ export async function runWrapUpApplyPhase(
     }
   }
   try {
-    const apply = preApplied
-      ? { applied: preApplied.applied, reasons: preApplied.reasons }
-      : await applyBaselineHunks({
-          hunks: hunksToApply,
-          fs: fsAdapter,
-        });
+    const apply = await applyBaselineHunks({
+      hunks: hunksToApply,
+      fs: fsAdapter,
+    });
     if (apply.applied === 0) {
       input.appendSystem(
         `Wrap-up apply: ${hunksToApply.length} hunk(s) returned, 0 applied — ${apply.reasons.join("; ")}`,

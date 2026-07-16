@@ -15,6 +15,8 @@
 //
 // Returns the parsed value on success or null. Pure: no I/O.
 
+import { stripForJsonParse } from "@ollama-swarm/shared/stripAgentText";
+
 export interface RepairAttempt {
   /** Strategy that produced the parsed value, for diagnostics. */
   strategy: string;
@@ -26,28 +28,43 @@ export interface RepairAttempt {
  *  Returns null when no strategy works. */
 export function repairAndParseJson(text: string): RepairAttempt | null {
   if (typeof text !== "string" || text.length === 0) return null;
-  // 1. Fast path — strict JSON.parse on the trimmed input.
-  const trimmed = text.trim();
-  const direct = tryParse(trimmed);
-  if (direct !== UNPARSEABLE) return { strategy: "strict", value: direct };
-  // 2. Strip code fences.
-  const fenceStripped = stripFences(trimmed);
-  if (fenceStripped !== trimmed) {
-    const r = tryParse(fenceStripped);
-    if (r !== UNPARSEABLE) return { strategy: "fence-strip", value: r };
+  // 0. Strip <think> / pseudo-tool XML first (run 9f449937: workers emitted
+  // `<think>We …` and repair ran on raw, never saw the trailing JSON).
+  const deThought = stripForJsonParse(text);
+  const sources: Array<{ label: string; s: string }> = [
+    { label: "strict", s: text.trim() },
+  ];
+  if (deThought && deThought !== text.trim()) {
+    sources.unshift({ label: "strip-think", s: deThought });
   }
-  // 3. Extract first balanced {...} or [...] span.
-  const sliced = extractBalancedSpan(fenceStripped);
-  if (sliced) {
-    const r = tryParse(sliced);
-    if (r !== UNPARSEABLE) return { strategy: "balanced-span", value: r };
-  }
-  // 4. Soft repairs on the best candidate so far.
-  const candidate = sliced ?? fenceStripped;
-  const repaired = applySoftRepairs(candidate);
-  if (repaired !== candidate) {
-    const r = tryParse(repaired);
-    if (r !== UNPARSEABLE) return { strategy: "soft-repairs", value: r };
+
+  for (const src of sources) {
+    // Keep legacy strategy names for the raw path so existing diagnostics/tests hold;
+    // prefix with strip-think only when we first de-thought the blob.
+    const name = (base: string) =>
+      src.label === "strip-think" ? `strip-think+${base}` : base === "strict" ? "strict" : base;
+
+    const direct = tryParse(src.s);
+    if (direct !== UNPARSEABLE) {
+      return { strategy: name(src.label === "strip-think" ? "strict" : "strict"), value: direct };
+    }
+
+    const fenceStripped = stripFences(src.s);
+    if (fenceStripped !== src.s) {
+      const r = tryParse(fenceStripped);
+      if (r !== UNPARSEABLE) return { strategy: name("fence-strip"), value: r };
+    }
+    const sliced = extractBalancedSpan(fenceStripped);
+    if (sliced) {
+      const r = tryParse(sliced);
+      if (r !== UNPARSEABLE) return { strategy: name("balanced-span"), value: r };
+    }
+    const candidate = sliced ?? fenceStripped;
+    const repaired = applySoftRepairs(candidate);
+    if (repaired !== candidate) {
+      const r = tryParse(repaired);
+      if (r !== UNPARSEABLE) return { strategy: name("soft-repairs"), value: r };
+    }
   }
   return null;
 }

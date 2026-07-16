@@ -359,8 +359,10 @@ export function buildResearchToolsNote(enabled: boolean): string {
   if (!enabled) return "";
   return [
     "=== RESEARCH TOOLS ===",
-    "web_search + web_fetch (plus local file tools; MCP tools if configured).",
-    "Multiple targeted searches; prefer primary/official sources; web_fetch top URLs; cite with URLs; note contradictions.",
+    "Local first: use read / grep / list / glob for anything inside the clone (paths like src/data/panelRegistry.js).",
+    "Never invent URLs: no raw.githubusercontent.com/your-org/..., no example.com, no file:// — those always fail.",
+    "web_search: discover official endpoints; if search fails, do NOT retry the same query — web_fetch known .gov/.eu/bis.org/imf.org/worldbank.org URLs or stay local.",
+    "web_fetch: only real https:// URLs to primary/official sources; cite URLs; note contradictions.",
     "=== end RESEARCH TOOLS ===",
   ].join("\n");
 }

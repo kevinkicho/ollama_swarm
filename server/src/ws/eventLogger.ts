@@ -115,6 +115,45 @@ async function indexRotatedArchiveForRuns(
   }
 }
 
+/** Max chars of agent_streaming / huge transcript text written to disk logs. */
+export const EVENT_LOG_STREAM_TEXT_MAX = 8_000;
+
+function redactHeavyEvent(event: unknown): unknown {
+  if (!event || typeof event !== "object") return event;
+  const e = event as Record<string, unknown>;
+  if (e.type === "agent_streaming" && typeof e.text === "string" && e.text.length > EVENT_LOG_STREAM_TEXT_MAX) {
+    const t = e.text;
+    const head = Math.floor(EVENT_LOG_STREAM_TEXT_MAX * 0.4);
+    const tail = EVENT_LOG_STREAM_TEXT_MAX - head - 60;
+    return {
+      ...e,
+      text:
+        t.slice(0, head) +
+        `\n…[event-log truncated ${t.length.toLocaleString()} chars]…\n` +
+        t.slice(-Math.max(0, tail)),
+      _textLen: t.length,
+    };
+  }
+  if (e.type === "transcript_append" && e.entry && typeof e.entry === "object") {
+    const entry = e.entry as Record<string, unknown>;
+    if (typeof entry.text === "string" && entry.text.length > EVENT_LOG_STREAM_TEXT_MAX * 4) {
+      const t = entry.text;
+      return {
+        ...e,
+        entry: {
+          ...entry,
+          text:
+            t.slice(0, 4_000) +
+            `\n…[event-log truncated ${t.length.toLocaleString()} chars]…\n` +
+            t.slice(-4_000),
+          _textLen: t.length,
+        },
+      };
+    }
+  }
+  return event;
+}
+
 export function createEventLogger(opts: EventLoggerOpts): EventLogger {
   fs.mkdirSync(opts.logDir, { recursive: true });
   const filename = opts.filename ?? "current.jsonl";
@@ -160,7 +199,10 @@ export function createEventLogger(opts: EventLoggerOpts): EventLogger {
     log(event) {
       if (closed) return;
       try {
-        stream.write(JSON.stringify({ ts: Date.now(), event }) + "\n");
+        // 9f449937: agent_streaming with 100k–300k cumulative text made
+        // per-run debug.jsonl slices 30–50MB. Cap payload for disk only;
+        // live WS is capped separately in agentStreaming.ts.
+        stream.write(JSON.stringify({ ts: Date.now(), event: redactHeavyEvent(event) }) + "\n");
         writeCount++;
         rotateIfNeeded();
       } catch {

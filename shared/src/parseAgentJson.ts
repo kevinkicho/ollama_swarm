@@ -26,6 +26,8 @@ export function extractJsonCandidate(raw: string): JsonExtractResult | null {
     // continue
   }
 
+  // Prefer strip-first so `<think>…</think>{"hunks":…}` never hits the raw path
+  // with a leading '<' (run 9f449937 worker failures).
   const normalized = stripForJsonParse(raw);
   if (normalized.length > 0) {
     try {
@@ -33,6 +35,15 @@ export function extractJsonCandidate(raw: string): JsonExtractResult | null {
       return { json: normalized, tier: "normalized" };
     } catch {
       // continue
+    }
+    const fromNorm = extractJsonFromText(normalized);
+    if (fromNorm) {
+      try {
+        JSON.parse(fromNorm);
+        return { json: fromNorm, tier: "extracted" };
+      } catch {
+        // continue
+      }
     }
   }
 

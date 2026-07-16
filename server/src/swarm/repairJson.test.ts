@@ -79,6 +79,13 @@ test("repairAndParseJson — irrecoverable garbage → null", () => {
   assert.equal(repairAndParseJson("totally not json blah blah"), null);
 });
 
+test("repairAndParseJson — think tags before JSON → strip-think path", () => {
+  const got = repairAndParseJson('<think>planning the edit</think>\n{"hunks":[]}');
+  assert.ok(got);
+  assert.match(got!.strategy, /strip-think|strict|balanced/);
+  assert.deepEqual(got!.value, { hunks: [] });
+});
+
 test("repairAndParseJson — nested JSON → balanced-span includes whole thing", () => {
   const got = repairAndParseJson(
     'Result: {"outer": {"inner": [1, 2]}, "n": 3} done',
