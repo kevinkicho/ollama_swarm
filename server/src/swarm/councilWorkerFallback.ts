@@ -4,7 +4,8 @@ import { siblingModelFor } from "./blackboard/BlackboardRunnerConstants.js";
 /**
  * Next model for council worker stage-3 retry. Prefers explicit SIBLING_MODELS
  * pairs, then the first entry in providerFailover (or env default) that differs
- * from the agent's current model.
+ * from the agent's current model. When the chain is empty and degradation is
+ * enabled, falls back to SWARM_DEGRADATION_PREFERRED local models.
  */
 export function councilWorkerFallbackModel(
   currentModel: string,
@@ -19,8 +20,17 @@ export function councilWorkerFallbackModel(
       : appConfig.SWARM_PROVIDER_FAILOVER;
 
   for (const candidate of chain) {
-    if (candidate !== currentModel) return candidate;
+    if (candidate && candidate !== currentModel) return candidate;
   }
+
+  // Defense-in-depth for live setups with no failover chain configured
+  // (run 2964afe8: "no failover model in chain" after pure-<think> thrash).
+  if (appConfig.SWARM_DEGRADATION_FALLBACK) {
+    for (const candidate of appConfig.SWARM_DEGRADATION_PREFERRED) {
+      if (candidate && candidate !== currentModel) return candidate;
+    }
+  }
+
   return undefined;
 }
 
@@ -29,7 +39,9 @@ export function summarizeWorkerFailureReason(raw: string): string {
   const msg = raw.trim();
   if (!msg) return "unknown failure";
   if (/empty provider response/i.test(msg)) return "empty provider response";
+  if (/format\/provider|pure\s*<think>/i.test(msg)) return msg.slice(0, 160);
   if (/JSON parse failed/i.test(msg)) return msg.slice(0, 160);
+  if (/build_misroute|build_precondition/i.test(msg)) return msg.slice(0, 160);
   if (/hunk file/i.test(msg) && /not in expectedFiles/i.test(msg)) return msg.slice(0, 160);
   if (/search/i.test(msg) && /not found/i.test(msg)) return msg.slice(0, 160);
   if (/aborted|user stop/i.test(msg)) return "prompt aborted";

@@ -262,7 +262,10 @@ export interface RunSummary {
     cyclesCompleted: number;
     emptyExecutionCycles: number;
     failByBucket: Record<string, number>;
+    /** Attempt-level fail events. */
     todosFailed: number;
+    /** Distinct todos that failed at least once. */
+    todosFailedUnique?: number;
     todosSucceeded: number;
     lastEmptyStreak: number;
     maxEmptyStreak: number;

@@ -51,6 +51,10 @@ import {
   recordCycleTodoSuccess,
 } from "./cycleIntegrityStats.js";
 import { classifyCycleFailReason } from "@ollama-swarm/shared/cycleIntegrityReport";
+import {
+  BARE_TEST_RUNNERS,
+  shouldDemoteBuildToHunks,
+} from "./councilTodoClassify.js";
 import { applyOrGroundedRepair } from "./applyOrGroundedRepair.js";
 import {
   isResearchBlackout,
@@ -436,7 +440,7 @@ async function runCouncilWorker(
       skipped++;
       // Skip is not a hard fail bucket unless permanent/noop-ish.
       if (/permanent|noop|exhausted|wont-do|won't do/i.test(result.reason)) {
-        recordCycleFail(result.reason, state.cfg.runId);
+        recordCycleFail(result.reason, state.cfg.runId, todo.id);
       }
       ctx.onTodoSettled?.(settled);
     } else {
@@ -451,7 +455,7 @@ async function runCouncilWorker(
       state.todoQueue.fail(todo.id, result.error);
       emitCouncilTodoFailed(state.emit, state.todoQueue, todo.id);
       failed++;
-      recordCycleFail(result.error, state.cfg.runId);
+      recordCycleFail(result.error, state.cfg.runId, todo.id);
       ctx.recordFailure?.(todo.id, todo.description, result.error.slice(0, 200));
       ctx.onTodoSettled?.(settled);
     }
@@ -540,7 +544,21 @@ async function executeCouncilBuildTodo(
       status.not_added.length;
 
     if (changedFiles === 0) {
-      return { outcome: "failed", error: "build command produced no file changes" };
+      const bareRunner = BARE_TEST_RUNNERS.some(
+        (r) => command === r || command.startsWith(`${r} `),
+      );
+      if (bareRunner) {
+        return {
+          outcome: "failed",
+          error:
+            `build_misroute: bare \`${command}\` produced no file changes — ` +
+            `create/edit tests via hunks first, then run the suite`,
+        };
+      }
+      return {
+        outcome: "failed",
+        error: "build_misroute: build command produced no file changes",
+      };
     }
 
     const commitRes = await gitAdapter.commitAll(
@@ -573,7 +591,17 @@ async function executeTodoWithRetryChain(
   if (ctx.stopping()) return { outcome: "skipped", reason: "run stopping" };
 
   if (todo.kind === "build" && todo.command) {
-    return executeCouncilBuildTodo(agent, todo, state, gitAdapter, ctx);
+    // Defense-in-depth (run 2964afe8): queued build todos from older classify
+    // or mis-posted audit still demote create-test prose onto the hunk path.
+    if (shouldDemoteBuildToHunks(todo.description, todo.command)) {
+      ctx.appendSystem(
+        `[execution] ${agent.id} demoting build→hunks for create/author intent ` +
+          `(was command: \`${todo.command}\`) — build worker cannot create test files.`,
+      );
+      // Fall through to hunk path (do not call executeCouncilBuildTodo).
+    } else {
+      return executeCouncilBuildTodo(agent, todo, state, gitAdapter, ctx);
+    }
   }
 
   const expectedFiles = [...todo.expectedFiles];

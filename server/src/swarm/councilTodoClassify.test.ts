@@ -5,6 +5,8 @@ import {
   buildCouncilTodoPost,
   looksLikeCodeSnippet,
   looksLikeShellCommand,
+  shouldDemoteBuildToHunks,
+  isTestAuthorDescription,
 } from "./councilTodoClassify.js";
 
 test("classifyCouncilTodo — run script.py → python build", () => {
@@ -82,4 +84,73 @@ test("classifyCouncilTodo — data file add remains hunks", () => {
     ["data/superconductor_database.json"],
   );
   assert.equal(r.kind, "hunks");
+});
+
+// ─── Run 2964afe8: create-test prose must NOT become kind:build / vitest ───
+
+test("classifyCouncilTodo — Create Vitest unit tests is hunks (2964afe8)", () => {
+  const r = classifyCouncilTodo(
+    "Create Vitest unit tests for fao, who, and unep routes covering happy path and error cases",
+    [],
+  );
+  assert.equal(r.kind, "hunks");
+  assert.equal(r.command, undefined);
+});
+
+test("classifyCouncilTodo — Create server/__tests__/fao.test.js is hunks (2964afe8)", () => {
+  const r = classifyCouncilTodo(
+    "Create server/__tests__/fao.test.js — Vitest test for FAO route happy path and 404",
+    ["server/__tests__/fao.test.js"],
+  );
+  assert.equal(r.kind, "hunks");
+  assert.equal(r.command, undefined);
+});
+
+test("classifyCouncilTodo — bare vitest is build", () => {
+  const r = classifyCouncilTodo("vitest", []);
+  assert.equal(r.kind, "build");
+  assert.equal(r.command, "vitest");
+});
+
+test("classifyCouncilTodo — Run vitest is build", () => {
+  const r = classifyCouncilTodo("Run vitest after tests exist", []);
+  assert.equal(r.kind, "build");
+  assert.equal(r.command, "vitest");
+});
+
+test("classifyCouncilTodo — Execute `vitest` is build", () => {
+  const r = classifyCouncilTodo("Execute `vitest` and report results", []);
+  assert.equal(r.kind, "build");
+  assert.equal(r.command, "vitest");
+});
+
+test("classifyCouncilTodo — Create unit tests then run vitest prefers hunks (create wins)", () => {
+  // Create is present: author path first; run vitest is a later step after files exist
+  const r = classifyCouncilTodo(
+    "Create unit tests for fao then run vitest",
+    ["server/__tests__/fao.test.js"],
+  );
+  assert.equal(r.kind, "hunks");
+});
+
+test("shouldDemoteBuildToHunks — create Vitest prose", () => {
+  assert.equal(
+    shouldDemoteBuildToHunks(
+      "Create Vitest unit tests for fao routes",
+      "vitest",
+    ),
+    true,
+  );
+  assert.equal(shouldDemoteBuildToHunks("Run vitest", "vitest"), false);
+  assert.equal(isTestAuthorDescription("Create Vitest unit tests for fao"), true);
+});
+
+test("buildCouncilTodoPost — Create Vitest does not set kind build", () => {
+  const post = buildCouncilTodoPost({
+    description: "Create Vitest unit tests for WHO route",
+    expectedFiles: ["server/__tests__/who.test.js"],
+    createdBy: "auditor",
+  });
+  assert.equal(post.kind, undefined);
+  assert.equal(post.command, undefined);
 });

@@ -35,6 +35,8 @@ import {
   MAX_STRETCH_WAVES_PER_RUN,
 } from "./productiveProgress.js";
 import { notifyGuardTrip } from "./guardNotify.js";
+import { filterAuditTodosAgainstPermanentSkips } from "./councilSkipReconcile.js";
+import { isPermanentSkipReason } from "./councilCycleSettlement.js";
 
 export interface CouncilAuditHost {
   state: CouncilAdapterState;
@@ -165,6 +167,18 @@ export async function runCouncilAuditCycle(
       criteriaIds: t.criteriaIds,
       reason: t.reason,
       expectedFiles: t.expectedFiles,
+    }));
+
+  /** Permanent-skips (attempts exhausted / noop) — suppress audit re-mint of same shape. */
+  const permanentSkipEvidence = host.state.todoQueue
+    .list()
+    .filter((t) => t.status === "skipped" && isPermanentSkipReason(t.reason))
+    .map((t) => ({
+      description: t.description,
+      expectedFiles: t.expectedFiles,
+      reason: t.reason,
+      criterionId: t.criterionId,
+      criteriaIds: t.criteriaIds,
     }));
 
   const criteriaBeforeAudit = host.state.contract.criteria;
@@ -507,6 +521,26 @@ export async function runCouncilAuditCycle(
       }
     } catch {
       /* best-effort */
+    }
+  }
+
+  // Run 2964afe8: after permanent-skip of create-test class, audit re-minted
+  // identical "Create Vitest…" todos → cycles 7–8 zero progress. Suppress unless
+  // this cycle already made durable progress (commits / met flips).
+  {
+    const hadDurable =
+      commitsThisCycle > 0 || metFlips > 0 || ledgerPromoted.length > 0;
+    const { kept, dropped } = filterAuditTodosAgainstPermanentSkips(
+      auditTodos,
+      permanentSkipEvidence,
+      { hadDurableProgress: hadDurable },
+    );
+    if (dropped.length > 0) {
+      host.appendSystem(
+        `[audit] Dropped ${dropped.length} todo(s) re-minting permanent-skipped create/author shapes ` +
+          `(no durable progress this cycle).`,
+      );
+      auditTodos = kept;
     }
   }
 

@@ -64,6 +64,29 @@ export type ParseJsonEnvelopeResult =
   | { ok: true; value: unknown; tier: JsonExtractTier }
   | { ok: false; reason: string };
 
+/**
+ * True when the blob is (almost) pure thinking with no JSON body after strip.
+ * Run 2964afe8 / eee6718f: DeepSeek emits `<think>…` under format:json.
+ * Callers treat this as format/provider failure (failover candidate).
+ */
+export function isPureThinkNoJson(raw: string): boolean {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return false;
+  const hasThink =
+    /<think\b/i.test(trimmed)
+    || /<\/think>/i.test(trimmed)
+    || /<thinking\b/i.test(trimmed);
+  if (!hasThink) return false;
+  const normalized = stripForJsonParse(raw);
+  if (!normalized || normalized.trim().length < 2) return true;
+  // Residual body still has no JSON markers
+  const body = normalized.trim();
+  if (!body.includes("{") && !body.includes("[") && !/```(?:json)?/i.test(body)) {
+    return true;
+  }
+  return false;
+}
+
 /** Parse top-level JSON from agent output after think/tool stripping. */
 export function parseJsonEnvelope(raw: string): ParseJsonEnvelopeResult {
   const candidate = extractJsonCandidate(raw);
@@ -75,10 +98,25 @@ export function parseJsonEnvelope(raw: string): ParseJsonEnvelopeResult {
         reason: "empty response — model produced no output after stripping thinking tags",
       };
     }
+    if (isPureThinkNoJson(raw)) {
+      return {
+        ok: false,
+        reason:
+          "format/provider: pure <think> response with no JSON envelope (failover candidate)",
+      };
+    }
     try {
       JSON.parse(trimmed);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      // Leading '<' from unstripped think is the classic pure-think failure mode
+      if (/^unexpected token\s*['"]?</i.test(msg) && /<think/i.test(trimmed)) {
+        return {
+          ok: false,
+          reason:
+            "format/provider: pure <think> response with no JSON envelope (failover candidate)",
+        };
+      }
       return { ok: false, reason: `JSON parse failed: ${msg}` };
     }
     return {

@@ -8,6 +8,7 @@ import {
   type CycleIntegrityReport,
   classifyCycleFailReason,
   createCycleIntegrityCounters,
+  isCycleFailBucket,
   noteCycleFail,
   noteCycleSuccess,
   noteEmptyExecutionCycle,
@@ -24,6 +25,7 @@ export type {
 export {
   classifyCycleFailReason,
   createCycleIntegrityCounters,
+  isCycleFailBucket,
   snapshotCycleIntegrity,
 } from "@ollama-swarm/shared/cycleIntegrityReport";
 
@@ -48,29 +50,22 @@ export function startCycleIntegrityTracking(runId?: string | null): CycleIntegri
   return c;
 }
 
+/**
+ * @param reasonOrBucket free-text fail reason or a known bucket name
+ * @param runId optional run scope
+ * @param todoId optional — when set, increments todosFailedUnique once per id
+ */
 export function recordCycleFail(
   reasonOrBucket: string | CycleFailBucket,
   runId?: string | null,
+  todoId?: string,
 ): void {
   const c = resolve(runId);
   const bucket =
-    typeof reasonOrBucket === "string" &&
-    ![
-      "apply_miss",
-      "json_parse",
-      "no_hunks",
-      "tool_loop",
-      "reaper",
-      "noop",
-      "permanent_skip",
-      "schema",
-      "transport",
-      "empty_plan",
-      "other",
-    ].includes(reasonOrBucket)
+    typeof reasonOrBucket === "string" && !isCycleFailBucket(reasonOrBucket)
       ? classifyCycleFailReason(reasonOrBucket)
       : (reasonOrBucket as CycleFailBucket);
-  noteCycleFail(c, bucket);
+  noteCycleFail(c, bucket, todoId);
 }
 
 export function recordCycleTodoSuccess(runId?: string | null): void {

@@ -75,6 +75,12 @@ test("councilWorkerRunner — stage 2 uses buildWorkerRepairPrompt (not duplicat
   assert.doesNotMatch(SRC, /tryBrainFallback/i, "worker recovery stays in swarm agents, not in-run brain");
 });
 
+test("councilWorkerRunner — demotes build→hunks for create-test intent (2964afe8)", () => {
+  assert.match(SRC, /shouldDemoteBuildToHunks/, "must demote misrouted build todos");
+  assert.match(SRC, /demoting build→hunks/, "must log demotion");
+  assert.match(SRC, /build_misroute/, "must label bare runner no-op as build_misroute");
+});
+
 test("councilWorkerRunner — stage-3 failover uses providerFailover chain", () => {
   assert.match(SRC, /councilWorkerFallbackModel/, "must resolve fallback from failover chain");
   assert.match(SRC, /state\.cfg\.providerFailover/, "must pass per-run providerFailover");

@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { extractJsonCandidate, parseJsonEnvelope } from "./parseAgentJson.js";
+import {
+  extractJsonCandidate,
+  isPureThinkNoJson,
+  parseJsonEnvelope,
+} from "./parseAgentJson.js";
 
 describe("extractJsonCandidate", () => {
   it("returns direct tier for bare JSON", () => {
@@ -39,5 +43,24 @@ describe("parseJsonEnvelope", () => {
     );
     assert.equal(r.ok, true);
     if (r.ok) assert.ok(Array.isArray(r.value));
+  });
+
+  it("labels pure <think> as format/provider failure (2964afe8)", () => {
+    const raw =
+      "<think>We need to implement the FAO route carefully with all edge cases…";
+    assert.equal(isPureThinkNoJson(raw), true);
+    const r = parseJsonEnvelope(raw);
+    assert.equal(r.ok, false);
+    if (!r.ok) {
+      assert.match(r.reason, /format\/provider/i);
+      assert.match(r.reason, /failover candidate/i);
+    }
+  });
+
+  it("does not flag think+JSON as pure think", () => {
+    const raw = '<think>plan</think>\n{"hunks":[]}';
+    assert.equal(isPureThinkNoJson(raw), false);
+    const r = parseJsonEnvelope(raw);
+    assert.equal(r.ok, true);
   });
 });

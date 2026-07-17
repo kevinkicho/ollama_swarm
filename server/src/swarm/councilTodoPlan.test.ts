@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   councilExecutionTier,
+  MAX_COUNCIL_TODOS_PER_BATCH,
   mergeOverlappingCouncilTodos,
   prepareCouncilTodoBatch,
   scoreCouncilTodoForDequeue,
@@ -83,4 +84,25 @@ test("scoreCouncilTodoForDequeue — allows build when only build pending", () =
     false,
   );
   assert.ok(score > Number.NEGATIVE_INFINITY);
+});
+
+test("councilExecutionTier — Create Vitest is test tier not build (2964afe8)", () => {
+  assert.equal(
+    councilExecutionTier("Create Vitest unit tests for fao", [
+      "server/__tests__/fao.test.js",
+    ]),
+    "test",
+  );
+});
+
+test("prepareCouncilTodoBatch — caps ambition flood (2964afe8)", () => {
+  const logs: string[] = [];
+  const many = Array.from({ length: MAX_COUNCIL_TODOS_PER_BATCH + 5 }, (_, i) => ({
+    description: `Implement feature ${i}`,
+    expectedFiles: [`src/f${i}.ts`],
+    createdBy: "x",
+  }));
+  const out = prepareCouncilTodoBatch(many, (m) => logs.push(m));
+  assert.equal(out.length, MAX_COUNCIL_TODOS_PER_BATCH);
+  assert.ok(logs.some((l) => /Capping/i.test(l)));
 });

@@ -145,6 +145,51 @@ test("filterAuditTodosAgainstSkips — drops duplicate todos for skipped work", 
   assert.equal(filtered[0]!.expectedFiles[0], "bug.ts");
 });
 
+test("filterAuditTodosAgainstPermanentSkips — drops re-minted Create Vitest shapes (2964afe8)", async () => {
+  const { filterAuditTodosAgainstPermanentSkips } = await import("./councilSkipReconcile.js");
+  const { kept, dropped } = filterAuditTodosAgainstPermanentSkips(
+    [
+      {
+        description: "Create Vitest unit tests for fao route",
+        expectedFiles: ["server/__tests__/fao.test.js"],
+      },
+      {
+        description: "Implement FAO handler error mapping",
+        expectedFiles: ["server/src/routes/fao.ts"],
+      },
+    ],
+    [
+      {
+        description: "Create Vitest unit tests for fao route",
+        expectedFiles: ["server/__tests__/fao.test.js"],
+        reason: "permanent:attempts-exhausted: 2 attempts",
+      },
+    ],
+    { hadDurableProgress: false },
+  );
+  assert.equal(dropped.length, 1);
+  assert.match(dropped[0]!.description, /Create Vitest/i);
+  assert.equal(kept.length, 1);
+  assert.match(kept[0]!.description, /Implement FAO/);
+});
+
+test("filterAuditTodosAgainstPermanentSkips — allows remint after durable progress", async () => {
+  const { filterAuditTodosAgainstPermanentSkips } = await import("./councilSkipReconcile.js");
+  const { kept, dropped } = filterAuditTodosAgainstPermanentSkips(
+    [{ description: "Create Vitest unit tests for fao", expectedFiles: [] }],
+    [
+      {
+        description: "Create Vitest unit tests for fao",
+        expectedFiles: [],
+        reason: "permanent:attempts-exhausted",
+      },
+    ],
+    { hadDurableProgress: true },
+  );
+  assert.equal(dropped.length, 0);
+  assert.equal(kept.length, 1);
+});
+
 test("promoteCriteriaFromSkipEvidence — promotes covered unmet criteria", () => {
   const criteria: ExitCriterion[] = [
     {

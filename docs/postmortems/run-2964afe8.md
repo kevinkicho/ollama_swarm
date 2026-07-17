@@ -268,4 +268,16 @@ These are **structural**; order is dependency-aware.
 
 ---
 
-*No code was changed for this postmortem; analysis only, per request to avoid quick fixes.*
+## Remediation status
+
+Structural fixes landed (not drive-by):
+
+| Area | Fix |
+|------|-----|
+| **A. Classifier** | `create\|write\|scaffold\|…` file-author intent; bare runner → build only with run intent; transcript regressions |
+| **B. Build worker** | Execute-time demote build→hunks for create-test prose; `build_misroute` when bare vitest no-ops |
+| **C. Metrics** | `todosFailedUnique` + attempt-level `todosFailed`; `build_misroute` bucket |
+| **D. Ambition/audit** | `MAX_COUNCIL_TODOS_PER_BATCH=10`; filter audit re-mint of permanent-skipped create-test shapes |
+| **E. JSON/failover** | Pure-`<think>` → `format/provider` reason; degradation preferred models when chain empty |
+
+*Initial postmortem was analysis-only; remediation implemented in follow-up commit.*

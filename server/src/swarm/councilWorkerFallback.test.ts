@@ -29,8 +29,14 @@ describe("councilWorkerFallbackModel", () => {
 describe("summarizeWorkerFailureReason", () => {
   it("passes through JSON parse reasons", () => {
     assert.equal(
-      summarizeWorkerFailureReason('JSON parse failed: Unexpected token'),
+      summarizeWorkerFailureReason("JSON parse failed: Unexpected token"),
       "JSON parse failed: Unexpected token",
     );
+  });
+
+  it("passes through format/provider pure-think reasons", () => {
+    const r =
+      "format/provider: pure <think> response with no JSON envelope (failover candidate)";
+    assert.equal(summarizeWorkerFailureReason(r), r);
   });
 });

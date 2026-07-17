@@ -165,6 +165,118 @@ export function filterAuditTodosAgainstSkips<
   });
 }
 
+/** Permanent-skip evidence with description for re-mint suppression. */
+export interface PermanentSkipEvidence {
+  description: string;
+  expectedFiles: readonly string[];
+  reason?: string;
+  criterionId?: string;
+  criteriaIds?: readonly string[];
+}
+
+function normalizeDescKey(description: string): string {
+  return description
+    .toLowerCase()
+    .replace(/[^a-z0-9\s./_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 160);
+}
+
+/**
+ * Shape key for create-test / author todos so audit cannot re-mint the same
+ * thrash class after permanent-skip (run 2964afe8 cycles 5/7/8).
+ */
+export function todoAuthorShapeKey(
+  description: string,
+  expectedFiles: readonly string[] = [],
+): string {
+  const files = [...expectedFiles]
+    .map((f) => f.replace(/\\/g, "/").toLowerCase())
+    .sort()
+    .join("|");
+  // Collapse "Create Vitest unit tests for fao…" style to a stable class
+  const desc = normalizeDescKey(description)
+    .replace(/\b(create|write|scaffold|generate|add|author)\b/g, "author")
+    .replace(/\b(vitest|jest|mocha|pytest)\b/g, "testrunner")
+    .replace(/\b(unit\s+tests?|tests?)\b/g, "tests");
+  return `${desc}::${files}`;
+}
+
+function isCreateTestLike(description: string): boolean {
+  return (
+    /\b(create|write|scaffold|generate|add)\b/i.test(description)
+    && (/\b(vitest|jest|mocha|pytest|unit\s+test|test\s+file|__tests__|\.test\.|\.spec\.)\b/i.test(
+      description,
+    )
+      || /__tests__|\.test\.|\.spec\./i.test(description))
+  );
+}
+
+/**
+ * Drop audit todos that re-mint the same create-test / author shape as a
+ * permanent-skipped todo, unless durable progress was made this cycle
+ * (commits / met flips) — in which case a retry may be warranted.
+ */
+export function filterAuditTodosAgainstPermanentSkips<
+  T extends { description: string; expectedFiles: readonly string[]; criterionId?: string },
+>(
+  newTodos: readonly T[],
+  permanentSkips: readonly PermanentSkipEvidence[],
+  opts?: { hadDurableProgress?: boolean },
+): { kept: T[]; dropped: T[] } {
+  if (opts?.hadDurableProgress) {
+    return { kept: [...newTodos], dropped: [] };
+  }
+  if (permanentSkips.length === 0) {
+    return { kept: [...newTodos], dropped: [] };
+  }
+
+  const skipKeys = new Set(
+    permanentSkips.map((s) => todoAuthorShapeKey(s.description, s.expectedFiles)),
+  );
+  const skipFiles = permanentSkips.flatMap((s) => s.expectedFiles);
+  const skipCriterionIds = new Set(
+    permanentSkips.flatMap((s) => {
+      const ids: string[] = [];
+      if (s.criterionId) ids.push(s.criterionId);
+      if (s.criteriaIds) ids.push(...s.criteriaIds);
+      return ids;
+    }),
+  );
+
+  const kept: T[] = [];
+  const dropped: T[] = [];
+  for (const t of newTodos) {
+    const key = todoAuthorShapeKey(t.description, t.expectedFiles);
+    const sameShape = skipKeys.has(key);
+    const sameCriterion =
+      !!t.criterionId && skipCriterionIds.has(t.criterionId);
+    const fileOverlap =
+      t.expectedFiles.length > 0
+      && skipCoversCriterionFiles(skipFiles, t.expectedFiles);
+    const createTestRemint =
+      isCreateTestLike(t.description)
+      && permanentSkips.some((s) => isCreateTestLike(s.description))
+      && (sameShape || sameCriterion || fileOverlap
+        // Same class of "Create Vitest …" even without file overlap
+        || (isCreateTestLike(t.description)
+          && permanentSkips.some(
+            (s) =>
+              isCreateTestLike(s.description)
+              && normalizeDescKey(s.description).slice(0, 40)
+                === normalizeDescKey(t.description).slice(0, 40),
+          )));
+
+    if (sameShape || sameCriterion || createTestRemint) {
+      dropped.push(t);
+    } else {
+      kept.push(t);
+    }
+  }
+  return { kept, dropped };
+}
+
 /**
  * Promote criteria to met when skip evidence covers their files with an
  * already-done reason. Optional repoFiles enforces disk grounding.

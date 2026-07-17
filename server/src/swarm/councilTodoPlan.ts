@@ -2,6 +2,13 @@ import type { PostTodoInput } from "./blackboard/TodoQueue.js";
 import { expectedFilesOverlap } from "./blackboard/hypothesisGrouping.js";
 import { buildCouncilTodoPost, classifyCouncilTodo } from "./councilTodoClassify.js";
 
+/**
+ * Hard cap on todos enqueued in a single prepare/post batch.
+ * Run 2964afe8: tier-4 standup flooded 17 todos (13 mislabeled build) → thrash.
+ * Blackboard planner already caps at 5; council was unbounded.
+ */
+export const MAX_COUNCIL_TODOS_PER_BATCH = 10;
+
 export interface CouncilTodoDraft {
   description: string;
   expectedFiles: readonly string[];
@@ -121,6 +128,14 @@ export function prepareCouncilTodoBatch(
     .sort(([a], [b]) => TIER_RANK[a as CouncilExecutionTier] - TIER_RANK[b as CouncilExecutionTier])
     .map(([tier, n]) => `${tier}:${n}`);
   appendSystem?.(`[execution-plan] Ordered ${sorted.length} todo(s) — ${parts.join(", ")} (build last).`);
+
+  if (sorted.length > MAX_COUNCIL_TODOS_PER_BATCH) {
+    appendSystem?.(
+      `[execution-plan] Capping ${sorted.length} → ${MAX_COUNCIL_TODOS_PER_BATCH} todos this batch ` +
+        `(ambition flood guard; remainder deferred to later cycles).`,
+    );
+    return sorted.slice(0, MAX_COUNCIL_TODOS_PER_BATCH);
+  }
 
   return sorted;
 }
