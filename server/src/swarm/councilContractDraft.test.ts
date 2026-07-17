@@ -70,4 +70,14 @@ describe("council contract drafts use repo tools", () => {
     assert.match(deriveBlock, /runCouncilContractEmitForAgent/);
     assert.match(deriveBlock, /shared explore complete/);
   });
+
+  it("council adapter defaults multi-agent shared explore and emit-only merge (d3f56d9a)", () => {
+    assert.match(COUNCIL_ADAPTER, /councilSharedExplore !== false/);
+    assert.match(COUNCIL_ADAPTER, /CONTRACT_MERGE_MAX_TOOL_TURNS/);
+    assert.match(COUNCIL_ADAPTER, /emit-only/);
+    assert.match(COUNCIL_ADAPTER, /failedDraftAgentIds/);
+    assert.match(COUNCIL_ADAPTER, /activity\?\.maxToolTurns/);
+    assert.match(COUNCIL_ADAPTER, /contractExploreJsonNudge/);
+    assert.match(COUNCIL_ADAPTER, /recordCycleFail/);
+  });
 });

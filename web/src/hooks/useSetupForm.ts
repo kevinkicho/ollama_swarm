@@ -102,7 +102,8 @@ export function useSetupForm(navigate: (path: string) => void) {
    */
   const [autoApprove, setAutoApprove] = useState(false);
   /** Council: shared contract explore (default off — independent explore). */
-  const [councilSharedExplore, setCouncilSharedExplore] = useState(false);
+  // Default on for multi-drafter council (d3f56d9a: independent explore thrash).
+  const [councilSharedExplore, setCouncilSharedExplore] = useState(true);
   /** Council: collective research standup each cycle (default off). */
   const [councilSharedResearch, setCouncilSharedResearch] = useState(false);
   /** Council: how synthesis settles (revise=merge default; judge=pick one). */
@@ -309,7 +310,8 @@ export function useSetupForm(navigate: (path: string) => void) {
         ...(autoApprove ? { autoApprove: true } : {}),
         ...(preset.id === "council" || preset.id === "blackboard"
           ? {
-              councilSharedExplore: councilSharedExplore || undefined,
+              // Always send bool so uncheck (false) opts out of shared explore default.
+              councilSharedExplore,
               councilSharedResearch:
                 preset.id === "council" && councilSharedResearch ? true : undefined,
             }

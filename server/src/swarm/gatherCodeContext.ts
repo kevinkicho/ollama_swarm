@@ -1,8 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const MAX_EXCERPTS = 8;
-const EXCERPT_LINES = 50;
+/** Seed diet (d3f56d9a): fewer/shorter excerpts — tools can deep-read. */
+const MAX_EXCERPTS = 5;
+const EXCERPT_LINES = 30;
+const MAX_EXCERPT_CHARS = 800;
 
 function scoreRelevance(path: string, keywords: string[]): number {
   const lower = path.toLowerCase();
@@ -40,7 +42,11 @@ export async function gatherCodeContext(
     try {
       const content = await readFile(resolve(clonePath, path), "utf8");
       const lines = content.split("\n").slice(0, EXCERPT_LINES);
-      excerpts.push({ path, excerpt: lines.join("\n") });
+      let excerpt = lines.join("\n");
+      if (excerpt.length > MAX_EXCERPT_CHARS) {
+        excerpt = `${excerpt.slice(0, MAX_EXCERPT_CHARS)}\n…`;
+      }
+      excerpts.push({ path, excerpt });
     } catch {
       // skip unreadable files
     }

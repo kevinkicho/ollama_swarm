@@ -179,7 +179,29 @@ export function discussionDraftJsonNudge(): { atTurn: number; message: string } 
   };
 }
 
-/** Tighter cap for blackboard planning explore turns (contract / todos / research). */
+/**
+ * Contract explore (run d3f56d9a): agents grepped until full planner cap (20)
+ * and never emitted criteria JSON. Cap + nudge force emit-biased explore.
+ */
+export const EXPLORE_MAX_CONTRACT_EXPLORE_TOOL_TURNS = 10;
+
+export const CONTRACT_EXPLORE_JSON_NUDGE_TURN = 6;
+
+export const CONTRACT_EXPLORE_JSON_NUDGE_MESSAGE =
+  "Stop exploring the repo. Emit the exit contract JSON NOW "
+  + "(missionStatement + criteria with expectedFiles). No more tool calls.";
+
+/** Contract merge must not re-open repo tour — JSON synthesis only. */
+export const CONTRACT_MERGE_MAX_TOOL_TURNS = 0;
+
+export function contractExploreJsonNudge(): { atTurn: number; message: string } {
+  return {
+    atTurn: CONTRACT_EXPLORE_JSON_NUDGE_TURN,
+    message: CONTRACT_EXPLORE_JSON_NUDGE_MESSAGE,
+  };
+}
+
+/** Tighter cap for blackboard planning explore turns (todos / research / replan). */
 export const EXPLORE_MAX_PLANNING_TOOL_TURNS = 12;
 
 /** Goal-generation pre-pass — seed file list is usually sufficient. */
@@ -205,7 +227,9 @@ export function resolveMaxToolTurnsForPlanningPhase(
   switch (phase) {
     case "goal-pre-pass":
       return fast ? 4 : EXPLORE_MAX_GOAL_PREPASS_TOOL_TURNS;
+    // d3f56d9a: contract explore needs emit-biased budget (not full planner 12/20)
     case "contract-explore":
+      return fast ? 6 : EXPLORE_MAX_CONTRACT_EXPLORE_TOOL_TURNS;
     case "planner-todos-explore":
     case "research-pre-pass":
     case "tier-up":
@@ -213,7 +237,6 @@ export function resolveMaxToolTurnsForPlanningPhase(
       return fast ? 8 : EXPLORE_MAX_PLANNING_TOOL_TURNS;
   }
 }
-
 export function allowsUnboundedToolTurns(profile: ToolProfileId): boolean {
   // Legacy name — explore profiles use EXPLORE_MAX_TOOL_TURNS, not infinity.
   return (

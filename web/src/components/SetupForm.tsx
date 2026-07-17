@@ -461,7 +461,7 @@ export function SetupForm() {
                 <span>
                   Shared contract explore
                   <span className="text-ink-500 ml-1">
-                    (default off — each agent explores independently; on = one shared explore brief)
+                    (default on for multi-drafter — one shared explore brief, then emit-only drafts; uncheck for independent explore)
                   </span>
                 </span>
               </label>

@@ -4,6 +4,9 @@ import {
   EMIT_ONLY_PROFILE_ID,
   EXPLORE_MAX_TOOL_TURNS,
   EXPLORE_MAX_PLANNING_TOOL_TURNS,
+  EXPLORE_MAX_CONTRACT_EXPLORE_TOOL_TURNS,
+  CONTRACT_MERGE_MAX_TOOL_TURNS,
+  contractExploreJsonNudge,
   resolveMaxToolTurnsForPlanningPhase,
   allowsUnboundedToolTurns,
   effectiveToolProfileId,
@@ -77,8 +80,16 @@ describe("toolProfiles", () => {
   });
 
   it("resolveMaxToolTurnsForPlanningPhase uses tighter caps", () => {
-    assert.equal(resolveMaxToolTurnsForPlanningPhase("contract-explore", {}), EXPLORE_MAX_PLANNING_TOOL_TURNS);
+    assert.equal(
+      resolveMaxToolTurnsForPlanningPhase("contract-explore", {}),
+      EXPLORE_MAX_CONTRACT_EXPLORE_TOOL_TURNS,
+    );
+    assert.equal(EXPLORE_MAX_CONTRACT_EXPLORE_TOOL_TURNS, 10);
+    assert.equal(resolveMaxToolTurnsForPlanningPhase("contract-explore", { planningFastPath: true }), 6);
+    assert.equal(resolveMaxToolTurnsForPlanningPhase("planner-todos-explore", {}), EXPLORE_MAX_PLANNING_TOOL_TURNS);
     assert.equal(resolveMaxToolTurnsForPlanningPhase("goal-pre-pass", { planningFastPath: true }), 4);
+    assert.equal(CONTRACT_MERGE_MAX_TOOL_TURNS, 0);
+    assert.equal(contractExploreJsonNudge().atTurn, 6);
   });
 
   it("workerJsonNudge and wall-clock defaults", async () => {

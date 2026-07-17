@@ -317,11 +317,16 @@ export function buildCouncilContractMergePrompt(
     })
     .join("\n\n");
 
+  // Cap inventory — merge is emit-only; full list bloats every token (d3f56d9a).
+  const maxMergeFiles = 80;
   const fileList = seed.repoFiles.length > 0
-    ? seed.repoFiles.join("\n")
+    ? seed.repoFiles.slice(0, maxMergeFiles).join("\n")
+      + (seed.repoFiles.length > maxMergeFiles
+        ? `\n... and ${seed.repoFiles.length - maxMergeFiles} more`
+        : "")
     : "(no files listed — clone may be unreadable)";
   const readme = seed.readmeExcerpt
-    ? seed.readmeExcerpt.slice(0, 2000)
+    ? seed.readmeExcerpt.slice(0, 1_200)
     : "(no README found at repo root)";
 
   const directive = seed.userDirective?.trim();
@@ -347,12 +352,12 @@ export function buildCouncilContractMergePrompt(
     fileList,
     "=== end REPO FILE LIST ===",
     "",
-    "=== README excerpt (first 2000 chars) ===",
+    "=== README excerpt (capped) ===",
     readme,
     "=== end README ===",
     "",
     "MERGE RULES:",
-    "1. Output ONLY a single JSON object of shape {\"missionStatement\": string, \"criteria\": [...]}. No prose, no fences.",
+    "1. Output ONLY a single JSON object of shape {\"missionStatement\": string, \"criteria\": [...]}. No prose, no fences. Do NOT call tools — drafts + file list are sufficient.",
     "2. `missionStatement`: pick the clearest wording across the drafts, or synthesize a sharper one. One sentence.",
     "3. `criteria`: UNION the distinct outcomes across drafts. DEDUPE criteria that express the same outcome in different wording — pick the clearest phrasing and keep it once. Prefer SPECIFIC over VAGUE.",
     "4. For each criterion's `expectedFiles`: when drafts disagree on paths, pick paths grounded in the REPO FILE LIST; when unsure, default to `[]` (the auditor's linked-commit fallback will rebind from later work).",

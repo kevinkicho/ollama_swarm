@@ -159,23 +159,54 @@ export async function promptAgent(
   return text ?? "";
 }
 
+export type CouncilPromptActivity = {
+  kind?: string;
+  label?: string;
+  maxToolTurns?: number;
+  mode?: "explore" | "emit";
+};
+
+/**
+ * Council planner/contract prompts. Must forward maxToolTurns + toolLoopNudge
+ * (run d3f56d9a: activity.maxToolTurns was dropped → full profile 20-turn thrash).
+ */
 export async function promptPlannerSafely(
   agent: Agent,
   promptText: string,
   agentName: import("../tools/ToolDispatcher.js").ProfileName | undefined,
   manager: { list: () => Agent[]; markStatus: (id: string, status: string) => void; recordPromptComplete: (id: string, data: any) => void },
   providerFailover?: readonly string[],
-  activity?: { kind?: string; label?: string },
+  activity?: CouncilPromptActivity,
   signal?: AbortSignal,
   pendingToolTraceByAgent?: Map<string, ToolTraceEntry[]>,
   toolProfileCfg?: unknown,
+  ollamaFormat?: "json" | Record<string, unknown>,
+  toolLoopNudge?: { atTurn: number; message: string },
 ): Promise<{ response: string; agentUsed: Agent }> {
+  const { contractExploreJsonNudge } = await import("@ollama-swarm/shared/toolProfiles");
+  const nudge =
+    toolLoopNudge
+    ?? (activity?.kind === "contract" && activity.mode === "explore"
+      ? contractExploreJsonNudge()
+      : undefined);
+
   const raw = await promptWithFailoverAuto(agent, promptText, {
     manager: manager as any,
     agentName: agentName ?? resolveCouncilToolProfile(toolProfileCfg),
     formatExpect: "json",
     signal: signal ?? new AbortController().signal,
-    ...(activity ? { activity: { kind: activity.kind ?? "council", label: activity.label } } : {}),
+    ...(activity
+      ? {
+          activity: {
+            kind: activity.kind ?? "council",
+            label: activity.label,
+            ...(activity.mode ? { mode: activity.mode } : {}),
+          },
+        }
+      : {}),
+    ...(activity?.maxToolTurns !== undefined ? { maxToolTurns: activity.maxToolTurns } : {}),
+    ...(nudge ? { toolLoopNudge: nudge } : {}),
+    ...(ollamaFormat !== undefined ? { ollamaFormat } : {}),
     ...(pendingToolTraceByAgent
       ? { onTool: makeBufferedToolHandler(pendingToolTraceByAgent, agent.id) }
       : {}),
@@ -183,7 +214,6 @@ export async function promptPlannerSafely(
   const text = extractProviderText(raw);
   return { response: text ?? "", agentUsed: agent };
 }
-
 /** Minimal ContractContext for council paths that call shared buildSeed(). */
 function councilBuildSeedContext(
   state: CouncilAdapterState,
@@ -216,17 +246,18 @@ function councilBuildSeedContext(
     emitAgentState: () => {},
     getPlannerFallbackModel: () => undefined,
     updateAgentModel: () => {},
-    promptPlannerSafely: (agent, promptText, agentName) =>
+    promptPlannerSafely: (agent, promptText, agentName, ollamaFormat, activity) =>
       promptPlannerSafely(
         agent,
         promptText,
         agentName,
         state.manager,
         state.cfg.providerFailover,
-        undefined,
+        activity,
         undefined,
         state.pendingToolTraceByAgent,
         state.cfg,
+        ollamaFormat,
       ),
     promptAgent: (agent, prompt, agentName, formatExpect) =>
       promptAgent(
@@ -300,13 +331,16 @@ export async function runContractDerivation(
         draftAbort,
         state.pendingToolTraceByAgent,
         state.cfg,
+        ollamaFormat,
       ),
   };
 
+  // Multi-agent: shared explore → N emit-only drafts by default (d3f56d9a:
+  // independent explore burned 20-tool loops × fat seed). Opt out with
+  // councilSharedExplore: false.
   const useSharedExplore =
     allAgents.length > 1
-    && state.cfg.councilSharedExplore === true;
-
+    && state.cfg.councilSharedExplore !== false;
   const seedDirectEmit = isSeedSufficientForDirectEmit(seed, state.cfg);
   let sharedBrief: string | null = null;
   if (useSharedExplore) {
@@ -362,17 +396,32 @@ export async function runContractDerivation(
   }, draftSpacing);
 
   const drafts: Array<{ agentId: string; contract: any }> = [];
+  const failedDraftAgentIds = new Set<string>();
   for (let i = 0; i < draftResults.length; i++) {
     const r = draftResults[i]!;
     const agent = allAgents[i]!;
     if (r.status === "rejected") {
       const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
       state.appendSystem(`Council draft from ${agent.id} failed (${msg}).`);
+      failedDraftAgentIds.add(agent.id);
+      // Contract-phase tool thrash must land in cycleIntegrity (d3f56d9a).
+      try {
+        const { recordCycleFail } = await import("./cycleIntegrityStats.js");
+        recordCycleFail(msg, state.cfg.runId, agent.id);
+      } catch {
+        /* best-effort */
+      }
       continue;
     }
-    if (!r.value) continue;
+    if (!r.value) {
+      failedDraftAgentIds.add(agent.id);
+      continue;
+    }
     const parsed = parseFirstPassContractResponse(r.value.text);
-    if (!parsed.ok) continue;
+    if (!parsed.ok) {
+      failedDraftAgentIds.add(r.value.agent.id);
+      continue;
+    }
     if (parsed.dropped.length > 0) {
       state.appendSystem(
         `Council draft from ${r.value.agent.id}: dropped ${parsed.dropped.length} invalid criterion(s).`,
@@ -387,17 +436,32 @@ export async function runContractDerivation(
   }
 
   if (drafts.length === 1) {
-    finalizeContract(state, drafts[0].contract, seed, mergePlanner);
+    const owner =
+      allAgents.find((a) => a.id === drafts[0]!.agentId) ?? mergePlanner;
+    finalizeContract(state, drafts[0]!.contract, seed, owner);
     return;
   }
 
-  // Merge drafts via lead (index 1)
+  // Merge: emit-only JSON synthesis — never re-open full explore (d3f56d9a
+  // merge continued tool-looping after explore failure). Prefer an agent that
+  // already produced a valid draft, not the tool-loop loser.
   const { buildCouncilContractMergePrompt } = await import("./blackboard/prompts/firstPassContract.js");
-  const mergePrompt = buildCouncilContractMergePrompt(seed, drafts);
-  state.appendSystem(
-    `Council contract: merging ${drafts.length} drafts via ${mergePlanner.id}…`,
+  const { CONTRACT_JSON_SCHEMA } = await import("./blackboard/prompts/jsonSchemas.js");
+  const { EMIT_ONLY_PROFILE_ID, CONTRACT_MERGE_MAX_TOOL_TURNS } = await import(
+    "@ollama-swarm/shared/toolProfiles"
   );
-  state.manager.markStatus(mergePlanner.id, "thinking", {
+  const mergePrompt = buildCouncilContractMergePrompt(seed, drafts);
+  const mergeAgentPick =
+    allAgents.find(
+      (a) => drafts.some((d) => d.agentId === a.id) && !failedDraftAgentIds.has(a.id),
+    )
+    ?? allAgents.find((a) => !failedDraftAgentIds.has(a.id))
+    ?? mergePlanner;
+
+  state.appendSystem(
+    `Council contract: merging ${drafts.length} drafts via ${mergeAgentPick.id} (emit-only)…`,
+  );
+  state.manager.markStatus(mergeAgentPick.id, "thinking", {
     activityKind: "contract",
     activityLabel: "contract merge",
   });
@@ -406,21 +470,26 @@ export async function runContractDerivation(
   const { controller: mergeAbort, cleanup: mergeCleanup } = createTimeoutController(CONTRACT_DRAFT_TIMEOUT_MS);
   try {
     ({ response: mergeResponse, agentUsed: mergeAgent } = await promptPlannerSafely(
-      mergePlanner,
+      mergeAgentPick,
       mergePrompt,
-      undefined,
+      EMIT_ONLY_PROFILE_ID,
       state.manager,
       state.cfg.providerFailover,
-      { kind: "contract", label: "contract merge" },
+      {
+        kind: "contract",
+        label: "contract merge",
+        maxToolTurns: CONTRACT_MERGE_MAX_TOOL_TURNS,
+        mode: "emit",
+      },
       mergeAbort.signal,
       state.pendingToolTraceByAgent,
       state.cfg,
+      CONTRACT_JSON_SCHEMA,
     ));
   } finally {
     mergeCleanup();
-    state.manager.markStatus(mergePlanner.id, "ready");
-  }
-  if (state.stopping) return;
+    state.manager.markStatus(mergeAgentPick.id, "ready");
+  }  if (state.stopping) return;
   state.appendAgent(mergeAgent, mergeResponse);
 
   let mergeParsed = parseFirstPassContractResponse(mergeResponse);
