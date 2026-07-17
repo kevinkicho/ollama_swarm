@@ -148,3 +148,15 @@ export function snapshotResearchIntegrity(
     consecutiveFailures: s.consecutiveFailures,
   };
 }
+
+/** Drop budget after summary so long-lived servers don't accumulate run keys. */
+export function clearResearchBudget(runId?: string | null): void {
+  if (runId?.trim()) {
+    const id = runId.trim();
+    byRun.delete(id);
+    if (lastRunId === id) lastRunId = null;
+    return;
+  }
+  byRun.clear();
+  lastRunId = null;
+}

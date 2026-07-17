@@ -597,11 +597,9 @@ export async function applyBaselineHunks(input: {
 }): Promise<ApplyOutcome> {
   let applied = 0;
   const reasons: string[] = [];
-  // applyHunks operates on (currentTextsByFile, hunks) and returns
-  // newTextsByFile — pre-fetch each file's current contents into a
-  // single map, then call once. On any per-file error the whole batch
-  // returns ok:false; we then fall back to per-file calls so a single
-  // bad hunk doesn't block the others' wins.
+  // RR-A fail-closed: multi-file pure apply first; on any miss write nothing
+  // (no per-file fail-open that silently lands half a multi-file todo).
+  // Opt-in partial: SWARM_BASELINE_PARTIAL_APPLY=1 restores legacy fallback.
   const byFile = new Map<string, Hunk[]>();
   for (const h of input.hunks) {
     const list = byFile.get(h.file) ?? [];
@@ -620,7 +618,14 @@ export async function applyBaselineHunks(input: {
     }
     return { applied, reasons };
   }
-  // Fall back: try each file independently so partial wins land.
+  reasons.push(all.error);
+  const allowPartial = /^(1|true|yes)$/i.test(
+    (process.env.SWARM_BASELINE_PARTIAL_APPLY ?? "").trim(),
+  );
+  if (!allowPartial) {
+    return { applied: 0, reasons };
+  }
+  // Legacy partial path (explicit opt-in only).
   for (const [file, hunks] of byFile) {
     const single = applyHunks({ [file]: currentTextsByFile[file] }, hunks);
     if (!single.ok) {

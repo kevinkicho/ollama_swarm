@@ -242,6 +242,13 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
     ctx.appendSystem(`Failed to write run summary (${msg})`);
   }
+  // Free process-scoped per-run telemetry after snapshot (maps would otherwise grow).
+  try {
+    const { clearRunTelemetry } = await import("../runTelemetryCleanup.js");
+    clearRunTelemetry(cfg.runId);
+  } catch {
+    /* non-fatal */
+  }
   ctx.lastSummarySetter(summary);
   ctx.emit({ type: "run_summary", summary });
 

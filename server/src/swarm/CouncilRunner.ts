@@ -52,6 +52,7 @@ import { startCycleIntegrityTracking } from "./cycleIntegrityStats.js";
 import { clearLocalCatalogCache } from "./research/localCatalogIndex.js";
 import { startResearchBudget } from "./research/researchBudget.js";
 import { startProgressHeartbeat, noteProductiveProgress } from "./progressHeartbeat.js";
+import { resetAgentSessionGuards } from "./runTelemetryCleanup.js";
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import type { StallGateVerdict } from "@ollama-swarm/shared/swarmControl/types";
@@ -239,6 +240,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
     );
     // Fresh local catalog index per run (PR4 polish).
     clearLocalCatalogCache();
+    // agent-N ids reuse across runs — don't inherit prior bash lockouts.
+    resetAgentSessionGuards();
     // Apply/repair integrity counters for summary.applyIntegrity (PR6).
     startApplyIntegrityTracking(cfg.runId);
     // RR-D: cycle fail taxonomy counters.

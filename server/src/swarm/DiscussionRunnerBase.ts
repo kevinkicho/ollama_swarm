@@ -399,23 +399,29 @@ export abstract class DiscussionRunnerBase {
    *  Subclasses no longer need their own writeSummary — this handles it. */
   protected async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
     if (this.summaryWritten) return;
-    this.summaryWritten = true;
     if (this.startedAt === undefined) return;
-    await discussionWriteSummary({
-      cfg,
-      crashMessage,
-      stopping: this.stopping,
-      startedAt: this.startedAt,
-      earlyStopDetail: this.earlyStopDetail,
-      agentCount: cfg.agentCount,
-      agents: this.stats.buildPerAgentStats(),
-      transcript: this.transcript,
-      topology: cfg.topology,
-      repos: this.opts.repos,
-      gitPorcelainAtRunStart: this.gitPorcelainAtRunStart,
-      controlAdvice: this.getControlAdviceHistory(),
-      appendSystem: (text, summary) => this.appendSystem(text, summary),
-    });
+    try {
+      await discussionWriteSummary({
+        cfg,
+        crashMessage,
+        stopping: this.stopping,
+        startedAt: this.startedAt,
+        earlyStopDetail: this.earlyStopDetail,
+        agentCount: cfg.agentCount,
+        agents: this.stats.buildPerAgentStats(),
+        transcript: this.transcript,
+        topology: cfg.topology,
+        repos: this.opts.repos,
+        gitPorcelainAtRunStart: this.gitPorcelainAtRunStart,
+        controlAdvice: this.getControlAdviceHistory(),
+        appendSystem: (text, summary) => this.appendSystem(text, summary),
+      });
+      // Only after successful write so stop/finally can retry if I/O fails.
+      this.summaryWritten = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`Failed to write run summary (${msg}) — will retry on next close-out if any`);
+    }
   }
 
   /** Run post-round critique if enabled. Subclasses call this after each round. */

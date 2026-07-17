@@ -52,3 +52,14 @@ export function snapshotProgressHeartbeat(
     progressQuietMs: Math.max(0, now - lastProductiveAt),
   };
 }
+
+export function clearProgressHeartbeat(runId?: string | null): void {
+  if (runId?.trim()) {
+    const id = runId.trim();
+    lastProductiveAtByRun.delete(id);
+    if (lastRunId === id) lastRunId = null;
+    return;
+  }
+  lastProductiveAtByRun.clear();
+  lastRunId = null;
+}

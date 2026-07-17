@@ -196,6 +196,7 @@ export async function prepareWorkerTodoSeed(
             message: todo.lastApplyMiss.message,
             uniqueCandidates: [...todo.lastApplyMiss.uniqueCandidates],
             nearbyExcerpt: todo.lastApplyMiss.nearbyExcerpt,
+            at: todo.lastApplyMiss.at,
           },
         }
       : {}),

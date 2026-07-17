@@ -187,7 +187,6 @@ export class MoaRunner extends DiscussionRunnerBase {
 
   protected async writeSummary(cfg: RunConfig, crashMessage?: string): Promise<void> {
     if (this.summaryWritten) return;
-    this.summaryWritten = true;
     if (this.startedAt === undefined) return;
     // 2026-05-03 (Phase C): writeSummary body extracted to shared helper.
     // MoA opts out of: banner emission (no per-agent stats to render),
@@ -195,25 +194,31 @@ export class MoaRunner extends DiscussionRunnerBase {
     // `actualRoundsCompleted`.
     // 2026-05-03 (post-Phase-D): earlyStopDetail now wired up for the
     // budget/quota guard added to the MoA loop.
-    await discussionWriteSummary({
-      cfg,
-      crashMessage,
-      stopping: this.stopping,
-      startedAt: this.startedAt,
-      earlyStopDetail: this.earlyStopDetail,
-      rounds: this.actualRoundsCompleted || cfg.rounds,
-      agentCount: cfg.agentCount,
-      // MoA doesn't track AgentStatsCollector yet — empty array is the
-      // honest "no per-agent metrics" placeholder. The runId + transcript
-      // give the eval harness everything it needs to score uniqueness.
-      agents: [],
-      transcript: this.transcript,
-      topology: cfg.topology,
-      repos: this.opts.repos,
-      appendSystem: (text, summary) => this.appendSystem(text, summary),
-      emitBanner: false,
-      includeFilesInLogLine: false,
-    });
+    try {
+      await discussionWriteSummary({
+        cfg,
+        crashMessage,
+        stopping: this.stopping,
+        startedAt: this.startedAt,
+        earlyStopDetail: this.earlyStopDetail,
+        rounds: this.actualRoundsCompleted || cfg.rounds,
+        agentCount: cfg.agentCount,
+        // MoA doesn't track AgentStatsCollector yet — empty array is the
+        // honest "no per-agent metrics" placeholder. The runId + transcript
+        // give the eval harness everything it needs to score uniqueness.
+        agents: [],
+        transcript: this.transcript,
+        topology: cfg.topology,
+        repos: this.opts.repos,
+        appendSystem: (text, summary) => this.appendSystem(text, summary),
+        emitBanner: false,
+        includeFilesInLogLine: false,
+      });
+      this.summaryWritten = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.appendSystem(`Failed to write run summary (${msg}) — will retry on next close-out if any`);
+    }
   }
 
   /** One prompt → cleaned text. Records the agent message in the

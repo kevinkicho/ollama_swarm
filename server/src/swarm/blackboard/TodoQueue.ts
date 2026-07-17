@@ -594,6 +594,8 @@ export class TodoQueue {
     t.startedAt = undefined;
     t.endedAt = undefined;
     t.reason = undefined;
+    // RR-B: replan/reset invalidates prior apply anchors for this description/files.
+    t.lastApplyMiss = undefined;
     if (updates) {
       if (updates.description !== undefined) {
         if (!updates.description.trim()) {

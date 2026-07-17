@@ -300,14 +300,33 @@ export interface WorkerSeed {
     message: string;
     uniqueCandidates: string[];
     nearbyExcerpt?: string;
+    at?: number;
   };
 }
 
+/** Drop lastApplyMiss older than this (ms) so stale replan seeds don't poison. */
+export const LAST_APPLY_MISS_TTL_MS = 45 * 60_000;
+
 /** Format lastApplyMiss for worker first-pass seed (RR-B). */
 export function buildLastApplyMissBlock(
-  miss: NonNullable<WorkerSeed["lastApplyMiss"]> | undefined | null,
+  miss:
+    | (NonNullable<WorkerSeed["lastApplyMiss"]> & { at?: number })
+    | undefined
+    | null,
+  opts?: { expectedFiles?: readonly string[]; now?: number },
 ): string {
   if (!miss) return "";
+  const now = opts?.now ?? Date.now();
+  if (typeof miss.at === "number" && now - miss.at > LAST_APPLY_MISS_TTL_MS) {
+    return "";
+  }
+  if (
+    opts?.expectedFiles &&
+    opts.expectedFiles.length > 0 &&
+    !opts.expectedFiles.includes(miss.file)
+  ) {
+    return "";
+  }
   const lines = [
     "=== PRIOR APPLY MISS (same todo / this run) ===",
     `kind=${miss.kind} file=${miss.file} op=${miss.op} matchCount=${miss.matchCount}`,
@@ -459,7 +478,9 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
       parts.push("");
     }
   }
-  const missBlock = buildLastApplyMissBlock(seed.lastApplyMiss);
+  const missBlock = buildLastApplyMissBlock(seed.lastApplyMiss, {
+    expectedFiles: seed.expectedFiles,
+  });
   if (missBlock) {
     parts.push(missBlock);
     parts.push("");

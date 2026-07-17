@@ -178,8 +178,17 @@ export async function discussionWriteSummary(opts: DiscussionWriteSummaryOpts): 
     opts.appendSystem(
       `Wrote run summary (stopReason=${summary.stopReason}, wallClockMs=${summary.wallClockMs}${filesSuffix}).`,
     );
+    // Snapshot already taken — free process maps for this runId.
+    try {
+      const { clearRunTelemetry } = await import("./runTelemetryCleanup.js");
+      clearRunTelemetry(opts.cfg.runId);
+    } catch {
+      /* non-fatal */
+    }
   } catch (writeErr) {
     const msg = writeErr instanceof Error ? writeErr.message : String(writeErr);
     opts.appendSystem(`Failed to write run summary (${msg})`);
+    // Re-throw so callers (DiscussionRunnerBase) do not mark summaryWritten.
+    throw writeErr;
   }
 }

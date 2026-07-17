@@ -91,3 +91,15 @@ export function snapshotCycleIntegrityForRun(
   const id = (runId ?? lastRunId ?? "").trim() || "_default";
   return snapshotCycleIntegrity(byRun.get(id));
 }
+
+/** Drop counters after summary (or on next start for same process). */
+export function clearCycleIntegrityTracking(runId?: string | null): void {
+  if (runId?.trim()) {
+    const id = runId.trim();
+    byRun.delete(id);
+    if (lastRunId === id) lastRunId = null;
+    return;
+  }
+  byRun.clear();
+  lastRunId = null;
+}

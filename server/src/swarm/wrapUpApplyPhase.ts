@@ -248,11 +248,11 @@ export async function runWrapUpApplyPhase(
         `Wrap-up apply: synthesizer dry-run ok (${dry.wouldApply}/${synthHunks.length} would land) — applying.`,
       );
     } else if (dry.cleanHunks.length > 0 && dry.dirtyHunks.length > 0) {
-      hunksToApply = dry.cleanHunks;
+      // Strict: any dirty → total miss fallthrough (do not land incomplete multi-file sets).
       synthesizerMissReasons = dry.reasons;
       synthesizerMisses = dry.misses;
       input.appendSystem(
-        `Wrap-up apply: synthesizer partial dry-run (${dry.cleanHunks.length} clean / ${dry.dirtyHunks.length} miss) — applying clean files only; miss reasons for log: ${dry.reasons.join("; ").slice(0, 300)}.`,
+        `Wrap-up apply: synthesizer partial dry-run (${dry.cleanHunks.length} clean / ${dry.dirtyHunks.length} miss) — not applying subset; fallthrough re-prompt with miss anchors. ${dry.reasons.join("; ").slice(0, 300)}.`,
       );
     } else {
       synthesizerMissReasons = dry.reasons;

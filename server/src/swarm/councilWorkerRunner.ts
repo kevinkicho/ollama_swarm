@@ -225,10 +225,15 @@ async function runCouncilLiteratureResearch(
     return capped;
   }
 
-  if (blackout.active || isResearchBlackout(runId)) {
+  // Single source of truth: researchBudget (legacy blackout field is mirror only).
+  if (isResearchBlackout(runId) || blackout.active) {
+    if (isResearchBlackout(runId) && !blackout.active) {
+      blackout.active = true;
+      blackout.lastReason = getResearchBlackoutReason(runId);
+    }
     const why =
-      blackout.lastReason ||
       getResearchBlackoutReason(runId) ||
+      blackout.lastReason ||
       "research blackout";
     appendSystem(
       `[${agent.id}] Literature research skipped (run blackout: ${why.slice(0, 80)}) — using local tools only.`,
@@ -492,8 +497,15 @@ async function executeCouncilBuildTodo(
 
   try {
     const controller = new AbortController();
-    const onPromptAbort = () => controller.abort(new Error("user stop"));
+    const onPromptAbort = () => {
+      try {
+        controller.abort(ctx.promptSignal?.reason ?? new Error("user stop"));
+      } catch {
+        /* ignore */
+      }
+    };
     ctx.promptSignal?.addEventListener("abort", onPromptAbort, { once: true });
+    ctx.registerTodoAbort?.(agent.id, controller);
     try {
       const profile = resolveToolProfile("worker-build", state.cfg);
       const res = await chatOnce(agent, {
@@ -505,6 +517,8 @@ async function executeCouncilBuildTodo(
         mcpServers: state.cfg.mcpServers,
         manager: state.manager as any,
         activity: { kind: "worker", label: "bash todo" },
+        // Wire stop/drain abort so build bash todos don't outlive hard stop.
+        signal: controller.signal,
         onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
       });
       const text = extractText(res)?.trim();
@@ -513,6 +527,7 @@ async function executeCouncilBuildTodo(
       }
     } finally {
       ctx.promptSignal?.removeEventListener("abort", onPromptAbort);
+      ctx.unregisterTodoAbort?.(agent.id);
     }
 
     const git = simpleGit(state.clonePath);

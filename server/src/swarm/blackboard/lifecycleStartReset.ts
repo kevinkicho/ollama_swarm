@@ -7,6 +7,7 @@ import { startCycleIntegrityTracking } from "../cycleIntegrityStats.js";
 import { clearLocalCatalogCache } from "../research/localCatalogIndex.js";
 import { startResearchBudget } from "../research/researchBudget.js";
 import { startProgressHeartbeat } from "../progressHeartbeat.js";
+import { resetAgentSessionGuards } from "../runTelemetryCleanup.js";
 
 /**
  * Clear all prior-run mutable fields so start() begins from a clean slate.
@@ -57,6 +58,8 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   ctx.setRunBootedAt(Date.now());
   // Fresh clone docs per run (avoid stale index across consecutive runs).
   clearLocalCatalogCache();
+  // agent-N ids reuse — clear bash failure lockouts from prior runs.
+  resetAgentSessionGuards();
   startApplyIntegrityTracking(cfg.runId);
   startCycleIntegrityTracking(cfg.runId);
   startResearchBudget(cfg.runId);

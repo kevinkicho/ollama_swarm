@@ -362,23 +362,41 @@ async function proposeHunksTool(
   }
 
   if (apply) {
-    for (const [file, newText] of Object.entries(applied.newTextsByFile)) {
-      try {
+    // All-or-nothing writes: snapshot first; revert on any write failure.
+    const snapshot: Record<string, string | null> = { ...currentTexts };
+    const written: string[] = [];
+    try {
+      for (const [file, newText] of Object.entries(applied.newTextsByFile)) {
         const abs = await resolveSafe(clonePath, file);
         if (newText === "") {
-          await fs.unlink(abs).catch(async () => {
+          await fs.unlink(abs).catch(() => {
             /* missing is fine for delete */
           });
         } else {
           await fs.mkdir(path.dirname(abs), { recursive: true });
           await fs.writeFile(abs, newText, "utf8");
         }
-      } catch (err) {
-        return {
-          ok: false,
-          error: `propose_hunks apply write failed for ${file}: ${err instanceof Error ? err.message : String(err)}`,
-        };
+        written.push(file);
       }
+    } catch (err) {
+      // Best-effort restore prior content for files already written.
+      for (const file of written) {
+        try {
+          const abs = await resolveSafe(clonePath, file);
+          const before = snapshot[file];
+          if (before == null) {
+            await fs.unlink(abs).catch(() => {});
+          } else {
+            await fs.writeFile(abs, before, "utf8");
+          }
+        } catch {
+          /* restore best-effort */
+        }
+      }
+      return {
+        ok: false,
+        error: `propose_hunks apply write failed (reverted ${written.length} file(s)): ${err instanceof Error ? err.message : String(err)}`,
+      };
     }
   }
 

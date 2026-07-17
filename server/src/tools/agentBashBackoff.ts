@@ -24,7 +24,7 @@ export function clearAgentBashBackoff(agentId: string): void {
   bashErrorsByAgent.delete(agentId);
 }
 
-/** Test-only */
+/** Clear all agents (run start / process hygiene). */
 export function resetAllAgentBashBackoff(): void {
   bashErrorsByAgent.clear();
 }
