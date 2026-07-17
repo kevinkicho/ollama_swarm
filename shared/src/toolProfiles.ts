@@ -122,19 +122,17 @@ export const WORKER_JSON_NUDGE_MESSAGE =
   "Stop exploring. Emit your JSON hunk array now (or {\"skip\":true} if out of scope). No more tool calls.";
 
 /**
- * Soft nudge only — discussion drafts must NOT hard-cap tools at a low N.
- * Live 37139155: all 3 agents hit "exceeded 10 turns" and posted incomplete drafts.
- * Use profile default tool budget; nudge later so exploration can finish.
- *
- * @deprecated Kept for any remaining import sites; prefer omit maxToolTurns.
+ * Council / discussion draft rounds tool budget.
+ * Live 37139155: hard cap of 10 aborted all 3 agents mid-draft.
+ * Raised to 100 so analysis drafts can explore without thrashing incomplete.
  */
-export const EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS = 20;
+export const EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS = 100;
 
-/** Soft nudge (not a hard stop) for discussion drafters. */
-export const DISCUSSION_DRAFT_JSON_NUDGE_TURN = 12;
+/** Soft nudge for discussion drafters (not a hard stop). */
+export const DISCUSSION_DRAFT_JSON_NUDGE_TURN = 40;
 
 export const DISCUSSION_DRAFT_JSON_NUDGE_MESSAGE =
-  "You have enough exploration. Prefer emitting your council draft soon as clear findings "
+  "You have explored a lot. Prefer emitting your council draft soon as clear findings "
   + "(JSON array of issues/actions or structured prose). More tools only if a specific path is still missing.";
 
 /** Hard wall-clock caps for provider prompts (ms). */

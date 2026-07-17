@@ -14,8 +14,8 @@ describe("discussionRunAgent — draft salvage wiring", () => {
     assert.match(SRC, /pushDiscussionEntry/);
   });
 
-  it("uses soft draft nudge without low hard tool cap", () => {
-    assert.doesNotMatch(SRC, /maxToolTurns:\s*EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS/);
+  it("uses high discussion draft tool budget (100) and JSON nudge", () => {
+    assert.match(SRC, /maxToolTurns:\s*EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS/);
     assert.match(SRC, /discussionDraftJsonNudge/);
     assert.match(SRC, /createThinkGuardHandler/);
   });
