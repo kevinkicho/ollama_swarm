@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   EMPTY_EXECUTION_LIMIT,
   formatEmptyExecutionReason,
+  formatEmptyPlanReason,
   updateEmptyExecutionStreak,
 } from "./emptyExecutionGuard.js";
 
@@ -25,5 +26,6 @@ describe("emptyExecutionGuard", () => {
     assert.equal(r.streak, EMPTY_EXECUTION_LIMIT);
     assert.equal(r.shouldAct, true);
     assert.match(formatEmptyExecutionReason(r.streak), /empty-execution/);
+    assert.match(formatEmptyPlanReason(2), /empty-plan/);
   });
 });

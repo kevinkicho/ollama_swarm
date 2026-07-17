@@ -7,7 +7,6 @@ import { realFilesystemAdapter, realGitAdapter } from "./blackboard/v2Adapters.j
 import {
   buildWorkerUserPrompt,
   buildWorkerRepairPrompt,
-  buildHunkRepairPrompt,
   isRepairableApplyMiss,
   parseWorkerResponse,
   validateHunkPayload,
@@ -52,6 +51,7 @@ import {
   recordCycleTodoSuccess,
 } from "./cycleIntegrityStats.js";
 import { classifyCycleFailReason } from "@ollama-swarm/shared/cycleIntegrityReport";
+import { applyOrGroundedRepair } from "./applyOrGroundedRepair.js";
 import {
   isResearchBlackout,
   noteCatalogInject,
@@ -711,6 +711,18 @@ async function tryWorkerPrompt(
   });
 
   const progressBlock = wrapProgressContextForPrompt(state.progressContext ?? "");
+  const priorMiss = todo.lastApplyMiss
+    ? {
+        file: todo.lastApplyMiss.file,
+        kind: todo.lastApplyMiss.kind,
+        op: todo.lastApplyMiss.op,
+        needle: todo.lastApplyMiss.needle,
+        matchCount: todo.lastApplyMiss.matchCount,
+        message: todo.lastApplyMiss.message,
+        uniqueCandidates: [...todo.lastApplyMiss.uniqueCandidates],
+        nearbyExcerpt: todo.lastApplyMiss.nearbyExcerpt,
+      }
+    : undefined;
   const userBlock = opts.repairFrom
     ? buildWorkerRepairPrompt(opts.repairFrom.previousResponse, opts.repairFrom.parseError)
     : buildWorkerUserPrompt({
@@ -722,6 +734,7 @@ async function tryWorkerPrompt(
         directive: state.cfg.userDirective,
         webToolsEnabled,
         researchNotes,
+        lastApplyMiss: priorMiss,
       });
   const basePrompt = wrapCouncilPromptWithControlHints(
     `${WORKER_SYSTEM_PROMPT}\n\n${userBlock}${opts.repairFrom ? "" : progressBlock}`,
@@ -812,11 +825,35 @@ async function tryWorkerPrompt(
             lastResponse: res,
           };
         }
+        try {
+          state.todoQueue.clearLastApplyMiss(todo.id);
+        } catch {
+          /* ignore */
+        }
         ctx.appendSystem(`[execution] ${agent.id} ✓ applied — ${applyResult.commitSha?.slice(0, 7)}.`);
         return { outcome: "completed" };
       }
 
-      // Apply failed — grounded hunk repair (search/start not found or not unique).
+      // Persist miss for next first-pass seed (RR-B lastApplyMiss).
+      if (applyResult.miss) {
+        try {
+          state.todoQueue.setLastApplyMiss(todo.id, {
+            file: applyResult.miss.file,
+            kind: applyResult.miss.kind,
+            op: applyResult.miss.op,
+            needle: applyResult.miss.needle,
+            matchCount: applyResult.miss.matchCount,
+            message: applyResult.miss.message,
+            uniqueCandidates: applyResult.miss.uniqueCandidates,
+            nearbyExcerpt: applyResult.miss.nearbyExcerpt,
+            at: Date.now(),
+          });
+        } catch {
+          /* ignore */
+        }
+      }
+
+      // Shared applyOrGroundedRepair core (same quality bar as blackboard/auditor).
       // Never re-enter literature research on this pure apply-repair path.
       if (
         isRepairableApplyMiss({
@@ -825,91 +862,137 @@ async function tryWorkerPrompt(
         })
       ) {
         const miss = applyResult.miss;
-        const failedFile =
-          miss?.file ||
-          applyResult.reason.match(/file "([^"]+)"/)?.[1] ||
-          expectedFiles[0];
-        // Always re-read from disk so repair is grounded on live content,
-        // not the pre-prompt window snapshot.
-        let currentContent: string | null = null;
-        if (failedFile) {
+        ctx.appendSystem(
+          `[apply-miss] kind=${miss?.kind ?? "unknown"} file=${miss?.file ?? "?"}` +
+            (miss?.needle ? ` needle=${JSON.stringify(miss.needle).slice(0, 80)}` : "") +
+            ` — applyOrGroundedRepair (no literature)`,
+        );
+        const liveTexts: Record<string, string | null> = {};
+        for (const f of expectedFiles) {
           try {
-            currentContent = await fsAdapter.read(failedFile);
+            liveTexts[f] = await fsAdapter.read(f);
           } catch {
-            currentContent = null;
-          }
-          if (currentContent == null) {
-            currentContent = fileContents[failedFile] ?? null;
+            liveTexts[f] = fileContents[f] ?? null;
           }
         }
-        if (currentContent && fixedHunks.length > 0 && failedFile) {
-          ctx.appendSystem(
-            `[apply-miss] kind=${miss?.kind ?? "unknown"} file=${failedFile}` +
-              (miss?.needle ? ` needle=${JSON.stringify(miss.needle).slice(0, 80)}` : "") +
-              ` — grounded hunk repair (no literature)`,
-          );
-          const repairPrompt = buildHunkRepairPrompt(
-            fixedHunks,
-            applyResult.reason,
-            { [failedFile]: currentContent },
-            { miss },
-          );
-          // Emit-only profile ("swarm" → empty tools). maxToolTurns must be ≥1 so
-          // OpenAI/Anthropic run a single model turn; Ollama no-tools path is single-shot.
-          // Never use workerProfile here — tool-bearing + maxToolTurns:0 yields zero model turns.
-          const repairRaw = await promptWithFailoverAuto(agent, wrapCouncilPromptWithControlHints(
-            `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`,
-            agent.id,
-            ctx,
-          ), {
-            manager: state.manager as any,
-            agentName: EMIT_ONLY_PROFILE_ID,
-            signal: controller.signal,
-            // Pure apply repair: tools-off profile + one model turn (no literature).
-            maxToolTurns: 1,
-            formatExpect: "json",
-            ollamaFormat: "json" as const,
-            onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
-            onToolResultHook: toolCoachHook,
-            runId: state.cfg.runId,
-            activity: {
-              kind: "worker",
-              label: `repair ${todo.id.slice(0, 8)}`,
-            },
-          }, state.cfg.providerFailover);
-          const repairText = extractProviderText(repairRaw);
-          if (repairText) {
-            state.appendAgent(agent, repairText, { role: "worker" });
-            const repairParsed = parseWorkerResponse(repairText, expectedFiles);
-            if (repairParsed.ok && repairParsed.hunks.length > 0 && !repairParsed.skip) {
-              const repairResult = await applyAndCommit({
-                todoId: todo.id,
-                workerId: agent.id,
-                expectedFiles,
-                hunks: repairParsed.hunks,
-                fs: fsAdapter,
-                git: gitAdapter,
-                runId: state.cfg.runId,
-              });
-              if (repairResult.ok) {
-                if (!repairResult.filesWritten || repairResult.filesWritten.length === 0) {
-                  noteRepairFailure(state.cfg.runId);
-                  return {
-                    outcome: "retry",
-                    reason: "hunk repair wrote zero files (no-op) — not a successful commit",
-                    lastResponse: repairText,
-                  };
-                }
-                noteRepairSuccess(state.cfg.runId);
-                ctx.appendSystem(`[execution] ${agent.id} ✓ applied (hunk repair) — ${repairResult.commitSha?.slice(0, 7)}.`);
-                return { outcome: "completed" };
-              }
-              noteRepairFailure(state.cfg.runId);
-            } else {
-              noteRepairFailure(state.cfg.runId);
+        const grounded = await applyOrGroundedRepair({
+          hunks: fixedHunks,
+          currentTextsByFile: liveTexts,
+          expectedFiles,
+          readFile: async (p) => {
+            try {
+              return await fsAdapter.read(p);
+            } catch {
+              return null;
             }
-          } else {
-            noteRepairFailure(state.cfg.runId);
+          },
+          callModel: async (repairPrompt) => {
+            const repairRaw = await promptWithFailoverAuto(
+              agent,
+              wrapCouncilPromptWithControlHints(
+                `${WORKER_SYSTEM_PROMPT}\n\n${repairPrompt}`,
+                agent.id,
+                ctx,
+              ),
+              {
+                manager: state.manager as any,
+                agentName: EMIT_ONLY_PROFILE_ID,
+                signal: controller.signal,
+                maxToolTurns: 1,
+                formatExpect: "json",
+                ollamaFormat: "json" as const,
+                onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
+                onToolResultHook: toolCoachHook,
+                runId: state.cfg.runId,
+                activity: {
+                  kind: "worker",
+                  label: `repair ${todo.id.slice(0, 8)}`,
+                },
+              },
+              state.cfg.providerFailover,
+            );
+            const repairText = extractProviderText(repairRaw);
+            if (repairText) {
+              state.appendAgent(agent, repairText, { role: "worker" });
+            }
+            return repairText ?? "";
+          },
+          maxGroundedRepairs: 1,
+        });
+        if (grounded.ok && grounded.hunks) {
+          if (grounded.deterministicCandidate) {
+            ctx.appendSystem(
+              `[apply-miss] deterministic uniqueCandidates[0] applied (SWARM_APPLY_DETERMINISTIC_CANDIDATE)`,
+            );
+          }
+          const repairResult = await applyAndCommit({
+            todoId: todo.id,
+            workerId: agent.id,
+            expectedFiles,
+            hunks: grounded.hunks,
+            fs: fsAdapter,
+            git: gitAdapter,
+            runId: state.cfg.runId,
+          });
+          if (repairResult.ok) {
+            if (!repairResult.filesWritten || repairResult.filesWritten.length === 0) {
+              noteRepairFailure(state.cfg.runId);
+              return {
+                outcome: "retry",
+                reason: "hunk repair wrote zero files (no-op) — not a successful commit",
+                lastResponse: res,
+              };
+            }
+            noteRepairSuccess(state.cfg.runId);
+            try {
+              state.todoQueue.clearLastApplyMiss(todo.id);
+            } catch {
+              /* ignore */
+            }
+            const how = grounded.deterministicCandidate
+              ? "deterministic-candidate"
+              : "hunk repair";
+            ctx.appendSystem(
+              `[execution] ${agent.id} ✓ applied (${how}) — ${repairResult.commitSha?.slice(0, 7)}.`,
+            );
+            return { outcome: "completed" };
+          }
+          noteRepairFailure(state.cfg.runId);
+          if (repairResult.miss) {
+            try {
+              state.todoQueue.setLastApplyMiss(todo.id, {
+                file: repairResult.miss.file,
+                kind: repairResult.miss.kind,
+                op: repairResult.miss.op,
+                needle: repairResult.miss.needle,
+                matchCount: repairResult.miss.matchCount,
+                message: repairResult.miss.message,
+                uniqueCandidates: repairResult.miss.uniqueCandidates,
+                nearbyExcerpt: repairResult.miss.nearbyExcerpt,
+                at: Date.now(),
+              });
+            } catch {
+              /* ignore */
+            }
+          }
+        } else {
+          noteRepairFailure(state.cfg.runId);
+          if (grounded.miss) {
+            try {
+              state.todoQueue.setLastApplyMiss(todo.id, {
+                file: grounded.miss.file,
+                kind: grounded.miss.kind,
+                op: grounded.miss.op,
+                needle: grounded.miss.needle,
+                matchCount: grounded.miss.matchCount,
+                message: grounded.miss.message,
+                uniqueCandidates: grounded.miss.uniqueCandidates,
+                nearbyExcerpt: grounded.miss.nearbyExcerpt,
+                at: Date.now(),
+              });
+            } catch {
+              /* ignore */
+            }
           }
         }
       }

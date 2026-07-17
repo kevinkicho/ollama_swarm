@@ -62,13 +62,25 @@ export function windowFileForWorker(content: string): WindowedFileView {
 export const WORKER_ANCHOR_LINES_BEFORE = 25;
 export const WORKER_ANCHOR_LINES_AFTER = 25;
 
-export interface AnchoredFileView extends WindowedFileView {
-  // Per-anchor outcome, in input order. `found` is the first match's
-  // 1-based line. `excerpt` is the lines included (or null when missing).
-  // Lets the prompt builder report misses honestly so the model doesn't
-  // hallucinate a row that isn't there.
-  anchorReports: Array<{ anchor: string; found: number | null }>;
+export interface AnchorReport {
+  anchor: string;
+  /** 1-based line of the primary match (first unique, or first of multi). */
+  found: number | null;
+  /** Total non-overlapping occurrences in the file. */
+  matchCount: number;
+  /** All 1-based match lines when matchCount > 1 (capped). */
+  matchLines?: number[];
 }
+
+export interface AnchoredFileView extends WindowedFileView {
+  // Per-anchor outcome, in input order. Multi-match anchors list all line
+  // numbers and include first+last context bands so panelRegistry-style
+  // repeated titles don't silently window only the first hit.
+  anchorReports: AnchorReport[];
+}
+
+/** Cap multi-match line listings in the prompt. */
+export const ANCHOR_MULTI_MATCH_LINES_CAP = 12;
 
 // Unit 44b: when the planner declared anchor strings for a todo, expand
 // the windowed view to include a context band around each anchor. The
@@ -86,6 +98,30 @@ export interface AnchoredFileView extends WindowedFileView {
 //   still reports per-anchor found-or-not so the planner gets feedback.
 // - If the file is large, returns head + per-anchor excerpts + tail,
 //   with overlapping or near-duplicate ranges merged.
+/** All non-overlapping 0-based char offsets of `needle` in `content`. */
+export function findAllMatchOffsets(content: string, needle: string): number[] {
+  if (!needle) return [];
+  const out: number[] = [];
+  let from = 0;
+  while (from <= content.length) {
+    const i = content.indexOf(needle, from);
+    if (i < 0) break;
+    out.push(i);
+    from = i + Math.max(1, needle.length);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
+export function lineNumberAtOffset(content: string, offset: number): number {
+  let line = 1;
+  const end = Math.min(offset, content.length);
+  for (let i = 0; i < end; i++) {
+    if (content.charCodeAt(i) === 10) line++;
+  }
+  return line;
+}
+
 export function windowFileWithAnchors(
   content: string,
   anchors: readonly string[],
@@ -93,16 +129,22 @@ export function windowFileWithAnchors(
   const baseAnchors = anchors.map((a) => a.trim()).filter((a) => a.length > 0);
   const len = content.length;
 
-  // Locate each anchor (first occurrence only — anchors should be unique
-  // by planner contract; ambiguous ones still resolve to the first hit
-  // so the worker has SOMETHING to look at).
-  const reports: AnchoredFileView["anchorReports"] = baseAnchors.map((anchor) => {
-    const idx = content.indexOf(anchor);
-    if (idx < 0) return { anchor, found: null };
-    // 1-based line number of the match (count newlines in [0, idx)).
-    let line = 1;
-    for (let i = 0; i < idx; i++) if (content.charCodeAt(i) === 10) line++;
-    return { anchor, found: line };
+  // Locate every match (not first-only). Multi-match anchors get all line #s
+  // and first+last context bands (RR-B panelRegistry-style repeated titles).
+  const reports: AnchorReport[] = baseAnchors.map((anchor) => {
+    const offsets = findAllMatchOffsets(content, anchor);
+    if (offsets.length === 0) {
+      return { anchor, found: null, matchCount: 0 };
+    }
+    const matchLines = offsets.map((o) => lineNumberAtOffset(content, o));
+    return {
+      anchor,
+      found: matchLines[0]!,
+      matchCount: offsets.length,
+      ...(offsets.length > 1
+        ? { matchLines: matchLines.slice(0, ANCHOR_MULTI_MATCH_LINES_CAP) }
+        : {}),
+    };
   });
 
   if (baseAnchors.length === 0 || len <= WORKER_FILE_WINDOW_THRESHOLD) {
@@ -111,25 +153,57 @@ export function windowFileWithAnchors(
   }
 
   // Build per-anchor excerpts (1-based line ranges), merge overlaps.
+  // Multi-match: window first AND last hit so workers see both sections.
   const lines = content.split("\n");
-  const ranges: Array<{ from: number; to: number; anchor: string }> = [];
+  const ranges: Array<{ from: number; to: number; anchor: string; multiNote?: string }> = [];
   for (const r of reports) {
     if (r.found === null) continue;
-    const from = Math.max(1, r.found - WORKER_ANCHOR_LINES_BEFORE);
-    const to = Math.min(lines.length, r.found + WORKER_ANCHOR_LINES_AFTER);
-    ranges.push({ from, to, anchor: r.anchor });
+    const lineNums =
+      r.matchLines && r.matchLines.length > 0
+        ? r.matchLines
+        : [r.found];
+    const uniqueLines = [...new Set(lineNums)];
+    // For multi-match, keep first + last only (avoid N× windows).
+    const focusLines =
+      uniqueLines.length <= 1
+        ? uniqueLines
+        : [uniqueLines[0]!, uniqueLines[uniqueLines.length - 1]!];
+    for (const ln of focusLines) {
+      const from = Math.max(1, ln - WORKER_ANCHOR_LINES_BEFORE);
+      const to = Math.min(lines.length, ln + WORKER_ANCHOR_LINES_AFTER);
+      ranges.push({
+        from,
+        to,
+        anchor: r.anchor,
+        multiNote:
+          r.matchCount > 1
+            ? `multi-match×${r.matchCount} at lines ${lineNums.slice(0, ANCHOR_MULTI_MATCH_LINES_CAP).join(", ")}${lineNums.length > ANCHOR_MULTI_MATCH_LINES_CAP ? "…" : ""} — use unique surrounding context`
+            : undefined,
+      });
+    }
   }
   // Sort + merge overlapping/adjacent ranges so the prompt doesn't
   // duplicate lines when two anchors land in the same neighborhood.
   ranges.sort((a, b) => a.from - b.from);
-  const merged: Array<{ from: number; to: number; anchors: string[] }> = [];
+  const merged: Array<{
+    from: number;
+    to: number;
+    anchors: string[];
+    multiNotes: string[];
+  }> = [];
   for (const r of ranges) {
     const last = merged[merged.length - 1];
     if (last && r.from <= last.to + 1) {
       last.to = Math.max(last.to, r.to);
       last.anchors.push(r.anchor);
+      if (r.multiNote) last.multiNotes.push(r.multiNote);
     } else {
-      merged.push({ from: r.from, to: r.to, anchors: [r.anchor] });
+      merged.push({
+        from: r.from,
+        to: r.to,
+        anchors: [r.anchor],
+        multiNotes: r.multiNote ? [r.multiNote] : [],
+      });
     }
   }
 
@@ -152,9 +226,13 @@ export function windowFileWithAnchors(
       const anchorLabel = m.anchors.length === 1
         ? `anchor "${shortAnchor(m.anchors[0]!)}"`
         : `anchors ${m.anchors.map((a) => `"${shortAnchor(a)}"`).join(", ")}`;
+      const multiBit =
+        m.multiNotes.length > 0
+          ? ` WARNING: ${[...new Set(m.multiNotes)].join("; ")}`
+          : "";
       const excerpt = lines.slice(m.from - 1, m.to).join("\n");
       sections.push(
-        `\n\n... [ANCHORED EXCERPT, lines ${m.from}-${m.to} of ${lines.length}, around ${anchorLabel}] ...\n\n${excerpt}\n\n... [end excerpt] ...\n\n`,
+        `\n\n... [ANCHORED EXCERPT, lines ${m.from}-${m.to} of ${lines.length}, around ${anchorLabel}${multiBit}] ...\n\n${excerpt}\n\n... [end excerpt] ...\n\n`,
       );
     }
   }

@@ -225,4 +225,26 @@ describe("windowFileWithAnchors — large file with anchor matches", () => {
     assert.equal(WORKER_ANCHOR_LINES_BEFORE, 25);
     assert.equal(WORKER_ANCHOR_LINES_AFTER, 25);
   });
+
+  it("multi-match anchors report all lines and include first+last excerpts", () => {
+    // Shared title appears twice (panelRegistry-style); both sections must
+    // be windowed, not only the first hit.
+    const lines: string[] = [];
+    for (let i = 1; i <= 200; i++) {
+      if (i === 50) lines.push(`| ${i} | Shared Title Line XXX rates |`);
+      else if (i === 150) lines.push(`| ${i} | Shared Title Line XXX fx |`);
+      else lines.push(`| ${i} | row${i} |`);
+    }
+    const src = lines.join("\n") + "\n" + "x".repeat(WORKER_FILE_WINDOW_THRESHOLD);
+    const r = windowFileWithAnchors(src, ["Shared Title Line XXX"]);
+    assert.equal(r.full, false);
+    assert.ok(r.anchorReports[0]!.matchCount >= 2, "matchCount reflects multi");
+    assert.ok(
+      (r.anchorReports[0]!.matchLines?.length ?? 0) >= 2,
+      "matchLines lists multi hits",
+    );
+    assert.ok(r.content.includes("multi-match"), "multi-match warning in excerpt header");
+    assert.ok(r.content.includes("Shared Title Line XXX rates"));
+    assert.ok(r.content.includes("Shared Title Line XXX fx"));
+  });
 });

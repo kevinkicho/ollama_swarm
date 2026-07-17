@@ -287,6 +287,48 @@ export interface WorkerSeed {
   projectGraphSlice?: string;
   /** Q11: few-shot similar past hunks from `.swarm-hunk-examples.jsonl`. */
   hunkRagBlock?: string;
+  /**
+   * RR-B: prior apply miss from this run (todo.lastApplyMiss).
+   * Prefer uniqueCandidates as search/start on re-emit.
+   */
+  lastApplyMiss?: {
+    file: string;
+    kind: string;
+    op: string;
+    needle: string;
+    matchCount: number;
+    message: string;
+    uniqueCandidates: string[];
+    nearbyExcerpt?: string;
+  };
+}
+
+/** Format lastApplyMiss for worker first-pass seed (RR-B). */
+export function buildLastApplyMissBlock(
+  miss: NonNullable<WorkerSeed["lastApplyMiss"]> | undefined | null,
+): string {
+  if (!miss) return "";
+  const lines = [
+    "=== PRIOR APPLY MISS (same todo / this run) ===",
+    `kind=${miss.kind} file=${miss.file} op=${miss.op} matchCount=${miss.matchCount}`,
+    `message: ${miss.message}`,
+    `needle: ${JSON.stringify(miss.needle).slice(0, 200)}`,
+  ];
+  if (miss.uniqueCandidates.length > 0) {
+    lines.push("Prefer these exact search/start strings (uniqueCandidates):");
+    for (let i = 0; i < Math.min(5, miss.uniqueCandidates.length); i++) {
+      lines.push(`  [${i}] ${JSON.stringify(miss.uniqueCandidates[i]).slice(0, 300)}`);
+    }
+  }
+  if (miss.nearbyExcerpt?.trim()) {
+    lines.push("nearbyExcerpt:");
+    lines.push("---");
+    lines.push(miss.nearbyExcerpt.split("\n").slice(0, 30).join("\n"));
+    lines.push("---");
+  }
+  lines.push("Re-emit hunks with grounded anchors — do not invent needles.");
+  lines.push("=== end prior apply miss ===");
+  return lines.join("\n");
 }
 
 /** Repo tools available to hunk workers (builder profile). */
@@ -417,6 +459,11 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
       parts.push("");
     }
   }
+  const missBlock = buildLastApplyMissBlock(seed.lastApplyMiss);
+  if (missBlock) {
+    parts.push(missBlock);
+    parts.push("");
+  }
   parts.push(buildResearchNotesBlock(seed.researchNotes));
   parts.push(`TODO: ${seed.description}`);
   parts.push(`Expected files: ${seed.expectedFiles.join(", ")}`);
@@ -444,7 +491,15 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
         ? "full"
         : "ANCHORED — head + per-anchor excerpts + tail";
       const reportSummary = view.anchorReports
-        .map((r) => `${JSON.stringify(r.anchor)}=${r.found === null ? "MISS" : `line ${r.found}`}`)
+        .map((r) => {
+          if (r.found === null) return `${JSON.stringify(r.anchor)}=MISS`;
+          if (r.matchCount > 1) {
+            const lines =
+              r.matchLines?.join(",") ?? String(r.found);
+            return `${JSON.stringify(r.anchor)}=MULTI×${r.matchCount}@${lines}`;
+          }
+          return `${JSON.stringify(r.anchor)}=line ${r.found}`;
+        })
         .join(", ");
       parts.push(
         `=== Current contents of ${f} (${content.length} chars, ${headerMode}) [anchors: ${reportSummary}] ===`,

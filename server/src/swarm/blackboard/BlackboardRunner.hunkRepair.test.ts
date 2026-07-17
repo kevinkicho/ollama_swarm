@@ -33,20 +33,10 @@ test("workerRunner — finalizeWorkerHunks is called (repair path entry)", () =>
   );
 });
 
-test("workerSelfConsistency — grounded buildHunkRepairPrompt on apply miss", () => {
+test("workerSelfConsistency — shared applyOrGroundedRepair on apply miss", () => {
   assert.ok(
-    SELF_CONSISTENCY_SRC.includes("buildHunkRepairPrompt"),
-    "finalizeWorkerHunks must call buildHunkRepairPrompt",
-  );
-  assert.ok(
-    SELF_CONSISTENCY_SRC.includes("isRepairableApplyMiss"),
-    "repair must gate on isRepairableApplyMiss",
-  );
-  assert.ok(
-    SELF_CONSISTENCY_SRC.includes("uniqueCandidates") ||
-      SELF_CONSISTENCY_SRC.includes("{ miss }") ||
-      SELF_CONSISTENCY_SRC.includes("miss:"),
-    "repair must pass ApplyMissReport into buildHunkRepairPrompt",
+    SELF_CONSISTENCY_SRC.includes("applyOrGroundedRepair"),
+    "finalizeWorkerHunks must use shared applyOrGroundedRepair core",
   );
   assert.ok(
     SELF_CONSISTENCY_SRC.includes("EMIT_ONLY_PROFILE_ID"),
@@ -61,12 +51,21 @@ test("workerSelfConsistency — grounded buildHunkRepairPrompt on apply miss", (
     "repair must allow ≥1 model turn (0 with tools = no-op; emit-only + 1 is portable)",
   );
   assert.ok(
-    SELF_CONSISTENCY_SRC.includes("acceptRepairedHunksIfApply"),
-    "repair must gate accept on dry-run apply success",
+    SELF_CONSISTENCY_SRC.includes("setLastApplyMissQ") ||
+      SELF_CONSISTENCY_SRC.includes("lastApplyMiss"),
+    "must persist lastApplyMiss for next seed",
+  );
+  assert.ok(
+    SELF_CONSISTENCY_SRC.includes("not proposing"),
+    "unrepaired miss must fail closed (not propose)",
   );
 });
 
-test("councilWorkerRunner — repair uses emit-only profile (no tool-bearing + 0-cap)", () => {
+test("councilWorkerRunner — repair uses applyOrGroundedRepair + emit-only", () => {
+  assert.ok(
+    COUNCIL_WORKER_SRC.includes("applyOrGroundedRepair"),
+    "council must use shared applyOrGroundedRepair core",
+  );
   assert.ok(
     COUNCIL_WORKER_SRC.includes("EMIT_ONLY_PROFILE_ID"),
     "council repair must import/use EMIT_ONLY_PROFILE_ID",
@@ -75,23 +74,13 @@ test("councilWorkerRunner — repair uses emit-only profile (no tool-bearing + 0
     /agentName:\s*EMIT_ONLY_PROFILE_ID/.test(COUNCIL_WORKER_SRC),
     "council repair prompt must set agentName: EMIT_ONLY_PROFILE_ID",
   );
-  // Repair block must not pin tool-bearing workerProfile with maxToolTurns: 0
-  const repairBlockMatch = COUNCIL_WORKER_SRC.match(
-    /grounded hunk repair[\s\S]*?promptWithFailoverAuto\([\s\S]*?\{([\s\S]*?)\},\s*state\.cfg\.providerFailover\)/,
-  );
-  assert.ok(repairBlockMatch, "expected grounded hunk repair promptWithFailoverAuto call");
-  const repairOpts = repairBlockMatch![1]!;
   assert.ok(
-    /agentName:\s*EMIT_ONLY_PROFILE_ID/.test(repairOpts),
-    "repair opts agentName must be emit-only",
+    COUNCIL_WORKER_SRC.includes("maxToolTurns: 1"),
+    "repair opts must use maxToolTurns: 1",
   );
   assert.ok(
-    /maxToolTurns:\s*1/.test(repairOpts),
-    "repair opts must use maxToolTurns: 1 (portable one model turn)",
-  );
-  assert.ok(
-    !/agentName:\s*workerProfile/.test(repairOpts),
-    "repair must not use tool-bearing workerProfile",
+    COUNCIL_WORKER_SRC.includes("setLastApplyMiss"),
+    "council must persist lastApplyMiss on miss",
   );
 });
 

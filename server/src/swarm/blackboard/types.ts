@@ -74,6 +74,18 @@ export interface Todo {
    *  only while status is pending-commit. */
   proposedHunks?: readonly unknown[];
   proposedFiles?: readonly string[];
+  /** RR-B: last structured apply miss for re-seed on retry. */
+  lastApplyMiss?: {
+    file: string;
+    kind: string;
+    op: string;
+    needle: string;
+    matchCount: number;
+    message: string;
+    uniqueCandidates: string[];
+    nearbyExcerpt?: string;
+    at: number;
+  };
 }
 
 export type ExitCriterionStatus = "unmet" | "met" | "wont-do";

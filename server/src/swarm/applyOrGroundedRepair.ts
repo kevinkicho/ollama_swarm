@@ -1,6 +1,9 @@
 /**
- * Shared apply → grounded repair → re-apply core (RR-A).
+ * Shared apply → grounded repair → re-apply core (RR-A / RR-B).
  * Callers supply model invoke; this module stays free of runner types.
+ *
+ * Optional SWARM_APPLY_DETERMINISTIC_CANDIDATE=1 tries uniqueCandidates[0]
+ * before the LLM on *_not_found misses (default off).
  */
 
 import {
@@ -8,6 +11,7 @@ import {
   type ApplyMissReport,
   type Hunk,
 } from "./blackboard/applyHunks.js";
+import { countOccurrences } from "./blackboard/applyMissReport.js";
 import {
   buildHunkRepairPrompt,
   isRepairableApplyMiss,
@@ -30,6 +34,14 @@ export interface ApplyOrGroundedRepairInput {
   /** Emit-only model call that returns raw text. */
   callModel: (repairPrompt: string) => Promise<string>;
   maxGroundedRepairs?: number;
+  /**
+   * When true (or env SWARM_APPLY_DETERMINISTIC_CANDIDATE=1), try
+   * uniqueCandidates[0] as search/start rewrite before calling the model.
+   * Only for search_not_found / start_not_found when candidate is unique.
+   */
+  tryDeterministicCandidate?: boolean;
+  /** Env bag for flag (defaults to process.env). */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface ApplyOrGroundedRepairResult {
@@ -37,13 +49,63 @@ export interface ApplyOrGroundedRepairResult {
   newTextsByFile?: Record<string, string>;
   hunks?: Hunk[];
   error?: string;
+  /** Last miss (present on failure; also set when repaired after a miss). */
   miss?: ApplyMissReport;
   repaired: boolean;
   repairAttempts: number;
+  /** True when uniqueCandidates[0] rewrite applied without LLM. */
+  deterministicCandidate?: boolean;
+}
+
+/** Opt-in env flag for deterministic uniqueCandidates[0] try. */
+export function isDeterministicCandidateEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return /^(1|true|yes)$/i.test(
+    (env.SWARM_APPLY_DETERMINISTIC_CANDIDATE ?? "").trim(),
+  );
 }
 
 /**
- * Apply hunks; on repairable miss, one (default) grounded repair re-emit + re-apply.
+ * Rewrite the failed hunk's search/start to uniqueCandidates[0] when the
+ * candidate is unique in fileText. Returns new hunk list or null.
+ */
+export function rewriteHunkWithCandidate(
+  hunks: Hunk[],
+  miss: ApplyMissReport,
+  fileText: string,
+): Hunk[] | null {
+  if (
+    miss.kind !== "search_not_found" &&
+    miss.kind !== "start_not_found"
+  ) {
+    return null;
+  }
+  const cand = miss.uniqueCandidates[0]?.trim();
+  if (!cand || cand.length < 8) return null;
+  if (countOccurrences(fileText, cand) !== 1) return null;
+
+  const idx = miss.hunkIndex;
+  if (idx < 0 || idx >= hunks.length) return null;
+  const h = hunks[idx]!;
+  if (h.file !== miss.file) return null;
+
+  if (h.op === "replace" && miss.kind === "search_not_found") {
+    return hunks.map((x, i) =>
+      i === idx ? { ...h, search: cand } : x,
+    );
+  }
+  if (h.op === "replace_between" && miss.kind === "start_not_found") {
+    return hunks.map((x, i) =>
+      i === idx ? { ...h, start: cand } : x,
+    );
+  }
+  return null;
+}
+
+/**
+ * Apply hunks; on repairable miss, optional deterministic candidate then
+ * one (default) grounded repair re-emit + re-apply.
  * Never returns ok with the original failed hunks.
  */
 export async function applyOrGroundedRepair(
@@ -53,6 +115,7 @@ export async function applyOrGroundedRepair(
   let hunks = input.hunks.slice();
   let texts = { ...input.currentTextsByFile };
   let repairAttempts = 0;
+  let usedDeterministic = false;
 
   let applied = applyHunks(texts, hunks);
   if (applied.ok) {
@@ -65,17 +128,17 @@ export async function applyOrGroundedRepair(
     };
   }
 
-  while (
-    repairAttempts < maxRepairs &&
-    isRepairableApplyMiss({ miss: applied.miss, reason: applied.error })
-  ) {
-    const miss = applied.miss;
+  // Capture fail fields (nested closures won't narrow `applied` correctly).
+  let lastError = applied.error;
+  let lastMiss = applied.miss;
+
+  // Fresh disk for miss file before any recovery.
+  async function refreshMissFile(miss: ApplyMissReport | undefined): Promise<string | null> {
     const failedFile =
       miss?.file ||
-      applied.error.match(/file "([^"]+)"/)?.[1] ||
+      lastError.match(/file "([^"]+)"/)?.[1] ||
       input.expectedFiles[0];
-    if (!failedFile) break;
-
+    if (!failedFile) return null;
     let content = texts[failedFile] ?? null;
     if (input.readFile) {
       try {
@@ -85,12 +148,63 @@ export async function applyOrGroundedRepair(
         /* keep */
       }
     }
+    if (content != null) {
+      texts = { ...texts, [failedFile]: content };
+    }
+    return content;
+  }
+
+  // RR-B opt-in: deterministic uniqueCandidates[0] before LLM.
+  const wantDet =
+    input.tryDeterministicCandidate === true ||
+    (input.tryDeterministicCandidate !== false &&
+      isDeterministicCandidateEnabled(input.env ?? process.env));
+
+  const firstMiss = lastMiss;
+
+  if (
+    wantDet &&
+    lastMiss &&
+    isRepairableApplyMiss({ miss: lastMiss, reason: lastError })
+  ) {
+    const content = await refreshMissFile(lastMiss);
+    if (content != null) {
+      const rewritten = rewriteHunkWithCandidate(hunks, lastMiss, content);
+      if (rewritten) {
+        const det = applyHunks(texts, rewritten);
+        if (det.ok) {
+          return {
+            ok: true,
+            newTextsByFile: det.newTextsByFile,
+            hunks: rewritten,
+            miss: firstMiss,
+            repaired: true,
+            repairAttempts: 0,
+            deterministicCandidate: true,
+          };
+        }
+        // Candidate failed — keep going to LLM with original miss
+      }
+    }
+  }
+
+  while (
+    repairAttempts < maxRepairs &&
+    isRepairableApplyMiss({ miss: lastMiss, reason: lastError })
+  ) {
+    const miss = lastMiss;
+    const failedFile =
+      miss?.file ||
+      lastError.match(/file "([^"]+)"/)?.[1] ||
+      input.expectedFiles[0];
+    if (!failedFile) break;
+
+    const content = await refreshMissFile(miss);
     if (content == null) break;
 
-    texts = { ...texts, [failedFile]: content };
     const prompt = buildHunkRepairPrompt(
       hunks,
-      applied.error,
+      lastError,
       { [failedFile]: content },
       { miss },
     );
@@ -102,10 +216,11 @@ export async function applyOrGroundedRepair(
       const msg = err instanceof Error ? err.message : String(err);
       return {
         ok: false,
-        error: `${applied.error} | repair model failed: ${msg}`,
+        error: `${lastError} | repair model failed: ${msg}`,
         miss,
         repaired: false,
         repairAttempts,
+        deterministicCandidate: usedDeterministic,
       };
     }
 
@@ -113,10 +228,11 @@ export async function applyOrGroundedRepair(
     if (!parsed.ok || parsed.skip || parsed.hunks.length === 0) {
       return {
         ok: false,
-        error: applied.error + " | repair parse failed",
+        error: lastError + " | repair parse failed",
         miss,
         repaired: false,
         repairAttempts,
+        deterministicCandidate: usedDeterministic,
       };
     }
 
@@ -127,17 +243,22 @@ export async function applyOrGroundedRepair(
         ok: true,
         newTextsByFile: applied.newTextsByFile,
         hunks,
+        miss: firstMiss,
         repaired: true,
         repairAttempts,
+        deterministicCandidate: usedDeterministic,
       };
     }
+    lastError = applied.error;
+    lastMiss = applied.miss;
   }
 
   return {
     ok: false,
-    error: applied.error,
-    miss: applied.miss,
+    error: lastError,
+    miss: lastMiss,
     repaired: false,
     repairAttempts,
+    deterministicCandidate: usedDeterministic,
   };
 }

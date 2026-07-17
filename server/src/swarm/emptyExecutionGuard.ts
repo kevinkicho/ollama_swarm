@@ -22,3 +22,11 @@ export function formatEmptyExecutionReason(streak: number): string {
     `(no proposals / no fallback drafts)`
   );
 }
+
+/** Blackboard / planner empty-plan reason (parity with council empty-execution). */
+export function formatEmptyPlanReason(streak: number): string {
+  return (
+    `empty-plan: ${streak} consecutive cycle(s) with 0 actionable todos ` +
+    `(planner produced no executable work)`
+  );
+}

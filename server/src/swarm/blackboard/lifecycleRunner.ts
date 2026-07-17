@@ -586,9 +586,24 @@ export async function planAndExecute(
       && counts.committed === 0
       && !ctx.getCompletionDetail()
     ) {
-      ctx.setCompletionDetail(
-        "planner produced no actionable todos; no commits",
-      );
+      const emptyDetail = "planner produced no actionable todos; no commits";
+      ctx.setCompletionDetail(emptyDetail);
+      // RR-D parity with council empty-execution: Brain RECONFIG chip.
+      try {
+        const { notifyGuardTrip } = await import("../guardNotify.js");
+        const { recordEmptyExecutionCycle } = await import("../cycleIntegrityStats.js");
+        const { formatEmptyPlanReason } = await import("../emptyExecutionGuard.js");
+        recordEmptyExecutionCycle(ctx.getActive()?.runId);
+        notifyGuardTrip({
+          kind: "plan-empty",
+          detail: formatEmptyPlanReason(1) + " — " + emptyDetail,
+          runId: ctx.getActive()?.runId,
+          appendSystem: (t, s) => ctx.appendSystem(t, s),
+          getBrainService: ctx.getBrainService,
+        });
+      } catch {
+        /* non-fatal */
+      }
     }
     if (workers.length > 0 && hasExecutableWork) {
       // Stamp the wall-clock origin just before caps start being checked.

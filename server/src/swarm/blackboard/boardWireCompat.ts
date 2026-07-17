@@ -66,6 +66,14 @@ export function v2QueueTodoToWireTodo(qt: QueuedTodo): Todo {
     ...(qt.status === "pending-commit" && qt.proposedFiles
       ? { proposedFiles: qt.proposedFiles.slice() }
       : {}),
+    ...(qt.lastApplyMiss
+      ? {
+          lastApplyMiss: {
+            ...qt.lastApplyMiss,
+            uniqueCandidates: qt.lastApplyMiss.uniqueCandidates.slice(),
+          },
+        }
+      : {}),
   };
 }
 

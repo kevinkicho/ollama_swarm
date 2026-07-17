@@ -185,6 +185,20 @@ export async function prepareWorkerTodoSeed(
     ...(endpointCatalogBlock ? { endpointCatalogBlock } : {}),
     ...(projectGraphSlice ? { projectGraphSlice } : {}),
     ...(hunkRagBlock ? { hunkRagBlock } : {}),
+    ...(todo.lastApplyMiss
+      ? {
+          lastApplyMiss: {
+            file: todo.lastApplyMiss.file,
+            kind: todo.lastApplyMiss.kind,
+            op: todo.lastApplyMiss.op,
+            needle: todo.lastApplyMiss.needle,
+            matchCount: todo.lastApplyMiss.matchCount,
+            message: todo.lastApplyMiss.message,
+            uniqueCandidates: [...todo.lastApplyMiss.uniqueCandidates],
+            nearbyExcerpt: todo.lastApplyMiss.nearbyExcerpt,
+          },
+        }
+      : {}),
   };
 
   if (ctx.getActive()?.stigmergyOnBlackboard && pheromoneHeatmap.size > 0) {

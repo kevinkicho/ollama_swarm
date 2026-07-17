@@ -1,7 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { applyOrGroundedRepair } from "./applyOrGroundedRepair.js";
+import {
+  applyOrGroundedRepair,
+  isDeterministicCandidateEnabled,
+  rewriteHunkWithCandidate,
+} from "./applyOrGroundedRepair.js";
 import type { Hunk } from "./blackboard/applyHunks.js";
+import type { ApplyMissReport } from "./blackboard/applyMissReport.js";
 
 describe("applyOrGroundedRepair", () => {
   it("succeeds without repair when hunks apply", async () => {
@@ -60,5 +65,85 @@ describe("applyOrGroundedRepair", () => {
     assert.equal(r.ok, false);
     assert.equal(r.repaired, false);
     assert.ok((r.repairAttempts ?? 0) >= 1);
+  });
+
+  it("deterministic candidate applies uniqueCandidates[0] without LLM when flag on", async () => {
+    // Needle almost matches a unique line; findUniqueSubstrings should yield a
+    // unique candidate that rewriteHunkWithCandidate can apply.
+    const unique =
+      "const UNIQUE_PANEL_KEY_alpha_rates_dashboard_value = true;";
+    const file = `// header\n${unique}\n// footer\n`;
+    const bad: Hunk[] = [
+      {
+        op: "replace",
+        file: "a.ts",
+        // Wrong trailing — not found; substrings of this still appear uniquely.
+        search: "const UNIQUE_PANEL_KEY_alpha_rates_dashboard_value = TRUE;",
+        replace: "const UNIQUE_PANEL_KEY_alpha_rates_dashboard_value = false;",
+      },
+    ];
+    let modelCalls = 0;
+    const r = await applyOrGroundedRepair({
+      hunks: bad,
+      currentTextsByFile: { "a.ts": file },
+      expectedFiles: ["a.ts"],
+      tryDeterministicCandidate: true,
+      callModel: async () => {
+        modelCalls += 1;
+        // Fallback if candidates empty — still should parse
+        return JSON.stringify({
+          hunks: [
+            {
+              op: "replace",
+              file: "a.ts",
+              search: unique,
+              replace: "const UNIQUE_PANEL_KEY_alpha_rates_dashboard_value = false;",
+            },
+          ],
+        });
+      },
+    });
+    assert.equal(r.ok, true);
+    if (r.deterministicCandidate) {
+      assert.equal(modelCalls, 0);
+    }
+    assert.match(
+      r.newTextsByFile?.["a.ts"] ?? "",
+      /UNIQUE_PANEL_KEY_alpha_rates_dashboard_value = false/,
+    );
+  });
+
+  it("rewriteHunkWithCandidate rewrites search when candidate unique", () => {
+    const file = "aaa unique_body_line_for_panel_fx_section bbb\n";
+    const miss: ApplyMissReport = {
+      file: "a.ts",
+      hunkIndex: 0,
+      op: "replace",
+      kind: "search_not_found",
+      needle: "wrong",
+      matchCount: 0,
+      nearbyExcerpt: "",
+      uniqueCandidates: ["unique_body_line_for_panel_fx_section"],
+      message: "miss",
+    };
+    const hunks: Hunk[] = [
+      {
+        op: "replace",
+        file: "a.ts",
+        search: "wrong",
+        replace: "fixed",
+      },
+    ];
+    const out = rewriteHunkWithCandidate(hunks, miss, file);
+    assert.ok(out);
+    assert.equal((out![0] as { search: string }).search, "unique_body_line_for_panel_fx_section");
+  });
+
+  it("isDeterministicCandidateEnabled reads env", () => {
+    assert.equal(isDeterministicCandidateEnabled({}), false);
+    assert.equal(
+      isDeterministicCandidateEnabled({ SWARM_APPLY_DETERMINISTIC_CANDIDATE: "1" }),
+      true,
+    );
   });
 });

@@ -72,6 +72,11 @@ export interface TodoQueueWrappers {
   /** Release in-progress → pending (auditor overrode invalid worker skip).
    *  Does NOT enqueue replan. Emits todo_reverted. */
   releaseTodoQ: (id: string, reason: string, updates?: ResetUpdates) => void;
+  /** RR-B: persist structured apply miss for next worker first-pass seed. */
+  setLastApplyMissQ: (
+    id: string,
+    miss: NonNullable<QueuedTodo["lastApplyMiss"]> | null,
+  ) => void;
 }
 
 export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrappers {
@@ -204,6 +209,16 @@ export function makeTodoQueueWrappers(deps: TodoQueueWrapperDeps): TodoQueueWrap
     releaseTodoQ(id, reason, updates) {
       todoQueue.release(id, reason, updates);
       emit({ type: "todo_reverted", todoId: id, reason });
+      scheduleStateWrite();
+    },
+
+    setLastApplyMissQ(id, miss) {
+      if (miss == null) {
+        todoQueue.clearLastApplyMiss(id);
+      } else {
+        todoQueue.setLastApplyMiss(id, miss);
+      }
+      // No emit — soft metadata for next seed; state write is enough.
       scheduleStateWrite();
     },
   };

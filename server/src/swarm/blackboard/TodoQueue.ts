@@ -86,6 +86,22 @@ export interface QueuedTodo {
   proposedHunks?: readonly unknown[];
   /** Auditor-gated commits: files the proposed hunks target. */
   proposedFiles?: readonly string[];
+  /**
+   * RR-B: last structured apply miss for this todo (same run).
+   * Injected into the next worker first-pass / repair so retries
+   * re-use uniqueCandidates without re-discovering the miss.
+   */
+  lastApplyMiss?: {
+    file: string;
+    kind: string;
+    op: string;
+    needle: string;
+    matchCount: number;
+    message: string;
+    uniqueCandidates: string[];
+    nearbyExcerpt?: string;
+    at: number;
+  };
 }
 
 export interface TodoQueueCounts {
@@ -450,6 +466,35 @@ export class TodoQueue {
     void ts;
   }
 
+  /**
+   * Persist a structured apply miss for the next retry seed (RR-B).
+   * Safe on any status; does not change queue state.
+   */
+  setLastApplyMiss(
+    id: string,
+    miss: NonNullable<QueuedTodo["lastApplyMiss"]>,
+  ): void {
+    const t = this.findOrThrow(id);
+    t.lastApplyMiss = {
+      file: miss.file,
+      kind: miss.kind,
+      op: miss.op,
+      needle: miss.needle.slice(0, 400),
+      matchCount: miss.matchCount,
+      message: miss.message.slice(0, 500),
+      uniqueCandidates: miss.uniqueCandidates.slice(0, 5).map((c) => c.slice(0, 400)),
+      ...(miss.nearbyExcerpt
+        ? { nearbyExcerpt: miss.nearbyExcerpt.slice(0, 1200) }
+        : {}),
+      at: miss.at || Date.now(),
+    };
+  }
+
+  clearLastApplyMiss(id: string): void {
+    const t = this.todos.find((x) => x.id === id);
+    if (t) t.lastApplyMiss = undefined;
+  }
+
   /** Mark an in-progress todo as failed. Increments retries.
    *  Caller decides whether to re-enqueue (via reset()) or leave failed.
    *  Idempotent on already-failed todos (second fail just updates reason). */
@@ -615,7 +660,7 @@ export class TodoQueue {
     return t ? this.copyTodo(t) : undefined;
   }
 
-  /** Defensive copy — clones expectedFiles + expectedAnchors arrays so
+  /** Defensive copy — clones expectedFiles + expectedAnchors (+ lastApplyMiss).
    *  callers can't mutate internal state through them. Other fields
    *  are immutable scalars / strings. groupId is a scalar so the
    *  spread above already carries it. */
@@ -624,6 +669,14 @@ export class TodoQueue {
       ...t,
       expectedFiles: t.expectedFiles.slice(),
       ...(t.expectedAnchors ? { expectedAnchors: t.expectedAnchors.slice() } : {}),
+      ...(t.lastApplyMiss
+        ? {
+            lastApplyMiss: {
+              ...t.lastApplyMiss,
+              uniqueCandidates: t.lastApplyMiss.uniqueCandidates.slice(),
+            },
+          }
+        : {}),
     };
   }
 
