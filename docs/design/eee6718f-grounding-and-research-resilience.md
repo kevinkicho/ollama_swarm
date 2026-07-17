@@ -6,6 +6,7 @@
 | **Date** | 2026-07-16 |
 | **Revision** | 3 |
 | **Status** | **Shipped on `main`** (`1063fa7` + follow-up polish) |
+| **Follow-on program** | [`residual-reliability-program.md`](./residual-reliability-program.md) (RR-A…E formal designs) |
 | **Related runs** | `eee6718f-03f3-45dd-a3a2-593076734102`, `9f449937-a060-49e6-9417-aba2774dfb16` |
 | **Related code** | `applyHunks.ts`, `windowFile.ts`, `autoAnchor.ts`, `worker.ts` prompts, `webTools.ts`, `researchPolicy.ts`, `councilWorkerRunner.ts`, `buildHunkRepairPrompt` |
 | **Already shipped (do not re-do)** | Stream loop abort/collapse, finalizeAgentOutput, research policy gate, literature false-positive fix (`isLiteratureTodo`), literature blackout/cache, think-aware `formatExpect` JSON sniff |
