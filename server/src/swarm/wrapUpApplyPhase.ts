@@ -289,11 +289,13 @@ export async function runWrapUpApplyPhase(
       input.manager.markStatus(input.agent.id, "thinking");
       const { provider, modelId } = pickProvider(input.model);
       const t0 = Date.now();
+      // Force JSON envelope like workers (live thrash: think-only wrap-up blobs).
       const result = await provider.chat({
         model: modelId,
         messages: [{ role: "user", content: prompt }],
         signal: abortController.signal,
         agentId: input.agent.id,
+        format: "json",
       });
       const { recordChatUsage } = await import("../services/ollamaProxy.js");
       recordChatUsage({

@@ -34,4 +34,16 @@ describe("isLiteratureTodo — eee6718f false-positive fix", () => {
     assert.equal(isLiteratureTodo("web research for FRED commercial paper series"), true);
     assert.equal(isLiteratureTodo("survey papers on SDMX and cite arxiv sources"), true);
   });
+
+  it("matches find/look-up/gather papers phrasing", () => {
+    assert.equal(isLiteratureTodo("Find papers on SDMX metadata conventions"), true);
+    assert.equal(isLiteratureTodo("Look up literature on central bank digital currencies"), true);
+    assert.equal(isLiteratureTodo("Gather sources and cite papers for the IMF CPIS API"), true);
+    assert.equal(isLiteratureTodo("Do a literature review of peer-reviewed panel methods"), true);
+  });
+
+  it("does not match bare arxiv/citation without research intent", () => {
+    // Product / path names should stay false
+    assert.equal(isLiteratureTodo("ResearchDashboardPanel.jsx: fix layout"), false);
+  });
 });

@@ -16,17 +16,24 @@ Full-codebase audit after residual RR landings. Focus: dead loops, leaks, apply 
 | `lastApplyMiss` clear on replan + TTL / expectedFiles filter | HIGH | Stale anchors don’t poison next seed |
 | Research blackout prefer budget as source of truth | MED | Dual-state mirror reduced |
 
-## Still open (follow-up, not blocking live)
+## Wave-2 shipped (same program)
 
-1. **Debug WriteStream close** on `ActiveRun.releaseResources` (FD growth multi-run server).
-2. **Empty-execution `void this.stop()`** mid-cycle race — prefer return `stop` from cycle.
-3. **WorkerPipeline write-loop** same all-or-nothing snapshot as propose_hunks.
-4. **Wrap-up JSON force** (`formatExpect` / `ollamaFormat`) on provider.chat path.
-5. **expectedFiles path normalize** (`./a` vs `a`) to cut false thrash.
-6. **isLiteratureTodo** phrase table (find papers / look up sources).
-7. **Close-out mutex** for concurrent drain/stop.
-8. **Stop debounce map prune** after terminal.
+| Item | Status |
+|------|--------|
+| Debug WriteStream close on `ActiveRun.releaseResources` | **Done** — `EventSink.close` + `hub.close()` |
+| Empty-execution no `void this.stop()` | **Done** — set `stopping` + cycle returns via `closingRequested` |
+| WorkerPipeline write-loop snapshot revert | **Done** |
+| Wrap-up JSON force (`format: "json"`) | **Done** |
+| expectedFiles path normalize | **Done** — `normalizeRepoPath` |
+| isLiteratureTodo phrase table | **Done** — find/look up/gather papers |
+| Close-out single-flight stop/drain | **Done** — join `stopInFlight` |
+| Stop debounce map prune | **Done** — `clear` + `retain(activeRunIds)` |
 
+## Optional further hardening (low priority)
+
+1. Path-normalize at apply time for Windows drive letters edge cases.
+2. Wrap-up use full `promptWithRetry` stack (stream sniff) not only `format: json`.
+3. Debug meta sidecar after `hub.close` if list UI needs final flush.
 ## Operator env flags
 
 | Flag | Default | Effect |

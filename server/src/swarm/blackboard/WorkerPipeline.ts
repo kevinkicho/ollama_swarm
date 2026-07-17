@@ -198,9 +198,29 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
   //    Delete ops (applyHunks "delete" produces newText==="") are handled
   //    via explicit .delete() when the adapter provides it (preferred);
   //    otherwise fall back to write("") (the real adapter converts "" to unlink).
+  // All-or-nothing multi-file write: on mid-batch failure, restore prior contents
+  // for files already written (parity with propose_hunks / verify-gate revert).
   const filesWritten: string[] = [];
   let linesAdded = 0;
   let linesRemoved = 0;
+  const restoreWritten = async (): Promise<void> => {
+    for (const file of filesWritten) {
+      const before = contents[file];
+      try {
+        if (before === null) {
+          if (typeof input.fs.delete === "function") {
+            await input.fs.delete(file);
+          } else {
+            await input.fs.write(file, "");
+          }
+        } else {
+          await input.fs.write(file, before);
+        }
+      } catch {
+        /* best-effort restore */
+      }
+    }
+  };
   for (const [file, newText] of Object.entries(applied.newTextsByFile)) {
     const before = contents[file];
     if (newText === "") {
@@ -224,7 +244,11 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
       await input.fs.write(file, newText);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return { ok: false, reason: `write failed for ${file}: ${msg}` };
+      await restoreWritten();
+      return {
+        ok: false,
+        reason: `write failed for ${file} (reverted ${filesWritten.length} file(s)): ${msg}`,
+      };
     }
     filesWritten.push(file);
     const beforeLines = before === null ? 0 : countNewlines(before);

@@ -695,11 +695,15 @@ export class CouncilRunner extends DiscussionRunnerBase {
       runDiscussionAgent: (agent, prompt, opts) =>
         this.runDiscussionAgent(agent, prompt, opts as any),
       stats: this.stats,
-      // RR-D: empty-execution limit → Brain RECONFIG (extend rounds) + soft stop.
+      // RR-D: empty-execution limit → Brain RECONFIG + mark stopping.
+      // Do NOT fire-and-forget this.stop() (races close-out). The cycle/loop
+      // observes stopping + earlyStopDetail and returns "stop" for single close-out.
       onEmptyExecutionLimit: (streak, reason) => {
         this.earlyStopDetail = reason;
+        this.stopping = true;
+        if (this.state) this.state.stopping = true;
         this.appendSystem(
-          `[empty-execution] limit reached (streak=${streak}) — stopping run: ${reason}`,
+          `[empty-execution] limit reached (streak=${streak}) — ending after this cycle: ${reason}`,
         );
         notifyGuardTrip({
           kind: "empty-execution",
@@ -708,7 +712,6 @@ export class CouncilRunner extends DiscussionRunnerBase {
           appendSystem: (t, s) => this.appendSystem(t, s),
           getBrainService: () => this.opts.getBrainService?.() ?? null,
         });
-        void this.stop();
       },
     };
   }

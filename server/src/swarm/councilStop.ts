@@ -62,7 +62,9 @@ export async function waitForAgentsIdle(
 }
 
 export async function councilStop(host: CouncilStopHost): Promise<void> {
-  if (host.getStopInFlight()) return host.getStopInFlight()!;
+  // Single-flight: concurrent stop/drain share one close-out promise.
+  const inflight = host.getStopInFlight();
+  if (inflight) return inflight;
   enterImmediateShutdown(host);
   const p = awaitLoopThenCloseOut(host, { immediate: true });
   host.setStopInFlight(p);
@@ -75,7 +77,9 @@ export async function councilStop(host: CouncilStopHost): Promise<void> {
  * immediately (enterImmediateShutdown unblocks waiters via drainResolve).
  */
 export async function councilDrain(host: CouncilStopHost): Promise<void> {
-  if (host.getStopInFlight()) return host.getStopInFlight()!;
+  // Join hard-stop close-out if already in flight (do not start a second path).
+  const inflight = host.getStopInFlight();
+  if (inflight) return inflight;
   if (host.getPhase() === "stopped" || host.getPhase() === "completed") return;
   // Already soft-draining — idempotent no-op (watcher/background continues).
   if (host.getDrainRequested() || host.getPhase() === "draining") return;

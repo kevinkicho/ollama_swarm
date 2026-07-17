@@ -27,9 +27,14 @@ export async function executeStopForRun(
   opts: {
     drainOnStop: boolean;
     debounce: PerRunStopDebounce;
+    /** Active run ids for debounce map prune (optional). */
+    activeRunIds?: ReadonlySet<string>;
   },
 ): Promise<JsonResult> {
   try {
+    if (opts.activeRunIds) {
+      opts.debounce.retain(opts.activeRunIds);
+    }
     if (opts.drainOnStop) {
       const decision = decideStopAction({
         now: Date.now(),
@@ -39,6 +44,7 @@ export async function executeStopForRun(
       if (decision.action === "drain") {
         const result = await orch.drainRun(runId);
         if (!result) {
+          opts.debounce.clear(runId);
           return { status: 404, body: { error: "runId not active" } };
         }
         return {
@@ -53,6 +59,8 @@ export async function executeStopForRun(
       }
     }
     const ok = await orch.stopRun(runId);
+    // Terminal — drop debounce entry for this run.
+    opts.debounce.clear(runId);
     if (!ok) {
       return { status: 404, body: { error: "runId not active" } };
     }

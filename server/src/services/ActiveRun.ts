@@ -191,6 +191,15 @@ export class ActiveRun {
         /* ignore */
       }
     }
+
+    // End per-run debug WriteStream so multi-run servers don't leak FDs.
+    if (this.hub) {
+      try {
+        this.hub.close();
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   /** Force a terminal snapshot write with the given phase and stopReason. */

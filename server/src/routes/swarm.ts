@@ -207,6 +207,7 @@ export function swarmRouter(orch: Orchestrator): Router {
     const result = await executeStopForRun(orch, runId, {
       drainOnStop: config.SWARM_DRAIN_ON_STOP,
       debounce: lastStopClickAtByRun,
+      activeRunIds: new Set(orch.listActiveRuns().map((r) => r.runId)),
     });
     res.status(result.status).json(result.body);
   });
@@ -333,6 +334,7 @@ export function swarmRouter(orch: Orchestrator): Router {
     const result = await executeStopForRun(orch, resolved.runId, {
       drainOnStop: config.SWARM_DRAIN_ON_STOP,
       debounce: lastStopClickAtByRun,
+      activeRunIds: new Set(orch.listActiveRuns().map((r) => r.runId)),
     });
     res.status(result.status).json(result.body);
   });

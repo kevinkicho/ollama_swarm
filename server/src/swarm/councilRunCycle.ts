@@ -438,4 +438,6 @@ async function runCycleStandup(
   );
 
   await host.synthesizeStandup(cfg, cycle);
+  // Empty-execution sets host.stopping + earlyStopDetail; caller returns "stop"
+  // via closingRequested() after this function (no fire-and-forget stop()).
 }

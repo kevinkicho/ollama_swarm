@@ -200,6 +200,17 @@ describe("parseWorkerResponse — rejections (v2 hunks)", () => {
     assert.strictEqual(r.hunks.length, MAX_HUNKS, `should cap to ${MAX_HUNKS} hunks`);
   });
 
+  it("accepts ./path vs path for expectedFiles allow-list", () => {
+    const raw = JSON.stringify({
+      hunks: [
+        { op: "replace", file: "./src/a.ts", search: "x", replace: "y" },
+      ],
+    });
+    const r = parseWorkerResponse(raw, ["src/a.ts"]);
+    assert(r.ok, "normalized path should match expectedFiles");
+    if (r.ok) assert.equal(r.hunks[0]!.file, "src/a.ts");
+  });
+
   it("rejects a hunk whose file is not in expectedFiles", () => {
     const raw = JSON.stringify({
       hunks: [{ op: "replace", file: "not-allowed.ts", search: "x", replace: "y" }],

@@ -140,6 +140,24 @@ export function validateHunkPayload(hunks: readonly Hunk[]): WorkerParseResult {
   return { ok: true, hunks: [...hunks] };
 }
 
+/** Normalize repo-relative paths for expectedFiles allow-list matching. */
+export function normalizeRepoPath(p: string): string {
+  return p
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/\/+/g, "/")
+    .replace(/\/$/, "")
+    .trim();
+}
+
+function allowedFileSet(expectedFiles: readonly string[]): Set<string> {
+  return new Set(expectedFiles.map(normalizeRepoPath).filter(Boolean));
+}
+
+function fileAllowed(file: string, allowed: Set<string>): boolean {
+  return allowed.has(normalizeRepoPath(file));
+}
+
 export function parseWorkerResponse(
   raw: string,
   expectedFiles: string[],
@@ -157,13 +175,27 @@ export function parseWorkerResponse(
   // bad hunk doesn't kill the whole response.
   const v = WorkerResponseSchema.safeParse(parsed);
   if (v.success) {
-    const allowed = new Set(expectedFiles);
+    const allowed = allowedFileSet(expectedFiles);
+    const rejected: string[] = [];
     for (const h of v.data.hunks) {
-      if (!allowed.has(h.file)) {
-        return { ok: false, reason: `hunk file "${h.file}" not in expectedFiles` };
+      if (!fileAllowed(h.file, allowed)) {
+        rejected.push(h.file);
       }
     }
-    return { ok: true, hunks: v.data.hunks as Hunk[], skip: v.data.skip };
+    if (rejected.length > 0) {
+      return {
+        ok: false,
+        reason:
+          `hunk file(s) not in expectedFiles: ${rejected.map((f) => JSON.stringify(f)).join(", ")} ` +
+          `(allowed: ${expectedFiles.map(normalizeRepoPath).join(", ") || "(none)"})`,
+      };
+    }
+    // Normalize paths on accepted hunks for apply consistency.
+    const hunks = v.data.hunks.map((h) => ({
+      ...h,
+      file: normalizeRepoPath(h.file),
+    })) as Hunk[];
+    return { ok: true, hunks, skip: v.data.skip };
   }
 
   // Lenient path: try to extract partial valid hunks from the parsed object.
@@ -183,13 +215,17 @@ export function parseWorkerResponse(
     return { ok: false, reason };
   }
 
-  const allowed = new Set(expectedFiles);
+  const allowed = allowedFileSet(expectedFiles);
   const validHunks: Hunk[] = [];
+  const dropped: string[] = [];
   for (const h of softCap(rawHunks, MAX_HUNKS)) {
     const hv = HunkSchema.safeParse(h);
     if (!hv.success) continue;
-    if (!allowed.has(hv.data.file)) continue;
-    validHunks.push(hv.data as Hunk);
+    if (!fileAllowed(hv.data.file, allowed)) {
+      dropped.push(hv.data.file);
+      continue;
+    }
+    validHunks.push({ ...hv.data, file: normalizeRepoPath(hv.data.file) } as Hunk);
   }
 
   const skip = typeof envelope.skip === "string" && envelope.skip.trim().length > 0
@@ -197,6 +233,14 @@ export function parseWorkerResponse(
     : undefined;
 
   if (validHunks.length === 0 && !skip) {
+    if (dropped.length > 0) {
+      return {
+        ok: false,
+        reason:
+          `hunk file(s) not in expectedFiles: ${dropped.map((f) => JSON.stringify(f)).join(", ")} ` +
+          `(allowed: ${expectedFiles.map(normalizeRepoPath).join(", ") || "(none)"})`,
+      };
+    }
     const reason = v.error.issues
       .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
       .join("; ");
@@ -380,13 +424,33 @@ export function isLiteratureTodo(description: string): boolean {
   if (!d) return false;
   // Explicit research / literature language
   if (
-    /\b(literature\s+review|literature\s+research|web\s+research|web\s+search|desk\s+research)\b/i.test(d)
+    /\b(literature\s+review|literature\s+research|web\s+research|web\s+search|desk\s+research)\b/i.test(
+      d,
+    )
   ) {
     return true;
   }
-  if (/\b(arxiv|citation|citations|bibliography|survey papers?)\b/i.test(d)) {
+  // Find / look up / gather papers or sources (mid-string ok)
+  if (
+    /\b(find|look\s+up|gather|collect|cite)\s+(papers?|literature|sources?|citations?)\b/i.test(
+      d,
+    )
+  ) {
     return true;
   }
+  if (/\b(do\s+a\s+literature\s+review|systematic\s+review)\b/i.test(d)) {
+    return true;
+  }
+  // arxiv / citations only with a research verb nearby (avoid bare "citation" noise)
+  if (
+    /\b(research|survey|review|read|fetch|search)\b.{0,40}\b(arxiv|citations?|bibliography)\b/i.test(
+      d,
+    ) ||
+    /\b(arxiv|citations?|bibliography)\b.{0,40}\b(research|survey|review|papers?)\b/i.test(d)
+  ) {
+    return true;
+  }
+  if (/\b(survey papers?)\b/i.test(d)) return true;
   // "research X" / "research and document" as a primary verb phrase near the start
   if (/^(research|survey|investigate)\b/i.test(d)) return true;
   if (/\b(research (the |and |official |API |endpoints?|sources?))\b/i.test(d)) return true;

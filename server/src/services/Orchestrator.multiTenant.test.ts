@@ -39,6 +39,8 @@ test("ActiveRun: unified teardown closes amendments + lock; dispose never re-sto
   );
   // stopRunner:false path must exist for natural completion.
   assert.match(ACTIVE_RUN_SRC, /stopRunner !== false/);
+  // Debug WriteStream must end on release (FD leak fix).
+  assert.match(ACTIVE_RUN_SRC, /this\.hub\.close\(\)/);
 });
 
 test("Orchestrator: runs map replaces the singleton runner field", () => {

@@ -41,6 +41,8 @@ export type EventCategory =
 export interface EventSink {
   name: string;
   handle(event: SwarmEvent, category: EventCategory): void;
+  /** Optional cleanup (e.g. end WriteStream). Called from hub.close(). */
+  close?: () => void;
 }
 
 export interface RunEventHubOptions {
@@ -141,6 +143,20 @@ export class RunEventHub {
   getRunId(): string {
     return this.runId;
   }
+
+  /**
+   * Close all sinks that support cleanup (debug WriteStream, etc.).
+   * Idempotent; safe after run teardown.
+   */
+  close(): void {
+    for (const sink of this.sinks) {
+      try {
+        sink.close?.();
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
 }
 
 /**
@@ -204,9 +220,11 @@ export function createDebugSink(runId: string, baseLogDir: string = "logs"): Eve
     }
   }
 
+  let closed = false;
   return {
     name: "debug",
     handle(event: SwarmEvent, category: EventCategory) {
+      if (closed) return;
       try {
         stream.write(JSON.stringify({ ts: Date.now(), category, event }) + "\n");
         writeCount++;
@@ -262,6 +280,15 @@ export function createDebugSink(runId: string, baseLogDir: string = "logs"): Eve
         }
       } catch {
         // best effort
+      }
+    },
+    close() {
+      if (closed) return;
+      closed = true;
+      try {
+        stream.end();
+      } catch {
+        /* ignore */
       }
     },
   };
