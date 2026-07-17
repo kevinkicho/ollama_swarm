@@ -45,6 +45,11 @@ export interface CouncilContractDraftDeps {
   manager: AgentManager;
   emitAgentState: (s: import("../../types.js").AgentState) => void;
   promptPlannerSafely: ContractContext["promptPlannerSafely"];
+  /**
+   * Independent-explore demotion: first valid draft aborts stragglers so they
+   * switch to emit-only from the peer brief (d3f56d9a follow-up).
+   */
+  peer?: import("../contractPeerDemote.js").PeerDraftCoordinator;
 }
 
 /** Single lead explore for council — shared brief feeds N emit-only drafts. */
@@ -141,6 +146,15 @@ export async function runCouncilContractDraftForAgent(
     );
   }
 
+  // Peer already finished a valid draft — skip explore, emit from their brief.
+  const existingPeer = deps.peer?.getPeerBrief();
+  if (existingPeer) {
+    deps.appendSystem(
+      `Council contract: Agent ${agent.index} demoted to emit-only (peer draft ready).`,
+    );
+    return runCouncilContractEmitForAgent(deps, agent, seed, existingPeer);
+  }
+
   const exploreProfile = resolveContractExploreProfile(seed, deps.getActive());
   const emitProfile = EMIT_ONLY_PROFILE_ID;
   const exploreToolCap = resolveMaxToolTurnsForPlanningPhase(
@@ -163,16 +177,34 @@ export async function runCouncilContractDraftForAgent(
     `Council contract: Agent ${agent.index} exploring repo before draft…`,
   );
 
-  const { response: exploreResponse, agentUsed: exploreAgent } =
-    await deps.promptPlannerSafely(
+  let exploreResponse: string;
+  let exploreAgent: Agent;
+  try {
+    const res = await deps.promptPlannerSafely(
       agent,
       explorePrompt,
       exploreProfile,
       undefined,
       { kind: "contract", label: "contract explore", maxToolTurns: exploreToolCap, mode: "explore" },
     );
+    exploreResponse = res.response;
+    exploreAgent = res.agentUsed;
+  } catch (err) {
+    const { isPeerDraftDemoteError } = await import("../contractPeerDemote.js");
+    const peerBrief = deps.peer?.getPeerBrief();
+    if (isPeerDraftDemoteError(err) && peerBrief) {
+      deps.appendSystem(
+        `Council contract: Agent ${agent.index} explore aborted for peer demote — emit-only from peer brief.`,
+      );
+      return runCouncilContractEmitForAgent(deps, agent, seed, peerBrief);
+    }
+    throw err;
+  }
   if (deps.getStopping()) return null;
   deps.appendAgent(exploreAgent, exploreResponse);
+
+  // Race: peer finished while we were exploring — prefer emit from peer if we failed parse.
+  const peerNow = deps.peer?.getPeerBrief();
 
   const parsedExplore = parseFirstPassContractResponse(exploreResponse);
   const exploreGroundingError = parsedExplore.ok
@@ -182,7 +214,15 @@ export async function runCouncilContractDraftForAgent(
     deps.appendSystem(
       `Council contract: Agent ${exploreAgent.index} draft parsed from explore — skipping redundant emit.`,
     );
+    deps.peer?.noteValidDraft(exploreAgent.id, exploreResponse);
     return { agent: exploreAgent, text: exploreResponse };
+  }
+
+  if (peerNow) {
+    deps.appendSystem(
+      `Council contract: Agent ${exploreAgent.index} explore incomplete — emit-only from peer brief.`,
+    );
+    return runCouncilContractEmitForAgent(deps, exploreAgent, seed, peerNow);
   }
 
   const emitRepairReason = parsedExplore.ok
@@ -210,13 +250,16 @@ export async function runCouncilContractDraftForAgent(
       emitPrompt,
       emitProfile,
       CONTRACT_JSON_SCHEMA,
-      { kind: "contract", label: "contract draft" },
+      { kind: "contract", label: "contract draft", mode: "emit", maxToolTurns: 0 },
     );
   if (deps.getStopping()) return null;
   deps.appendAgent(emitAgent, emitResponse);
+  const parsedEmit = parseFirstPassContractResponse(emitResponse);
+  if (parsedEmit.ok) {
+    deps.peer?.noteValidDraft(emitAgent.id, emitResponse);
+  }
   return { agent: emitAgent, text: emitResponse };
 }
-
 export async function runFirstPassContractOrchestrator(
   ctx: ContractContext,
   planner: Agent,

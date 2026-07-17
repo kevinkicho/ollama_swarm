@@ -80,4 +80,13 @@ describe("council contract drafts use repo tools", () => {
     assert.match(COUNCIL_ADAPTER, /contractExploreJsonNudge/);
     assert.match(COUNCIL_ADAPTER, /recordCycleFail/);
   });
+
+  it("independent explore wires peer demote coordinator", () => {
+    assert.match(COUNCIL_ADAPTER, /createPeerDraftCoordinator/);
+    assert.match(COUNCIL_ADAPTER, /peerCoordinator\.registerAbort/);
+    assert.match(COUNCIL_ADAPTER, /agentAbortSignals/);
+    assert.match(COUNCIL_CONTRACT, /getPeerBrief/);
+    assert.match(COUNCIL_CONTRACT, /noteValidDraft/);
+    assert.match(COUNCIL_CONTRACT, /isPeerDraftDemoteError/);
+  });
 });

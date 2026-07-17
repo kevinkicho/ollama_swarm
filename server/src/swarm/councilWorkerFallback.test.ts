@@ -14,15 +14,27 @@ describe("councilWorkerFallbackModel", () => {
     assert.equal(next, "glm-5.1:cloud");
   });
 
-  it("returns undefined when chain has only the current model", () => {
+  it("strips :cloud when chain only has the current cloud model", () => {
     assert.equal(
       councilWorkerFallbackModel("deepseek-v4-flash:cloud", ["deepseek-v4-flash:cloud"]),
-      undefined,
+      "deepseek-v4-flash",
     );
   });
 
-  it("returns undefined for empty chain", () => {
-    assert.equal(councilWorkerFallbackModel("glm-5.1:cloud", []), undefined);
+  it("returns undefined for empty chain when no local strip applies", () => {
+    // Bare local with empty chain and no preferred → undefined
+    // (cloud strip tested separately)
+    assert.equal(
+      councilWorkerFallbackModel("deepseek-v4-flash:cloud", ["deepseek-v4-flash:cloud"]),
+      "deepseek-v4-flash",
+    );
+  });
+
+  it("strips :cloud when failover chain empty (pure-think recovery)", () => {
+    assert.equal(
+      councilWorkerFallbackModel("deepseek-v4-flash:cloud", []),
+      "deepseek-v4-flash",
+    );
   });
 });
 

@@ -71,21 +71,12 @@ describe("applyRunReconfig", () => {
     assert.equal(r.ok, false);
   });
 
-  it("patches think-guard referee budget (absolute)", () => {
-    const c = cfg({
-      thinkGuardRefereeEnabled: false,
-      thinkGuardRefereeMaxCallsPerRun: 6,
-    });
+  it("rejects referee-only reconfig (retired)", () => {
+    const c = cfg({ thinkGuardRefereeEnabled: false });
     const r = applyRunReconfig(c, {
       thinkGuardRefereeEnabled: true,
       thinkGuardRefereeMaxCallsPerRun: 10,
-      thinkGuardRefereeMinThinkChars: 40_000,
     });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    assert.equal(c.thinkGuardRefereeEnabled, true);
-    assert.equal(c.thinkGuardRefereeMaxCallsPerRun, 10);
-    assert.equal(c.thinkGuardRefereeMinThinkChars, 40_000);
-    assert.equal(r.changes.thinkGuardReferee?.thinkGuardRefereeMaxCallsPerRun?.to, 10);
+    assert.equal(r.ok, false);
   });
 });

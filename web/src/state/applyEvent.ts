@@ -9,7 +9,6 @@ import type { SwarmEvent } from "../types";
 import type { SwarmStore } from "./store";
 import { activityStubId, activityStubText } from "./agentActivityView";
 import { isPreStreamActivityPhase } from "./agentActivityPhases";
-import { syncThinkGuardRefereeStore } from "./thinkGuardRefereeSync";
 
 /** Events without a runId field (global lifecycle) always apply.
  *  When the store has a runId, drop events stamped for another run.
@@ -179,28 +178,9 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
       if (ev.changes.wallClockCapMs) {
         patch.wallClockCapMin = String(Math.round(ev.changes.wallClockCapMs.to / 60_000));
       }
-      const tg = ev.changes.thinkGuardReferee;
-      if (tg?.thinkGuardRefereeEnabled) {
-        patch.thinkGuardRefereeEnabled = tg.thinkGuardRefereeEnabled.to;
-      }
-      if (tg?.thinkGuardRefereeMaxCallsPerRun) {
-        patch.thinkGuardRefereeMaxCallsPerRun = tg.thinkGuardRefereeMaxCallsPerRun.to;
-      }
-      if (tg?.thinkGuardRefereeMinThinkChars) {
-        patch.thinkGuardRefereeMinThinkChars = tg.thinkGuardRefereeMinThinkChars.to;
-      }
-      if (tg?.thinkGuardRefereeThinkTailMinChars) {
-        patch.thinkGuardRefereeThinkTailMinChars = tg.thinkGuardRefereeThinkTailMinChars.to;
-      }
-      if (tg?.thinkGuardRefereeThinkTailMaxChars) {
-        patch.thinkGuardRefereeThinkTailMaxChars = tg.thinkGuardRefereeThinkTailMaxChars.to;
-      }
-      if (tg?.thinkGuardRefereeMaxOutputTokens) {
-        patch.thinkGuardRefereeMaxOutputTokens = tg.thinkGuardRefereeMaxOutputTokens.to;
-      }
+      // thinkGuardReferee RECONFIG retired (stream triage is deterministic).
       if (Object.keys(patch).length > 0) {
         s.patchRunConfig(patch as Parameters<typeof s.patchRunConfig>[0]);
-        if (tg) syncThinkGuardRefereeStore(s, patch as Parameters<typeof s.patchRunConfig>[0]);
       }
       // Transcript line comes from runner.appendSystemMessage → transcript_append.
       break;
@@ -269,14 +249,7 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         plannerTools: ev.plannerTools,
         webTools: ev.webTools,
         mcpServers: ev.mcpServers,
-        thinkGuardRefereeEnabled: ev.thinkGuardRefereeEnabled,
-        thinkGuardRefereeMaxCallsPerRun: ev.thinkGuardRefereeMaxCallsPerRun,
-        thinkGuardRefereeMinThinkChars: ev.thinkGuardRefereeMinThinkChars,
-        thinkGuardRefereeThinkTailMinChars: ev.thinkGuardRefereeThinkTailMinChars,
-        thinkGuardRefereeThinkTailMaxChars: ev.thinkGuardRefereeThinkTailMaxChars,
-        thinkGuardRefereeMaxOutputTokens: ev.thinkGuardRefereeMaxOutputTokens,
       });
-      syncThinkGuardRefereeStore(s);
       break;
 
     case "outcome_scored":

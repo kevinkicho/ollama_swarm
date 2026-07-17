@@ -2,12 +2,6 @@
 // so runners that re-read cfg each tick pick up new caps without restart.
 
 import type { RunConfig } from "./SwarmRunner.js";
-import {
-  applyThinkGuardRefereePatch,
-  formatThinkGuardRefereeChanges,
-  patchHasThinkGuardReferee,
-  type ThinkGuardRefereeReconfigChanges,
-} from "@ollama-swarm/shared/thinkGuardBudget";
 
 export const RECONFIG_MAX_ROUNDS = 100;
 export const RECONFIG_MAX_WALL_CLOCK_MS = 24 * 60 * 60_000;
@@ -26,6 +20,7 @@ export interface RunReconfigPatch {
   extendWallClockCapMin?: number;
   /** Add N tokens to the current budget (or set when none). */
   extendTokenBudget?: number;
+  // Legacy referee fields accepted but ignored (think-guard LLM referee retired).
   thinkGuardRefereeEnabled?: boolean;
   thinkGuardRefereeMaxCallsPerRun?: number;
   thinkGuardRefereeMinThinkChars?: number;
@@ -43,7 +38,6 @@ export interface RunReconfigChanges {
   rounds?: RunReconfigFieldChange;
   wallClockCapMs?: RunReconfigFieldChange;
   tokenBudget?: RunReconfigFieldChange;
-  thinkGuardReferee?: ThinkGuardRefereeReconfigChanges;
 }
 
 export type RunReconfigResult =
@@ -65,7 +59,6 @@ function patchHasLimits(patch: RunReconfigPatch): boolean {
     || patch.extendRounds != null
     || patch.extendWallClockCapMin != null
     || patch.extendTokenBudget != null
-    || patchHasThinkGuardReferee(patch)
   );
 }
 
@@ -171,9 +164,6 @@ export function formatReconfigMessage(changes: RunReconfigChanges): string {
       : "none";
     parts.push(`token budget ${fromTok} → ${changes.tokenBudget.to.toLocaleString()}`);
   }
-  if (changes.thinkGuardReferee) {
-    parts.push(...formatThinkGuardRefereeChanges(changes.thinkGuardReferee));
-  }
   return `[reconfig] Run limits updated: ${parts.join("; ")}.`;
 }
 
@@ -219,12 +209,13 @@ export function applyRunReconfig(
     cfg.tokenBudget = resolved.n;
   }
 
-  if (patchHasThinkGuardReferee(patch)) {
-    const tg = applyThinkGuardRefereePatch(cfg, patch);
-    if (!tg.ok) return tg;
-    if (Object.keys(tg.changes).length > 0) {
-      changes.thinkGuardReferee = tg.changes;
-    }
+  // Legacy thinkGuardReferee* fields ignored (referee retired).
+
+  if (Object.keys(changes).length === 0) {
+    return {
+      ok: false,
+      error: "at least one limit field is required (referee RECONFIG fields are retired)",
+    };
   }
 
   return { ok: true, changes, message: formatReconfigMessage(changes) };

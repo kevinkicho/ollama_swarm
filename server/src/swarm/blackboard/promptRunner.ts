@@ -30,6 +30,7 @@ import {
   createThinkGuardHandler,
   isThinkGuardRefereeEligible,
 } from "./thinkGuardHandler.js";
+import { contractExploreJsonNudge } from "@ollama-swarm/shared/toolProfiles";
 import { extractText } from "../extractText.js";
 import type { PendingPrompt } from "./runnerUtil.js";
 import type { ToolTraceEntry } from "../toolCallTranscript.js";
@@ -394,6 +395,10 @@ export async function promptAgent(
       agentName,
       webToolsConfig: ctx.getActive(),
       ...(activity?.maxToolTurns !== undefined ? { maxToolTurns: activity.maxToolTurns } : {}),
+      // Contract explore nudge (same as council) — force emit before tool thrash.
+      ...(activity?.kind === "contract" && activity?.mode === "explore"
+        ? { toolLoopNudge: contractExploreJsonNudge() }
+        : {}),
       ...(activity?.promptWallClockMs !== undefined
         ? { promptWallClockMs: activity.promptWallClockMs }
         : {}),

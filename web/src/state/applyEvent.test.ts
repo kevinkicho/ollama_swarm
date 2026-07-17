@@ -697,7 +697,7 @@ describe("applyEventToStore", () => {
       assert.equal(store.getState().runConfig?.wallClockCapMin, "45");
     });
 
-    it("patches think-guard referee budget", () => {
+    it("ignores retired think-guard referee reconfig fields", () => {
       store.getState().setRunConfig({
         preset: "council",
         plannerModel: "m",
@@ -708,39 +708,20 @@ describe("applyEventToStore", () => {
         clonePath: "/x",
         agentCount: 3,
         rounds: 4,
-        thinkGuardRefereeEnabled: false,
-        thinkGuardRefereeMaxCallsPerRun: 6,
-      });
-      store.getState().setThinkGuardReferee({
-        enabled: false,
-        maxCallsPerRun: 6,
-        callsUsed: 1,
-        callsRemaining: 5,
-        minThinkCharsForReferee: 30_000,
-        thinkTailMinChars: 4_000,
-        thinkTailMaxChars: 12_000,
-        maxOutputTokens: 512,
       });
       applyEventToStore(
         {
           type: "run_reconfigured",
           runId: "r1",
           ts: 2000,
-          message: "[reconfig] referee on",
+          message: "[reconfig] limits",
           changes: {
-            thinkGuardReferee: {
-              thinkGuardRefereeEnabled: { from: false, to: true },
-              thinkGuardRefereeMaxCallsPerRun: { from: 6, to: 10 },
-            },
+            rounds: { from: 4, to: 6 },
           },
         },
         store.getState(),
       );
-      assert.equal(store.getState().runConfig?.thinkGuardRefereeEnabled, true);
-      assert.equal(store.getState().runConfig?.thinkGuardRefereeMaxCallsPerRun, 10);
-      assert.equal(store.getState().thinkGuardReferee?.enabled, true);
-      assert.equal(store.getState().thinkGuardReferee?.maxCallsPerRun, 10);
-      assert.equal(store.getState().thinkGuardReferee?.callsUsed, 1);
+      assert.equal(store.getState().runConfig?.rounds, 6);
     });
   });
 

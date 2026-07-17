@@ -472,14 +472,6 @@ export const ReconfigBody = z.object({
   extendRounds: z.coerce.number().int().positive().max(50).optional(),
   extendWallClockCapMin: z.coerce.number().int().positive().max(24 * 60).optional(),
   extendTokenBudget: z.coerce.number().int().positive().optional(),
-  // Legacy think-guard referee fields accepted but ignored (referee retired —
-  // deterministic stream-triage). Stripped from "at least one field" refine.
-  thinkGuardRefereeEnabled: z.boolean().optional(),
-  thinkGuardRefereeMaxCallsPerRun: z.coerce.number().int().min(0).max(24).optional(),
-  thinkGuardRefereeMinThinkChars: z.coerce.number().int().min(5000).max(200000).optional(),
-  thinkGuardRefereeThinkTailMinChars: z.coerce.number().int().min(1000).max(20000).optional(),
-  thinkGuardRefereeThinkTailMaxChars: z.coerce.number().int().min(2000).max(32000).optional(),
-  thinkGuardRefereeMaxOutputTokens: z.coerce.number().int().min(128).max(4096).optional(),
 }).refine(
   (v) =>
     v.rounds != null

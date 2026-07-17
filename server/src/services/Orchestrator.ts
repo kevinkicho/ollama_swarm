@@ -422,25 +422,6 @@ export class Orchestrator {
     if (applied.changes.wallClockCapMs) {
       run.runConfig.wallClockCapMin = String(Math.round(applied.changes.wallClockCapMs.to / 60_000));
     }
-    const tg = applied.changes.thinkGuardReferee;
-    if (tg?.thinkGuardRefereeEnabled) {
-      run.runConfig.thinkGuardRefereeEnabled = tg.thinkGuardRefereeEnabled.to;
-    }
-    if (tg?.thinkGuardRefereeMaxCallsPerRun) {
-      run.runConfig.thinkGuardRefereeMaxCallsPerRun = tg.thinkGuardRefereeMaxCallsPerRun.to;
-    }
-    if (tg?.thinkGuardRefereeMinThinkChars) {
-      run.runConfig.thinkGuardRefereeMinThinkChars = tg.thinkGuardRefereeMinThinkChars.to;
-    }
-    if (tg?.thinkGuardRefereeThinkTailMinChars) {
-      run.runConfig.thinkGuardRefereeThinkTailMinChars = tg.thinkGuardRefereeThinkTailMinChars.to;
-    }
-    if (tg?.thinkGuardRefereeThinkTailMaxChars) {
-      run.runConfig.thinkGuardRefereeThinkTailMaxChars = tg.thinkGuardRefereeThinkTailMaxChars.to;
-    }
-    if (tg?.thinkGuardRefereeMaxOutputTokens) {
-      run.runConfig.thinkGuardRefereeMaxOutputTokens = tg.thinkGuardRefereeMaxOutputTokens.to;
-    }
 
     // When soft-terminal, still patch cfg for any residual loop; runner may ignore.
     try {
@@ -841,7 +822,6 @@ export class Orchestrator {
       }
 
       const runConfig: SwarmStatusRunConfig = buildSwarmStatusRunConfig(cfg, rolesForRunStarted);
-      cfg.thinkGuardRefereeCallsUsed = cfg.thinkGuardRefereeCallsUsed ?? 0;
       const activeRun = this.createActiveRun(
         runId,
         startedAt,

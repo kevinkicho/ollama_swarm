@@ -5,7 +5,6 @@ import type { SwarmStore } from "./store";
 import type { AgentActivityRecord } from "./agentActivityProjection";
 import { inferAgentsFromSnapshot, mergeAgentsForSnapshot } from "../lib/inferAgents";
 import { isActiveSwarmPhase, isTerminalSwarmPhase } from "../lib/swarmPhase";
-import { syncThinkGuardRefereeStore } from "./thinkGuardRefereeSync";
 import {
   extractControlAdviceFromTranscript,
   extractControlAdviceFromEventRecords,
@@ -289,11 +288,6 @@ export function applyStatusSnapshotToStore(
   }
 
   if (snap.runConfig) s.setRunConfig({ ...snap.runConfig });
-  if (snap.thinkGuardReferee) {
-    s.setThinkGuardReferee(snap.thinkGuardReferee);
-  } else if (snap.runConfig) {
-    syncThinkGuardRefereeStore(s);
-  }
   if (snap.summary) s.setSummary(snap.summary);
   if (snap.contract) s.setContract(snap.contract);
   if (snap.cloneState) s.setCloneState(snap.cloneState);

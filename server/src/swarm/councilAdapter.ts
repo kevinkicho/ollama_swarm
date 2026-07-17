@@ -312,7 +312,11 @@ export async function runContractDerivation(
     state.appendSystem("Council contract: no LLM lead agent — proceeding without contract.");
     return;
   }
+  /** Per-agent abort so peer demote can kill stragglers without sharing one signal. */
+  const agentAbortSignals = new Map<string, AbortSignal>();
   let draftAbort: AbortSignal | undefined;
+  const { createPeerDraftCoordinator } = await import("./contractPeerDemote.js");
+  const peerCoordinator = createPeerDraftCoordinator((msg) => state.appendSystem(msg));
   const draftDeps: CouncilContractDraftDeps = {
     getStopping: () => state.stopping,
     getActive: () => state.cfg,
@@ -320,6 +324,7 @@ export async function runContractDerivation(
     appendAgent: state.appendAgent,
     manager: state.manager as import("../services/AgentManager.js").AgentManager,
     emitAgentState: (s) => state.emit({ type: "agent_state", agent: s }),
+    peer: peerCoordinator,
     promptPlannerSafely: (agent, promptText, agentName, ollamaFormat, activity) =>
       promptPlannerSafely(
         agent,
@@ -328,13 +333,12 @@ export async function runContractDerivation(
         state.manager,
         state.cfg.providerFailover,
         activity,
-        draftAbort,
+        agentAbortSignals.get(agent.id) ?? draftAbort,
         state.pendingToolTraceByAgent,
         state.cfg,
         ollamaFormat,
       ),
   };
-
   // Multi-agent: shared explore → N emit-only drafts by default (d3f56d9a:
   // independent explore burned 20-tool loops × fat seed). Opt out with
   // councilSharedExplore: false.
@@ -377,12 +381,19 @@ export async function runContractDerivation(
   const draftSpacing = burstSpacingForModels(allAgents);
   const draftResults = await staggerStart(allAgents, async (a) => {
     const { controller, cleanup } = createTimeoutController(CONTRACT_DRAFT_TIMEOUT_MS);
+    agentAbortSignals.set(a.id, controller.signal);
     draftAbort = controller.signal;
+    // Independent explore only: register for peer demote aborts.
+    if (!useSharedExplore || !sharedBrief) {
+      peerCoordinator.registerAbort(a.id, controller);
+    }
     try {
       return useSharedExplore && sharedBrief
         ? await runCouncilContractEmitForAgent(draftDeps, a, seed, sharedBrief)
         : await runCouncilContractDraftForAgent(draftDeps, a, seed);
     } finally {
+      peerCoordinator.unregisterAbort(a.id);
+      agentAbortSignals.delete(a.id);
       cleanup();
       draftAbort = undefined;
       state.manager.markStatus(a.id, "ready");
@@ -394,7 +405,6 @@ export async function runContractDerivation(
       }
     }
   }, draftSpacing);
-
   const drafts: Array<{ agentId: string; contract: any }> = [];
   const failedDraftAgentIds = new Set<string>();
   for (let i = 0; i < draftResults.length; i++) {

@@ -23,8 +23,20 @@ export function councilWorkerFallbackModel(
     if (candidate && candidate !== currentModel) return candidate;
   }
 
-  // Defense-in-depth for live setups with no failover chain configured
-  // (run 2964afe8: "no failover model in chain" after pure-<think> thrash).
+  // Preferred local/degraded models when explicit chain is empty or exhausted.
+  // Use SWARM_DEGRADATION_PREFERRED even if DEGRADATION_FALLBACK flag is off —
+  // empty chain + pure-think thrash (2964afe8) still needs a next hop when set.
+  for (const candidate of appConfig.SWARM_DEGRADATION_PREFERRED) {
+    if (candidate && candidate !== currentModel) return candidate;
+  }
+
+  // Last resort: cloud model → bare local id (deepseek-v4-flash:cloud → deepseek-v4-flash)
+  if (/:cloud\s*$/i.test(currentModel)) {
+    const local = currentModel.replace(/:cloud\s*$/i, "").trim();
+    if (local && local !== currentModel) return local;
+  }
+
+  // Legacy flag still enables preferred list when only that path was configured.
   if (appConfig.SWARM_DEGRADATION_FALLBACK) {
     for (const candidate of appConfig.SWARM_DEGRADATION_PREFERRED) {
       if (candidate && candidate !== currentModel) return candidate;
