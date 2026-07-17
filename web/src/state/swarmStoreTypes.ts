@@ -184,6 +184,11 @@ export interface SwarmStore {
     wallClockMsRemaining?: number;
     tokenBudgetRemaining?: number;
   };
+  /** RR-D: durable progress heartbeat from /status. */
+  progressHeartbeat?: {
+    lastProductiveAt: number;
+    progressQuietMs: number;
+  };
   earlyStopDetail?: string;
   /** Active composite pipeline sub-phase (from /status). */
   pipelinePhase?: {
@@ -209,6 +214,7 @@ export interface SwarmStore {
     capsRemaining?: SwarmStore["capsRemaining"];
     earlyStopDetail?: string;
     pipelinePhase?: SwarmStore["pipelinePhase"] | null;
+    progressHeartbeat?: SwarmStore["progressHeartbeat"] | null;
   }) => void;
   upsertAgent: (a: AgentState) => void;
   /** Replace entire agent roster (pipeline handoff / killAll). */

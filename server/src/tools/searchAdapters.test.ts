@@ -70,11 +70,11 @@ describe("getSearchAdapters registry", () => {
     const adapters = getSearchAdapters({ env: {} });
     assert.deepEqual(
       adapters.map((a) => a.id),
-      ["duckduckgo-html", "duckduckgo-lite"],
+      ["duckduckgo-html", "duckduckgo-lite", "arxiv"],
     );
   });
 
-  it("appends optional backends when keys are set (order Brave → Serper → Bing)", () => {
+  it("appends optional backends when keys are set (DDG → keyed → arxiv)", () => {
     const adapters = getSearchAdapters({
       env: {
         BRAVE_API_KEY: "b-key",
@@ -84,7 +84,7 @@ describe("getSearchAdapters registry", () => {
     });
     assert.deepEqual(
       adapters.map((a) => a.id),
-      ["duckduckgo-html", "duckduckgo-lite", "brave", "serper", "bing"],
+      ["duckduckgo-html", "duckduckgo-lite", "brave", "serper", "bing", "arxiv"],
     );
   });
 
@@ -94,8 +94,15 @@ describe("getSearchAdapters registry", () => {
     });
     assert.deepEqual(
       adapters.map((a) => a.id),
-      ["duckduckgo-html", "duckduckgo-lite", "bing"],
+      ["duckduckgo-html", "duckduckgo-lite", "bing", "arxiv"],
     );
+  });
+
+  it("PREFER_KEYED_SEARCH puts keyed before DDG", () => {
+    const adapters = getSearchAdapters({
+      env: { BRAVE_API_KEY: "b", PREFER_KEYED_SEARCH: "1" },
+    });
+    assert.equal(adapters[0]?.id, "brave");
   });
 });
 

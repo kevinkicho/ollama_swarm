@@ -106,6 +106,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   drainEligible: undefined,
   drainIneligibleReason: undefined,
   capsRemaining: undefined,
+  progressHeartbeat: undefined,
   earlyStopDetail: undefined,
   pipelinePhase: undefined,
 
@@ -117,6 +118,12 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       drainEligible: patch.drainEligible ?? s.drainEligible,
       drainIneligibleReason: patch.drainIneligibleReason ?? s.drainIneligibleReason,
       capsRemaining: patch.capsRemaining ?? s.capsRemaining,
+      progressHeartbeat:
+        patch.progressHeartbeat === null
+          ? undefined
+          : patch.progressHeartbeat !== undefined
+            ? patch.progressHeartbeat
+            : s.progressHeartbeat,
       earlyStopDetail:
         patch.earlyStopDetail !== undefined
           ? patch.earlyStopDetail
@@ -596,6 +603,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       drainEligible: undefined,
       drainIneligibleReason: undefined,
       capsRemaining: undefined,
+      progressHeartbeat: undefined,
       earlyStopDetail: undefined,
       pipelinePhase: undefined,
     }),
@@ -675,6 +683,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         drainEligible: undefined,
         drainIneligibleReason: undefined,
         capsRemaining: undefined,
+      progressHeartbeat: undefined,
         ...blackboardReset,
         transcript: newTranscript,
         transcriptPlainListLatched: true,

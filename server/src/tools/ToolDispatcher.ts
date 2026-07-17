@@ -590,8 +590,24 @@ async function tryFulfillUnixBashViaTools(
   command: string,
 ): Promise<ToolResult | null> {
   const trimmed = command.trim();
-  // Only rewrite simple single-stage commands (no pipes / && / ;).
-  if (/[|;&]/.test(trimmed) || /\n/.test(trimmed)) return null;
+  // RR-E: allow simple two-step `cmd1 && cmd2` when both rewrite cleanly.
+  if (/\n/.test(trimmed)) return null;
+  if (/[|;]/.test(trimmed)) return null;
+  if (/&&/.test(trimmed)) {
+    const parts = trimmed.split(/\s*&&\s*/).map((p) => p.trim()).filter(Boolean);
+    if (parts.length === 2) {
+      const a = await tryFulfillUnixBashViaTools(clone, parts[0]!);
+      if (!a || !a.ok) return a;
+      const b = await tryFulfillUnixBashViaTools(clone, parts[1]!);
+      if (!b) return null;
+      if (!b.ok) return b;
+      return {
+        ok: true,
+        output: [a.output, b.output].filter(Boolean).join("\n"),
+      };
+    }
+    return null;
+  }
 
   // grep / rg / egrep [-nri] PATTERN [PATH]
   const grepM =
@@ -641,6 +657,13 @@ async function tryFulfillUnixBashViaTools(
     const name = findM[2] ?? findM[3] ?? findM[4] ?? "*";
     const pattern = base ? `${base.replace(/\\/g, "/")}/${name}` : `**/${name}`;
     return globTool(clone, { pattern });
+  }
+
+  // cd PATH && rest — only rewrite rest if pure (cd alone is no-op list)
+  const cdOnly = /^cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
+  if (cdOnly) {
+    const p = cdOnly[1] ?? cdOnly[2] ?? cdOnly[3] ?? ".";
+    return listTool(clone, { path: p });
   }
 
   return null;

@@ -185,7 +185,60 @@ export async function reviewPendingCommits(
         continue;
       }
       try {
-        const res = await applyFn(item.hunks, item.files, item.message, { skipCommit: true });
+        let res = await applyFn(item.hunks, item.files, item.message, { skipCommit: true });
+        // RR-A: one grounded repair attempt via shared core when apply fails.
+        if (!res.ok && item.hunks?.length > 0) {
+          try {
+            const { applyOrGroundedRepair } = await import("../applyOrGroundedRepair.js");
+            const { realFilesystemAdapter } = await import("./v2Adapters.js");
+            const clonePath = ctx.getActive()?.localPath ?? "";
+            const fsAdapter = realFilesystemAdapter(clonePath);
+            const texts: Record<string, string | null> = {};
+            for (const f of item.files ?? []) {
+              try {
+                texts[f] = await fsAdapter.read(f);
+              } catch {
+                texts[f] = null;
+              }
+            }
+            const repair = await applyOrGroundedRepair({
+              hunks: item.hunks,
+              currentTextsByFile: texts,
+              expectedFiles: item.files ?? [],
+              readFile: (p) => fsAdapter.read(p),
+              callModel: async (prompt) => {
+                const auditor = ctx.getAuditor();
+                if (!auditor) {
+                  throw new Error("no auditor agent for grounded repair");
+                }
+                const { EMIT_ONLY_PROFILE_ID } = await import(
+                  "@ollama-swarm/shared/toolProfiles"
+                );
+                const { response } = await ctx.promptPlannerSafely(
+                  auditor,
+                  `Emit-only hunk repair. Return ONLY a JSON object with a "hunks" array.\n\n${prompt}`,
+                  EMIT_ONLY_PROFILE_ID as any,
+                  "json",
+                );
+                return response;
+              },
+              maxGroundedRepairs: 1,
+            });
+            if (repair.ok && repair.hunks) {
+              res = await applyFn(repair.hunks, item.files, item.message, { skipCommit: true });
+              if (res.ok) {
+                ctx.appendSystem(
+                  `[auditor-gate] grounded repair recovered todo ${item.todo.id.slice(0, 8)}`,
+                );
+              }
+            }
+          } catch (repairErr) {
+            const msg = repairErr instanceof Error ? repairErr.message : String(repairErr);
+            ctx.appendSystem(
+              `[auditor-gate] grounded repair skipped: ${msg.slice(0, 120)}`,
+            );
+          }
+        }
         if (!res.ok) {
           batchOk = false;
           ctx.wrappers.rejectCommitQ(item.todo.id, res.reason || "apply failed in batch");

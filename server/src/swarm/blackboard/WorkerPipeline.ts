@@ -24,6 +24,7 @@ import {
   noteApplyMiss,
   noteApplySuccess,
 } from "../applyIntegrityStats.js";
+import { noteProductiveProgress } from "../progressHeartbeat.js";
 
 export interface FilesystemAdapter {
   /** Read a file's text. Returns null when the file doesn't exist
@@ -299,7 +300,10 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
         // best-effort revert
       }
     }
-    if (countIntegrity) noteApplySuccess(input.runId);
+    if (countIntegrity) {
+      noteApplySuccess(input.runId);
+      noteProductiveProgress(input.runId);
+    }
     return {
       ok: true,
       commitSha: "",
@@ -312,7 +316,10 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
   // 5. Commit the changes (unless skipCommit for batching).
   //    In batch mode, caller (auditor) will do one combined git commit.
   if (input.skipCommit) {
-    if (countIntegrity) noteApplySuccess(input.runId);
+    if (countIntegrity) {
+      noteApplySuccess(input.runId);
+      noteProductiveProgress(input.runId);
+    }
     return {
       ok: true,
       commitSha: "",  // no individual sha
@@ -328,7 +335,10 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
   );
   if (!commit.ok) {
     if (input.gitCommitOptional) {
-      if (countIntegrity) noteApplySuccess(input.runId);
+      if (countIntegrity) {
+        noteApplySuccess(input.runId);
+        noteProductiveProgress(input.runId);
+      }
       return {
         ok: true,
         commitSha: "",
@@ -339,7 +349,10 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
     }
     return { ok: false, reason: `git commit failed: ${commit.reason}` };
   }
-  if (countIntegrity) noteApplySuccess(input.runId);
+  if (countIntegrity) {
+    noteApplySuccess(input.runId);
+    noteProductiveProgress(input.runId);
+  }
   return {
     ok: true,
     commitSha: commit.sha,

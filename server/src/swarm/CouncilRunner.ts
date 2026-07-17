@@ -51,6 +51,7 @@ import { startApplyIntegrityTracking } from "./applyIntegrityStats.js";
 import { startCycleIntegrityTracking } from "./cycleIntegrityStats.js";
 import { clearLocalCatalogCache } from "./research/localCatalogIndex.js";
 import { startResearchBudget } from "./research/researchBudget.js";
+import { startProgressHeartbeat, noteProductiveProgress } from "./progressHeartbeat.js";
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import type { StallGateVerdict } from "@ollama-swarm/shared/swarmControl/types";
@@ -243,6 +244,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
     startCycleIntegrityTracking(cfg.runId);
     // RR-C: shared research blackout / integrity.
     startResearchBudget(cfg.runId);
+    startProgressHeartbeat(cfg.runId);
 
     // Gather project context
     this.repoFiles = await this.opts.repos.listRepoFiles(destPath, { maxFiles: 500 });
@@ -689,6 +691,14 @@ export class CouncilRunner extends DiscussionRunnerBase {
       runDiscussionAgent: (agent, prompt, opts) =>
         this.runDiscussionAgent(agent, prompt, opts as any),
       stats: this.stats,
+      // RR-D: empty-execution limit → early stop detail + soft stop.
+      onEmptyExecutionLimit: (streak, reason) => {
+        this.earlyStopDetail = reason;
+        this.appendSystem(
+          `[empty-execution] limit reached (streak=${streak}) — stopping run: ${reason}`,
+        );
+        void this.stop();
+      },
     };
   }
 

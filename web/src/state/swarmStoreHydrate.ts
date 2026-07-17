@@ -191,6 +191,10 @@ export function applyStatusSnapshotToStore(
       wallClockMsRemaining?: number;
       tokenBudgetRemaining?: number;
     };
+    progressHeartbeat?: {
+      lastProductiveAt: number;
+      progressQuietMs: number;
+    };
     earlyStopDetail?: string;
     pipelinePhase?: {
       index: number;
@@ -213,6 +217,7 @@ export function applyStatusSnapshotToStore(
     healthSnap.drainEligible !== undefined ||
     healthSnap.drainIneligibleReason ||
     healthSnap.capsRemaining ||
+    healthSnap.progressHeartbeat ||
     earlyStopDetail ||
     healthSnap.pipelinePhase
   ) {
@@ -221,6 +226,9 @@ export function applyStatusSnapshotToStore(
       drainIneligibleReason: healthSnap.drainIneligibleReason,
       capsRemaining: healthSnap.capsRemaining,
       earlyStopDetail,
+      ...(healthSnap.progressHeartbeat
+        ? { progressHeartbeat: healthSnap.progressHeartbeat }
+        : {}),
       ...(healthSnap.pipelinePhase
         ? { pipelinePhase: healthSnap.pipelinePhase }
         : {}),

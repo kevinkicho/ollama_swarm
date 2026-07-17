@@ -327,36 +327,132 @@ export interface GetSearchAdaptersOpts {
   env?: NodeJS.ProcessEnv;
   /** Injected fetch for tests. */
   fetchFn?: FetchLike;
+  /**
+   * Prefer academic adapters first (arXiv) when query looks paper-shaped.
+   * Default: auto-detect from query keywords.
+   */
+  preferAcademic?: boolean;
+}
+
+/** Skip DDG scrapers until this time (ms epoch) after recent 403s. */
+let ddgSkipUntilMs = 0;
+const DDG_SKIP_MS = 10 * 60_000;
+
+export function noteDdg403Circuit(): void {
+  ddgSkipUntilMs = Date.now() + DDG_SKIP_MS;
+}
+
+export function isDdgCircuitOpen(now: number = Date.now()): boolean {
+  return now < ddgSkipUntilMs;
+}
+
+/** Test helper. */
+export function resetDdgCircuitForTests(): void {
+  ddgSkipUntilMs = 0;
+}
+
+export function isPaperShapedQuery(query: string): boolean {
+  return /\b(arxiv|doi|peer[- ]reviewed|pubmed|semantic scholar|openalex|preprint|citation|cite papers?|systematic review)\b/i.test(
+    query,
+  );
+}
+
+/** arXiv API (keyless) — Atom XML results. */
+export function createArxivAdapter(fetchFn: FetchLike = fetch): SearchAdapter {
+  return {
+    id: "arxiv",
+    async search(query: string): Promise<SearchAdapterResult> {
+      const url =
+        `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&start=0&max_results=8`;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+      try {
+        const res = await fetchFn(url, {
+          signal: controller.signal,
+          headers: { Accept: "application/atom+xml" },
+        });
+        clearTimeout(timer);
+        if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+        const xml = await res.text();
+        const links: SearchLink[] = [];
+        const entryRe = /<entry>([\s\S]*?)<\/entry>/gi;
+        let m: RegExpExecArray | null;
+        while ((m = entryRe.exec(xml)) !== null) {
+          const entry = m[1]!;
+          const idM = /<id>([^<]+)<\/id>/.exec(entry);
+          const titleM = /<title>([\s\S]*?)<\/title>/.exec(entry);
+          const summaryM = /<summary>([\s\S]*?)<\/summary>/.exec(entry);
+          const id = (idM?.[1] ?? "").trim();
+          const title = (titleM?.[1] ?? "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 200);
+          if (!id.startsWith("http")) continue;
+          const absUrl = id.replace(/\/abs\//, "/abs/").replace("http://", "https://");
+          const snippet = summaryM
+            ? summaryM[1]!.replace(/\s+/g, " ").trim().slice(0, 300)
+            : undefined;
+          links.push({
+            title: title || absUrl,
+            url: absUrl,
+            snippet,
+            score: scoreLink(title || absUrl, absUrl, query) + 5,
+          });
+        }
+        if (links.length === 0) return { ok: false, error: "0 links parsed" };
+        return { ok: true, links };
+      } catch (err: unknown) {
+        clearTimeout(timer);
+        const e = err as { name?: string; message?: string };
+        const msg = e?.name === "AbortError" ? "timeout" : (e?.message || String(err));
+        return { ok: false, error: msg };
+      }
+    },
+  };
 }
 
 /**
- * Ordered adapter registry.
- * Always: DDG HTML, DDG lite.
- * Optional (when key non-empty): Brave → Serper → Bing.
+ * Ordered adapter registry (RR-C adaptive).
+ * - Paper-shaped: arXiv first
+ * - If API keys set and DDG circuit open (recent 403): keyed first, skip DDG
+ * - Else: DDG HTML → lite → optional keyed
+ * - SEARCH_BACKEND=brave|serper|bing|ddg forces preference
  */
 export function getSearchAdapters(opts?: GetSearchAdaptersOpts): SearchAdapter[] {
   const env = opts?.env ?? process.env;
   const fetchFn = opts?.fetchFn ?? fetch;
-  const adapters: SearchAdapter[] = [
-    createDdgHtmlAdapter(fetchFn),
-    createDdgLiteAdapter(fetchFn),
-  ];
-
+  const force = (env.SEARCH_BACKEND ?? "").trim().toLowerCase();
+  const skipDdg = isDdgCircuitOpen();
+  const keyed: SearchAdapter[] = [];
   const brave = (env.BRAVE_API_KEY ?? "").trim();
-  if (brave) adapters.push(createBraveAdapter(brave, fetchFn));
-
+  if (brave) keyed.push(createBraveAdapter(brave, fetchFn));
   const serper = (env.SERPER_API_KEY ?? "").trim();
-  if (serper) adapters.push(createSerperAdapter(serper, fetchFn));
-
+  if (serper) keyed.push(createSerperAdapter(serper, fetchFn));
   const bing = (env.BING_SEARCH_KEY ?? "").trim();
-  if (bing) adapters.push(createBingAdapter(bing, fetchFn));
+  if (bing) keyed.push(createBingAdapter(bing, fetchFn));
 
-  return adapters;
+  const ddg: SearchAdapter[] = skipDdg
+    ? []
+    : [createDdgHtmlAdapter(fetchFn), createDdgLiteAdapter(fetchFn)];
+
+  if (force === "brave" && brave) return [createBraveAdapter(brave, fetchFn), ...ddg];
+  if (force === "serper" && serper) return [createSerperAdapter(serper, fetchFn), ...ddg];
+  if (force === "bing" && bing) return [createBingAdapter(bing, fetchFn), ...ddg];
+  if (force === "arxiv") return [createArxivAdapter(fetchFn), ...ddg, ...keyed];
+  if (force === "ddg") return [...ddg, ...keyed];
+
+  // Prefer keyed over flaky DDG when circuit open or keys present + env PREFER_KEYED_SEARCH
+  const preferKeyed =
+    skipDdg ||
+    (keyed.length > 0 && /^(1|true|yes)$/i.test((env.PREFER_KEYED_SEARCH ?? "").trim()));
+
+  if (preferKeyed) return [...keyed, ...ddg, createArxivAdapter(fetchFn)];
+  return [...ddg, ...keyed, createArxivAdapter(fetchFn)];
 }
 
 /**
  * Try adapters in order; first success with ≥1 link wins.
- * Does not invent results.
+ * Does not invent results. Opens DDG 403 circuit on 403 errors.
  */
 export async function searchWithAdapters(
   query: string,
@@ -365,12 +461,23 @@ export async function searchWithAdapters(
   | { ok: true; links: SearchLink[]; backend: string }
   | { ok: false; errors: string[] }
 > {
+  // Paper-shaped: prepend arXiv if not already first
+  let list = adapters.slice();
+  if (isPaperShapedQuery(query) && list[0]?.id !== "arxiv") {
+    list = [createArxivAdapter(), ...list.filter((a) => a.id !== "arxiv")];
+  }
   const errors: string[] = [];
-  for (const adapter of adapters) {
+  for (const adapter of list) {
     try {
       const res = await adapter.search(query);
       if (!res.ok) {
         errors.push(`${adapter.id}: ${res.error}`);
+        if (
+          /403/.test(res.error) &&
+          (adapter.id === "duckduckgo-html" || adapter.id === "duckduckgo-lite")
+        ) {
+          noteDdg403Circuit();
+        }
         continue;
       }
       if (res.links.length === 0) {

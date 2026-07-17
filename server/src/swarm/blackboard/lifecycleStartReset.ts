@@ -6,6 +6,7 @@ import { startApplyIntegrityTracking } from "../applyIntegrityStats.js";
 import { startCycleIntegrityTracking } from "../cycleIntegrityStats.js";
 import { clearLocalCatalogCache } from "../research/localCatalogIndex.js";
 import { startResearchBudget } from "../research/researchBudget.js";
+import { startProgressHeartbeat } from "../progressHeartbeat.js";
 
 /**
  * Clear all prior-run mutable fields so start() begins from a clean slate.
@@ -59,6 +60,7 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   startApplyIntegrityTracking(cfg.runId);
   startCycleIntegrityTracking(cfg.runId);
   startResearchBudget(cfg.runId);
+  startProgressHeartbeat(cfg.runId);
   {
     const plannerModel = cfg.plannerModel ?? cfg.model;
     const workerModel = cfg.workerModel ?? cfg.model;

@@ -16,6 +16,7 @@ export function RunHealthChip() {
   const phase = useSwarm((s) => s.phase);
   const cfg = useSwarm((s) => s.runConfig);
   const caps = useSwarm((s) => s.capsRemaining);
+  const progressHb = useSwarm((s) => s.progressHeartbeat);
   const early = useSwarm((s) => s.earlyStopDetail);
   const drainEligible = useSwarm((s) => s.drainEligible);
   const drainReason = useSwarm((s) => s.drainIneligibleReason);
@@ -54,6 +55,14 @@ export function RunHealthChip() {
   } else if (drainEligible === true) {
     parts.push("drain-ok");
   }
+  if (progressHb && live) {
+    const quiet = progressHb.progressQuietMs;
+    if (quiet >= 60_000) {
+      parts.push(`progress quiet ${formatMs(quiet)}`);
+    } else if (quiet >= 15_000) {
+      parts.push(`progress ${formatMs(quiet)}`);
+    }
+  }
   if (early) {
     // Surface a short reason in the chip itself (not only the tooltip).
     const short =
@@ -74,6 +83,9 @@ export function RunHealthChip() {
       : null,
     caps?.tokenBudgetRemaining != null
       ? `Token budget remaining ≈ ${caps.tokenBudgetRemaining.toLocaleString()}`
+      : null,
+    progressHb
+      ? `Orchestration progress quiet ≈ ${formatMs(progressHb.progressQuietMs)} (since last durable apply/commit)`
       : null,
     drainEligible === false ? `Drain: ${drainReason ?? "not eligible"}` : null,
     drainEligible === true ? "Drain: soft-stop available" : null,

@@ -8,6 +8,7 @@ import { resolveThinkGuardRefereeBudget } from "@ollama-swarm/shared/thinkGuardB
 import { resolveDisplayPhase } from "@ollama-swarm/shared/mapRunPhase";
 import type { RunPhase } from "@ollama-swarm/shared/runStateMachine";
 import { config } from "../../config.js";
+import { snapshotProgressHeartbeat } from "../progressHeartbeat.js";
 
 export interface StatusContext {
   phase: string;
@@ -137,6 +138,10 @@ export function status(ctx: StatusContext): SwarmStatus {
     ...(wallClockMsRemaining != null
       ? { capsRemaining: { wallClockMsRemaining } }
       : {}),
+    ...(() => {
+      const hb = snapshotProgressHeartbeat(ctx.active?.runId);
+      return hb ? { progressHeartbeat: hb } : {};
+    })(),
     round: ctx.round,
     repoUrl: ctx.active?.repoUrl,
     localPath: ctx.active?.localPath,

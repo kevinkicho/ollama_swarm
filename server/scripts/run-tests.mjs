@@ -55,6 +55,7 @@ const TEST_FILES = [
   "src/swarm/grounding/mergeAnchors.test.ts",
   "src/swarm/emptyExecutionGuard.test.ts",
   "src/swarm/research/researchBudget.test.ts",
+  "src/swarm/applyOrGroundedRepair.test.ts",
   "src/swarm/blackboard/applyHunksPipeline.test.ts",
   "src/swarm/blackboard/windowFile.test.ts",
   "src/swarm/blackboard/transcriptSummary.test.ts",

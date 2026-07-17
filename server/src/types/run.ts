@@ -105,6 +105,11 @@ export interface SwarmStatus {
     wallClockMsRemaining?: number;
     tokenBudgetRemaining?: number;
   };
+  /** RR-D: durable-progress heartbeat (ms since epoch / quiet duration). */
+  progressHeartbeat?: {
+    lastProductiveAt: number;
+    progressQuietMs: number;
+  };
   /** Blackboard planning pipeline step (seeding / contract / todos). */
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   /** Live think-guard referee budget (resolved defaults + usage). */

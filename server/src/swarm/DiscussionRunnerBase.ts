@@ -32,6 +32,7 @@ import type { SwarmControlAdviceRecord } from "@ollama-swarm/shared/swarmControl
 import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import type { ToolResultHook } from "../tools/ToolDispatcher.js";
 import { runDiscussionAgentCore } from "./discussionRunAgent.js";
+import { snapshotProgressHeartbeat } from "./progressHeartbeat.js";
 import {
   initCloneAndSpawn as initCloneAndSpawnExtracted,
   type CloneSpawnOpts,
@@ -182,6 +183,10 @@ export abstract class DiscussionRunnerBase {
             },
           }
         : {}),
+      ...(() => {
+        const hb = snapshotProgressHeartbeat(this.active?.runId);
+        return hb ? { progressHeartbeat: hb } : {};
+      })(),
     };
   }
 
