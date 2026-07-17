@@ -9,6 +9,7 @@ import type { TranscriptEntrySummary } from "../types.js";
 export type GuardTripKind =
   | "output-empty"
   | "plan-empty"
+  | "empty-execution"
   | "wall-clock"
   | "token-budget"
   | "quota"
@@ -50,6 +51,8 @@ function defaultReconfig(kind: GuardTripKind): GuardReconfigHints | null {
       return { extendTokenBudget: 50_000 };
     case "output-empty":
     case "plan-empty":
+    case "empty-execution":
+      // Empty standup / 0 todos: give more discussion rounds before hard stop.
       return { extendRounds: 2 };
     case "audit-stuck":
     case "tier-stuck":
@@ -67,6 +70,8 @@ function titleFor(kind: GuardTripKind): string {
       return "Run may be stuck (empty agent output)";
     case "plan-empty":
       return "Run may be stuck (empty plan)";
+    case "empty-execution":
+      return "Empty execution (no standup todos)";
     case "wall-clock":
       return "Wall-clock cap reached";
     case "token-budget":

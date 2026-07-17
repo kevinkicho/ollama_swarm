@@ -357,6 +357,20 @@ export function isPaperShapedQuery(query: string): boolean {
   );
 }
 
+/** Shared academic polite-pool User-Agent (mailto for Crossref/OpenAlex etiquette). */
+const ACADEMIC_UA = "ollama-swarm/1.0 (research; mailto:devnull@localhost)";
+
+/** Free academic adapters always appended to the registry (keyless). */
+export function createAcademicAdapters(fetchFn: FetchLike = fetch): SearchAdapter[] {
+  return [
+    createArxivAdapter(fetchFn),
+    createOpenAlexAdapter(fetchFn),
+    createCrossrefAdapter(fetchFn),
+  ];
+}
+
+const ACADEMIC_IDS = new Set(["arxiv", "openalex", "crossref"]);
+
 /** arXiv API (keyless) — Atom XML results. */
 export function createArxivAdapter(fetchFn: FetchLike = fetch): SearchAdapter {
   return {
@@ -412,11 +426,174 @@ export function createArxivAdapter(fetchFn: FetchLike = fetch): SearchAdapter {
 }
 
 /**
+ * OpenAlex Works API — free scholarly catalog.
+ * Optional OPENALEX_API_KEY env is appended when set; always sends polite User-Agent.
+ * https://developers.openalex.org/guides/searching
+ */
+export function createOpenAlexAdapter(
+  fetchFn: FetchLike = fetch,
+  opts?: { apiKey?: string },
+): SearchAdapter {
+  return {
+    id: "openalex",
+    async search(query: string): Promise<SearchAdapterResult> {
+      const params = new URLSearchParams({
+        search: query,
+        per_page: "8",
+      });
+      const key = (opts?.apiKey ?? process.env.OPENALEX_API_KEY ?? "").trim();
+      if (key) params.set("api_key", key);
+      const url = `https://api.openalex.org/works?${params.toString()}`;
+      const res = await fetchJson(
+        url,
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "User-Agent": ACADEMIC_UA,
+          },
+        },
+        fetchFn,
+      );
+      if (!res.ok) return { ok: false, error: res.error };
+      const body = res.json as {
+        results?: Array<{
+          id?: string;
+          title?: string;
+          doi?: string | null;
+          primary_location?: { landing_page_url?: string | null } | null;
+          abstract_inverted_index?: Record<string, number[]> | null;
+        }>;
+      };
+      const raw = body?.results ?? [];
+      const links: SearchLink[] = [];
+      for (const r of raw) {
+        const title = String(r.title ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+        const landing = r.primary_location?.landing_page_url?.trim();
+        const doi = r.doi?.trim();
+        const doiUrl =
+          doi && doi.startsWith("http")
+            ? doi
+            : doi
+              ? `https://doi.org/${doi.replace(/^https?:\/\/doi\.org\//i, "")}`
+              : "";
+        const openAlexId = String(r.id ?? "").trim();
+        const href =
+          (landing && landing.startsWith("http") ? landing : "") ||
+          doiUrl ||
+          (openAlexId.startsWith("http") ? openAlexId : "");
+        if (!href.startsWith("http")) continue;
+        const snippet = openAlexAbstractSnippet(r.abstract_inverted_index);
+        links.push({
+          title: title || href,
+          url: href,
+          snippet,
+          score: scoreLink(title || href, href, query) + 4,
+        });
+      }
+      if (links.length === 0) return { ok: false, error: "0 links parsed" };
+      return { ok: true, links };
+    },
+  };
+}
+
+/** Reconstruct a short snippet from OpenAlex inverted abstract index. */
+export function openAlexAbstractSnippet(
+  inv: Record<string, number[]> | null | undefined,
+  maxChars = 300,
+): string | undefined {
+  if (!inv || typeof inv !== "object") return undefined;
+  const positions: Array<{ word: string; i: number }> = [];
+  for (const [word, idxs] of Object.entries(inv)) {
+    if (!Array.isArray(idxs)) continue;
+    for (const i of idxs) {
+      if (typeof i === "number") positions.push({ word, i });
+    }
+  }
+  if (positions.length === 0) return undefined;
+  positions.sort((a, b) => a.i - b.i);
+  const text = positions.map((p) => p.word).join(" ").replace(/\s+/g, " ").trim();
+  if (!text) return undefined;
+  return text.length <= maxChars ? text : text.slice(0, maxChars - 1) + "…";
+}
+
+/**
+ * Crossref Works API (keyless polite pool) — DOI / journal metadata.
+ * https://api.crossref.org/works?query=...
+ */
+export function createCrossrefAdapter(fetchFn: FetchLike = fetch): SearchAdapter {
+  return {
+    id: "crossref",
+    async search(query: string): Promise<SearchAdapterResult> {
+      const params = new URLSearchParams({
+        query,
+        rows: "8",
+        mailto: "devnull@localhost",
+      });
+      const url = `https://api.crossref.org/works?${params.toString()}`;
+      const res = await fetchJson(
+        url,
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "User-Agent": ACADEMIC_UA,
+          },
+        },
+        fetchFn,
+      );
+      if (!res.ok) return { ok: false, error: res.error };
+      const body = res.json as {
+        message?: {
+          items?: Array<{
+            title?: string[];
+            URL?: string;
+            DOI?: string;
+            abstract?: string;
+          }>;
+        };
+      };
+      const raw = body?.message?.items ?? [];
+      const links: SearchLink[] = [];
+      for (const r of raw) {
+        const title = String(r.title?.[0] ?? "")
+          .replace(/<[^>]+>/g, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 200);
+        const doi = (r.DOI ?? "").trim();
+        const doiUrl = doi ? `https://doi.org/${doi}` : "";
+        const href =
+          (r.URL && r.URL.startsWith("http") ? r.URL : "") ||
+          doiUrl;
+        if (!href.startsWith("http")) continue;
+        let snippet: string | undefined;
+        if (r.abstract) {
+          snippet = String(r.abstract)
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 300);
+        }
+        links.push({
+          title: title || href,
+          url: href,
+          snippet: snippet || undefined,
+          score: scoreLink(title || href, href, query) + 4,
+        });
+      }
+      if (links.length === 0) return { ok: false, error: "0 links parsed" };
+      return { ok: true, links };
+    },
+  };
+}
+
+/**
  * Ordered adapter registry (RR-C adaptive).
- * - Paper-shaped: arXiv first
+ * - Paper-shaped: arXiv → OpenAlex → Crossref first (see searchWithAdapters)
  * - If API keys set and DDG circuit open (recent 403): keyed first, skip DDG
- * - Else: DDG HTML → lite → optional keyed
- * - SEARCH_BACKEND=brave|serper|bing|ddg forces preference
+ * - Else: DDG HTML → lite → optional keyed → academic (arXiv/OpenAlex/Crossref)
+ * - SEARCH_BACKEND=brave|serper|bing|arxiv|openalex|crossref|ddg forces preference
  */
 export function getSearchAdapters(opts?: GetSearchAdaptersOpts): SearchAdapter[] {
   const env = opts?.env ?? process.env;
@@ -435,19 +612,47 @@ export function getSearchAdapters(opts?: GetSearchAdaptersOpts): SearchAdapter[]
     ? []
     : [createDdgHtmlAdapter(fetchFn), createDdgLiteAdapter(fetchFn)];
 
-  if (force === "brave" && brave) return [createBraveAdapter(brave, fetchFn), ...ddg];
-  if (force === "serper" && serper) return [createSerperAdapter(serper, fetchFn), ...ddg];
-  if (force === "bing" && bing) return [createBingAdapter(bing, fetchFn), ...ddg];
-  if (force === "arxiv") return [createArxivAdapter(fetchFn), ...ddg, ...keyed];
-  if (force === "ddg") return [...ddg, ...keyed];
+  const academic = createAcademicAdapters(fetchFn);
+  const openAlexKey = (env.OPENALEX_API_KEY ?? "").trim();
+  const academicWithKey = openAlexKey
+    ? [
+        createArxivAdapter(fetchFn),
+        createOpenAlexAdapter(fetchFn, { apiKey: openAlexKey }),
+        createCrossrefAdapter(fetchFn),
+      ]
+    : academic;
+
+  if (force === "brave" && brave) return [createBraveAdapter(brave, fetchFn), ...ddg, ...academicWithKey];
+  if (force === "serper" && serper) return [createSerperAdapter(serper, fetchFn), ...ddg, ...academicWithKey];
+  if (force === "bing" && bing) return [createBingAdapter(bing, fetchFn), ...ddg, ...academicWithKey];
+  if (force === "arxiv") return [createArxivAdapter(fetchFn), ...ddg, ...keyed, createOpenAlexAdapter(fetchFn, { apiKey: openAlexKey || undefined }), createCrossrefAdapter(fetchFn)];
+  if (force === "openalex") {
+    return [
+      createOpenAlexAdapter(fetchFn, { apiKey: openAlexKey || undefined }),
+      ...ddg,
+      ...keyed,
+      createArxivAdapter(fetchFn),
+      createCrossrefAdapter(fetchFn),
+    ];
+  }
+  if (force === "crossref") {
+    return [
+      createCrossrefAdapter(fetchFn),
+      ...ddg,
+      ...keyed,
+      createArxivAdapter(fetchFn),
+      createOpenAlexAdapter(fetchFn, { apiKey: openAlexKey || undefined }),
+    ];
+  }
+  if (force === "ddg") return [...ddg, ...keyed, ...academicWithKey];
 
   // Prefer keyed over flaky DDG when circuit open or keys present + env PREFER_KEYED_SEARCH
   const preferKeyed =
     skipDdg ||
     (keyed.length > 0 && /^(1|true|yes)$/i.test((env.PREFER_KEYED_SEARCH ?? "").trim()));
 
-  if (preferKeyed) return [...keyed, ...ddg, createArxivAdapter(fetchFn)];
-  return [...ddg, ...keyed, createArxivAdapter(fetchFn)];
+  if (preferKeyed) return [...keyed, ...ddg, ...academicWithKey];
+  return [...ddg, ...keyed, ...academicWithKey];
 }
 
 /**
@@ -461,10 +666,21 @@ export async function searchWithAdapters(
   | { ok: true; links: SearchLink[]; backend: string }
   | { ok: false; errors: string[] }
 > {
-  // Paper-shaped: prepend arXiv if not already first
+  // Paper-shaped: lead with free academic adapters (preserve injected mocks).
   let list = adapters.slice();
-  if (isPaperShapedQuery(query) && list[0]?.id !== "arxiv") {
-    list = [createArxivAdapter(), ...list.filter((a) => a.id !== "arxiv")];
+  if (isPaperShapedQuery(query) && !ACADEMIC_IDS.has(list[0]?.id ?? "")) {
+    const academic = list.filter((a) => ACADEMIC_IDS.has(a.id));
+    const rest = list.filter((a) => !ACADEMIC_IDS.has(a.id));
+    if (academic.length > 0) {
+      const preferred = ["arxiv", "openalex", "crossref"];
+      const sorted = [
+        ...preferred.flatMap((id) => academic.filter((a) => a.id === id)),
+        ...academic.filter((a) => !preferred.includes(a.id)),
+      ];
+      list = [...sorted, ...rest];
+    } else {
+      list = [...createAcademicAdapters(), ...rest];
+    }
   }
   const errors: string[] = [];
   for (const adapter of list) {

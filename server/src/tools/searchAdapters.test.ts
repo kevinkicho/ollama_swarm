@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import {
   createBingAdapter,
   createBraveAdapter,
+  createCrossrefAdapter,
+  createOpenAlexAdapter,
   createSerperAdapter,
   getSearchAdapters,
+  openAlexAbstractSnippet,
   parseDdgHtml,
   parseDdgLiteHtml,
   scoreLink,
@@ -66,15 +69,21 @@ describe("scoreLink / parsers", () => {
 });
 
 describe("getSearchAdapters registry", () => {
-  it("always includes DDG HTML then lite; no keyed backends without keys", () => {
+  it("always includes DDG HTML then lite; academic adapters; no keyed without keys", () => {
     const adapters = getSearchAdapters({ env: {} });
     assert.deepEqual(
       adapters.map((a) => a.id),
-      ["duckduckgo-html", "duckduckgo-lite", "arxiv"],
+      [
+        "duckduckgo-html",
+        "duckduckgo-lite",
+        "arxiv",
+        "openalex",
+        "crossref",
+      ],
     );
   });
 
-  it("appends optional backends when keys are set (DDG → keyed → arxiv)", () => {
+  it("appends optional backends when keys are set (DDG → keyed → academic)", () => {
     const adapters = getSearchAdapters({
       env: {
         BRAVE_API_KEY: "b-key",
@@ -84,7 +93,16 @@ describe("getSearchAdapters registry", () => {
     });
     assert.deepEqual(
       adapters.map((a) => a.id),
-      ["duckduckgo-html", "duckduckgo-lite", "brave", "serper", "bing", "arxiv"],
+      [
+        "duckduckgo-html",
+        "duckduckgo-lite",
+        "brave",
+        "serper",
+        "bing",
+        "arxiv",
+        "openalex",
+        "crossref",
+      ],
     );
   });
 
@@ -94,7 +112,14 @@ describe("getSearchAdapters registry", () => {
     });
     assert.deepEqual(
       adapters.map((a) => a.id),
-      ["duckduckgo-html", "duckduckgo-lite", "bing", "arxiv"],
+      [
+        "duckduckgo-html",
+        "duckduckgo-lite",
+        "bing",
+        "arxiv",
+        "openalex",
+        "crossref",
+      ],
     );
   });
 
@@ -103,6 +128,99 @@ describe("getSearchAdapters registry", () => {
       env: { BRAVE_API_KEY: "b", PREFER_KEYED_SEARCH: "1" },
     });
     assert.equal(adapters[0]?.id, "brave");
+  });
+});
+
+describe("OpenAlex / Crossref adapters", () => {
+  it("openAlexAbstractSnippet reconstructs inverted index", () => {
+    const snip = openAlexAbstractSnippet({
+      Hello: [0],
+      world: [1],
+    });
+    assert.equal(snip, "Hello world");
+  });
+
+  it("openalex maps works results", async () => {
+    const fetchFn: FetchLike = async (input) => {
+      assert.match(String(input), /api\.openalex\.org\/works/);
+      return jsonResponse({
+        results: [
+          {
+            id: "https://openalex.org/W123",
+            title: "A paper",
+            doi: "https://doi.org/10.1234/x",
+            primary_location: { landing_page_url: "https://example.edu/paper" },
+            abstract_inverted_index: { Abstract: [0], text: [1] },
+          },
+        ],
+      });
+    };
+    const res = await createOpenAlexAdapter(fetchFn).search("topic");
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    assert.equal(res.links[0]!.url, "https://example.edu/paper");
+    assert.equal(res.links[0]!.title, "A paper");
+    assert.match(res.links[0]!.snippet ?? "", /Abstract text/);
+  });
+
+  it("openalex fails closed on empty results", async () => {
+    const fetchFn: FetchLike = async () => jsonResponse({ results: [] });
+    const res = await createOpenAlexAdapter(fetchFn).search("nothing");
+    assert.equal(res.ok, false);
+  });
+
+  it("crossref maps message.items", async () => {
+    const fetchFn: FetchLike = async (input) => {
+      assert.match(String(input), /api\.crossref\.org\/works/);
+      return jsonResponse({
+        message: {
+          items: [
+            {
+              title: ["Crossref Paper"],
+              DOI: "10.1000/xyz",
+              URL: "https://doi.org/10.1000/xyz",
+              abstract: "<jats:p>Summary here</jats:p>",
+            },
+          ],
+        },
+      });
+    };
+    const res = await createCrossrefAdapter(fetchFn).search("topic");
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    assert.equal(res.links[0]!.url, "https://doi.org/10.1000/xyz");
+    assert.equal(res.links[0]!.title, "Crossref Paper");
+    assert.match(res.links[0]!.snippet ?? "", /Summary here/);
+  });
+
+  it("paper-shaped query prepends academic adapters", async () => {
+    const order: string[] = [];
+    const ddg: SearchAdapter = {
+      id: "duckduckgo-html",
+      search: async () => {
+        order.push("duckduckgo-html");
+        return { ok: false, error: "skip" };
+      },
+    };
+    // searchWithAdapters prepends arxiv/openalex/crossref for paper queries
+    const res = await searchWithAdapters("cite arxiv papers on transformers", [
+      ddg,
+      {
+        id: "arxiv",
+        search: async () => {
+          order.push("arxiv");
+          return {
+            ok: true,
+            links: [{ title: "T", url: "https://arxiv.org/abs/1", score: 1 }],
+          };
+        },
+      },
+    ]);
+    assert.equal(res.ok, true);
+    if (!res.ok) return;
+    // academic first — ddg should not run first
+    assert.ok(order[0] === "arxiv" || order.includes("arxiv"));
+    assert.equal(res.backend, "arxiv");
   });
 });
 

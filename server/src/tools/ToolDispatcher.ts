@@ -317,6 +317,8 @@ async function proposeHunksTool(
   const applied = applyHunks(currentTexts, hunks);
   if (!applied.ok) {
     // Attach nearby content for the first file that might help re-anchor.
+    // Prefer structured ApplyMissReport (kind, needle, uniqueCandidates) when
+    // applyHunks produced one; keep `nearby` for older consumers.
     const feedback: Record<string, string> = {};
     for (const [file, text] of Object.entries(currentTexts)) {
       if (text == null) continue;
@@ -341,9 +343,10 @@ async function proposeHunksTool(
         ok: false,
         reason: applied.error,
         apply,
+        miss: applied.miss ?? null,
         nearby: feedback,
         tip:
-          "Use replace_between with unique start/endExclusive headings, or write for full-file rewrite. Grep for the exact heading first.",
+          "Use replace_between with unique start/endExclusive headings, or write for full-file rewrite. Grep for the exact heading first. Re-ground on miss.nearbyExcerpt / miss.uniqueCandidates when present.",
       }),
     };
   }

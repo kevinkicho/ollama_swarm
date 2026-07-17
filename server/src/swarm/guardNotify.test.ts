@@ -40,6 +40,26 @@ test("notifyGuardTrip falls back to appendSystem without Brain", () => {
   assert.equal((lines[0]!.summary as { kind?: string })?.kind, "brain_suggestion");
 });
 
+test("notifyGuardTrip empty-execution suggests extendRounds RECONFIG", () => {
+  let injected: { title: string; text: string } | undefined;
+  notifyGuardTrip({
+    kind: "empty-execution",
+    detail: "empty-execution: 3 consecutive cycle(s) with 0 standup todos",
+    runId: "run-empty",
+    appendSystem: () => {},
+    getBrainService: () => ({
+      injectSuggestion: (_id, s) => {
+        injected = s;
+      },
+    }),
+  });
+  assert.ok(injected);
+  assert.match(injected!.title, /Empty execution/i);
+  assert.match(injected!.text, /\[guard:empty-execution\]/);
+  assert.match(injected!.text, /RECONFIG:/);
+  assert.match(injected!.text, /extendRounds/);
+});
+
 test("buildProgressSignature is order-stable for unmet ids", () => {
   const a = buildProgressSignature({ unmetIds: ["c2", "c1"], committed: 1 });
   const b = buildProgressSignature({ unmetIds: ["c1", "c2"], committed: 1 });

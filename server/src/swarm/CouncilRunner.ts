@@ -67,6 +67,7 @@ import {
   runStandupTurn as runStandupTurnImpl,
   type CouncilStandupHost,
 } from "./councilStandup.js";
+import { notifyGuardTrip } from "./guardNotify.js";
 import {
   runCouncilAuditCycle,
   type CouncilAuditHost,
@@ -691,12 +692,19 @@ export class CouncilRunner extends DiscussionRunnerBase {
       runDiscussionAgent: (agent, prompt, opts) =>
         this.runDiscussionAgent(agent, prompt, opts as any),
       stats: this.stats,
-      // RR-D: empty-execution limit → early stop detail + soft stop.
+      // RR-D: empty-execution limit → Brain RECONFIG (extend rounds) + soft stop.
       onEmptyExecutionLimit: (streak, reason) => {
         this.earlyStopDetail = reason;
         this.appendSystem(
           `[empty-execution] limit reached (streak=${streak}) — stopping run: ${reason}`,
         );
+        notifyGuardTrip({
+          kind: "empty-execution",
+          detail: reason,
+          runId: this.active?.runId,
+          appendSystem: (t, s) => this.appendSystem(t, s),
+          getBrainService: () => this.opts.getBrainService?.() ?? null,
+        });
         void this.stop();
       },
     };
