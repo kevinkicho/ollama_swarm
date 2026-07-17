@@ -8,7 +8,8 @@ import { TOOL_SCHEMAS } from "./AnthropicProvider.js";
 import { formatToolInvokePreview } from "../swarm/toolCallTranscript.js";
 import { createToolLoopStuckDetector } from "@ollama-swarm/shared/toolLoopStuck";
 
-const DEFAULT_MAX_TOOL_TURNS = 10;
+/** Provider floor when caller omits maxToolTurns (was 10 — over-restricted council drafts). */
+const DEFAULT_MAX_TOOL_TURNS = 100;
 
 export type OllamaLoopMessage =
   | { role: "system" | "user"; content: string }

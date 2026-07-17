@@ -15,7 +15,7 @@ import { resolveOpenCodeRoute, type OpenCodeTier } from "./openCodeModelRouting.
 import { structuredFormatForChat } from "./structuredFormat.js";
 
 const ANTHROPIC_VERSION = "2023-06-01";
-const MAX_TOOL_TURNS = 10;
+const MAX_TOOL_TURNS = 100;
 
 function openCodeFetchErrorResult(
   err: unknown,

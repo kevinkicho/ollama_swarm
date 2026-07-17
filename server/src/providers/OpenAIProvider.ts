@@ -23,7 +23,7 @@ import { formatToolInvokePreview } from "../swarm/toolCallTranscript.js";
 import { structuredFormatForChat } from "./structuredFormat.js";
 
 const OPENAI_BASE = "https://api.openai.com/v1/chat/completions";
-const MAX_TOOL_TURNS = 10;
+const MAX_TOOL_TURNS = 100;
 
 interface OpenAiSseChunk {
   choices?: Array<{

@@ -41,7 +41,7 @@ describe("toolProfiles", () => {
     }
     assert.equal(effectiveToolProfileId("swarm-read", { autoApprove: true }), "swarm-auto");
     assert.equal(allowsUnboundedToolTurns("swarm-auto"), true);
-    assert.equal(resolveMaxToolTurnsForProfile("swarm-auto"), 40);
+    assert.equal(resolveMaxToolTurnsForProfile("swarm-auto"), 100);
   });
 
   it("toolingMatrix lists all blackboard roles", () => {
@@ -71,11 +71,11 @@ describe("toolProfiles", () => {
   });
 
   it("resolveMaxToolTurnsForProfile tiers caps by profile", () => {
-    assert.equal(EXPLORE_MAX_TOOL_TURNS, 20);
-    assert.equal(resolveMaxToolTurnsForProfile("swarm-planner"), 20);
-    assert.equal(resolveMaxToolTurnsForProfile("swarm-read"), 20);
-    assert.equal(resolveMaxToolTurnsForProfile("swarm-builder-research"), 40);
-    assert.equal(resolveMaxToolTurnsForProfile("swarm-research"), 35);
+    assert.equal(EXPLORE_MAX_TOOL_TURNS, 100);
+    assert.equal(resolveMaxToolTurnsForProfile("swarm-planner"), 100);
+    assert.equal(resolveMaxToolTurnsForProfile("swarm-read"), 100);
+    assert.equal(resolveMaxToolTurnsForProfile("swarm-builder-research"), 100);
+    assert.equal(resolveMaxToolTurnsForProfile("swarm-research"), 100);
     assert.equal(resolveMaxToolTurnsForProfile("swarm"), undefined);
   });
 

@@ -22,7 +22,7 @@ import { structuredFormatForChat } from "./structuredFormat.js";
 
 const ANTHROPIC_BASE = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
-const MAX_TOOL_TURNS = 10;
+const MAX_TOOL_TURNS = 100;
 
 // Tool input_schemas declared once per tool so AnthropicProvider +
 // OpenAIProvider can share them. Mirror the args ToolDispatcher's

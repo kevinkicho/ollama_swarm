@@ -94,16 +94,17 @@ export function effectiveToolProfileId(
 export const EMIT_ONLY_PROFILE_ID: ToolProfileId = "swarm";
 
 /** Max provider round-trips (model → tool → model) for explore-style profiles. */
-export const EXPLORE_MAX_TOOL_TURNS = 20;
+/** Default explore/planner tool budget (provider floor is also 100). */
+export const EXPLORE_MAX_TOOL_TURNS = 100;
 
-/** Council/blackboard workers with web tools — doc updates need more headroom. */
-export const EXPLORE_MAX_BUILDER_RESEARCH_TOOL_TURNS = 40;
+/** Council/blackboard workers with web tools — same high headroom. */
+export const EXPLORE_MAX_BUILDER_RESEARCH_TOOL_TURNS = 100;
 
 /** Read-only research profile (hunk workers with web on). */
-export const EXPLORE_MAX_RESEARCH_TOOL_TURNS = 35;
+export const EXPLORE_MAX_RESEARCH_TOOL_TURNS = 100;
 
 /** Dedicated literature pre-pass before hunk emit (web_search heavy). */
-export const EXPLORE_MAX_LITERATURE_TOOL_TURNS = 40;
+export const EXPLORE_MAX_LITERATURE_TOOL_TURNS = 100;
 
 /** Literature pre-pass profile — call sites pass web-only tools (no repo tour). */
 export const LITERATURE_RESEARCH_PROFILE: ToolProfileId = "swarm-research";
