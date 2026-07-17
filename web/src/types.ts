@@ -257,6 +257,16 @@ export interface RunSummary {
     repairSuccesses: number;
     repairFailures: number;
   };
+  /** Cycle fail taxonomy + empty-execution streaks (optional, RR-D). */
+  cycleIntegrity?: {
+    cyclesCompleted: number;
+    emptyExecutionCycles: number;
+    failByBucket: Record<string, number>;
+    todosFailed: number;
+    todosSucceeded: number;
+    lastEmptyStreak: number;
+    maxEmptyStreak: number;
+  };
   agents: PerAgentStat[];
   contract?: ExitContract;
   // Brain chat history persisted for recovery/FAB continuity (per-run).

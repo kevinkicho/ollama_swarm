@@ -134,6 +134,8 @@ export interface RunSummary {
    * Optional for back-compat with older summary.json files.
    */
   applyIntegrity?: import("../../../../shared/src/applyIntegrityReport.js").ApplyIntegrityReport;
+  /** RR-D: cycle fail taxonomy + empty-execution streaks (optional). */
+  cycleIntegrity?: import("../../../../shared/src/cycleIntegrityReport.js").CycleIntegrityReport;
   agents: PerAgentStat[];
   // Task #65 (2026-04-24): persist the in-memory transcript at run-end
   // so the history modal / review view can replay what happened.
@@ -316,6 +318,8 @@ export interface BuildSummaryInput {
   transcript?: import("../../types.js").TranscriptEntry[];
   /** Live apply/repair counters snapshot (optional; omit when no apply activity). */
   applyIntegrity?: RunSummary["applyIntegrity"];
+  /** RR-D cycle fail taxonomy (optional). */
+  cycleIntegrity?: RunSummary["cycleIntegrity"];
   // V2 Step 3b.2: parallel-track V2 reducer state at run end.
   v2State?: RunSummary["v2State"];
   // V2 Step 5c.1: parallel-track V2 TodoQueue state at run end.

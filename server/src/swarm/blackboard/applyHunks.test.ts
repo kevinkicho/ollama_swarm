@@ -116,6 +116,62 @@ describe("applyFileHunks — replace semantics", () => {
     }
   });
 
+  it("RR-A: multi-match multi-line search never auto-applies unique suffix", () => {
+    // Shared suffix "body" is unique if shorten were allowed — must still fail.
+    const file = "hdr A\nbody\nhdr B\nbody\n";
+    const r = applyFileHunks(file, [
+      {
+        op: "replace",
+        file: "r.txt",
+        search: "hdr A\nbody",
+        replace: "hdr A\nBODY",
+      },
+    ]);
+    // "hdr A\nbody" appears once — should succeed. Use true multi-match:
+    const r2 = applyFileHunks("x\nshared\ny\nshared\n", [
+      { op: "replace", file: "r.txt", search: "x\nshared", replace: "X\nSHARED" },
+    ]);
+    // x\nshared is unique; for multi-match use bare "shared":
+    const r3 = applyFileHunks("x\nshared\ny\nshared\n", [
+      { op: "replace", file: "r.txt", search: "shared", replace: "SHARED" },
+    ]);
+    assert.equal(r3.ok, false);
+    if (!r3.ok) assert.equal(r3.miss?.kind, "search_not_unique");
+    // multi-line where first line multi-matches would previously shorten:
+    const r4 = applyFileHunks(
+      "COMMON\nunique-a\nCOMMON\nunique-b\n",
+      [
+        {
+          op: "replace",
+          file: "r.txt",
+          search: "COMMON\nunique-a",
+          replace: "COMMON\nUNIQUE-A",
+        },
+      ],
+    );
+    // COMMON\nunique-a is unique → ok
+    assert.equal(r4.ok, true);
+    // Force multi-match on full multi-line block that shares a unique suffix:
+    const r5 = applyFileHunks(
+      "a\nb\nc\na\nb\nd\n",
+      [
+        {
+          op: "replace",
+          file: "r.txt",
+          search: "a\nb",
+          replace: "A\nB",
+        },
+      ],
+    );
+    assert.equal(r5.ok, false, "must not shorten to unique 'b' and apply");
+    if (!r5.ok) {
+      assert.equal(r5.miss?.kind, "search_not_unique");
+      assert.equal(r5.miss?.matchCount, 2);
+    }
+    void r;
+    void r2;
+  });
+
   it("reports which hunk index failed when there are several", () => {
     const r = applyFileHunks("aaa bbb ccc", [
       { op: "replace", file: "r.txt", search: "aaa", replace: "A" },

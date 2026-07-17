@@ -35,6 +35,7 @@ import {
   noteRepairFailure,
   noteRepairSuccess,
 } from "../applyIntegrityStats.js";
+import { recordCycleFail } from "../cycleIntegrityStats.js";
 
 export type SelfConsistencyOutcome = {
   outcome: "stale" | "aborted" | "pending-commit";
@@ -314,17 +315,15 @@ export async function finalizeWorkerHunks(
     }
     const dryApply = applyHunks(contents, hunksToCommit.slice() as Hunk[]);
     const runIdForStats = cfg?.runId;
-    // Grounded preflight integrity ownership (avoid double-count with applyAndCommit):
-    // - repairSuccess/Failure only here for repair outcomes
-    // - On accepted repair: note original miss once (primary fail that was recovered)
-    // - On repair fail / non-repairable: do NOT note miss here — real applyAndCommit owns it
-    // - attempts/applied always owned by non-dryRunOnly applyAndCommit
-    if (
-      !dryApply.ok &&
-      isRepairableApplyMiss({ miss: dryApply.miss, reason: dryApply.error })
-    ) {
+    // RR-A: never propose hunks that pure apply already failed, unless a
+    // grounded repair dry-run accepts replacements.
+    if (!dryApply.ok) {
       const miss = dryApply.miss;
       const originalMissKind = miss?.kind ?? "other";
+      const repairable = isRepairableApplyMiss({
+        miss: dryApply.miss,
+        reason: dryApply.error,
+      });
       const failedFile =
         miss?.file ||
         dryApply.error.match(/file "([^"]+)"/)?.[1] ||
@@ -340,15 +339,14 @@ export async function finalizeWorkerHunks(
           freshContent = contents[failedFile];
         }
       }
-      if (freshContent != null && failedFile) {
+
+      let repaired = false;
+      if (repairable && freshContent != null && failedFile) {
         ctx.appendSystem(
           `[${agent.id}] [apply-miss] kind=${miss?.kind ?? "unknown"} file=${failedFile} — grounded hunk repair (no literature)`,
         );
         let repairResponse: string;
         try {
-          // Emit-only profile ("swarm" → empty tools). maxToolTurns ≥1 so
-          // non-Ollama providers actually run one model turn. Never use
-          // workerToolProfile("hunk") with a 0-cap — tool loop never calls the model.
           repairResponse = await ctx.promptAgent(
             agent,
             `${WORKER_SYSTEM_PROMPT}\n\n${buildHunkRepairPrompt(
@@ -373,17 +371,20 @@ export async function finalizeWorkerHunks(
           }
           const msg = err instanceof Error ? err.message : String(err);
           ctx.appendSystem(
-            `[${agent.id}] [apply-miss] hunk repair prompt failed: ${msg} — proposing original hunks`,
+            `[${agent.id}] [apply-miss] hunk repair prompt failed: ${msg} — failing todo (not proposing)`,
           );
           noteRepairFailure(runIdForStats);
-          repairResponse = "";
+          const reason = `${dryApply.error} | repair prompt failed: ${msg}`.slice(0, 500);
+          ctx.getWrappers().failTodoQ(todo.id, reason, "hunk-fail");
+          recordCycleFail(reason, runIdForStats);
+          ctx.bumpRejectedAttempts(agent.id);
+          return { outcome: "stale" };
         }
+        if (ctx.isStopping()) return { outcome: "aborted" };
         if (repairResponse) {
-          if (ctx.isStopping()) return { outcome: "aborted" };
           ctx.appendAgent(agent, repairResponse);
           const repairParsed = parseWorkerResponse(repairResponse, todo.expectedFiles);
           if (repairParsed.ok && !repairParsed.skip && repairParsed.hunks.length > 0) {
-            // Prefer current in-memory map; on miss re-read the failed file once.
             let gate = acceptRepairedHunksIfApply(
               hunksToCommit,
               repairParsed.hunks,
@@ -405,25 +406,58 @@ export async function finalizeWorkerHunks(
             if (gate.accepted) {
               hunksToCommit = gate.hunks;
               commitTier = "repair";
-              // Primary fail that was repaired — count miss once here (real apply succeeds).
               noteApplyMiss(originalMissKind, runIdForStats);
               noteRepairSuccess(runIdForStats);
+              repaired = true;
               ctx.appendSystem(
                 `[${agent.id}] [apply-miss] hunk repair dry-run ok — proposing repaired hunks`,
               );
             } else {
               noteRepairFailure(runIdForStats);
+              const failMsg =
+                gate.error ?? dryApply.error ?? "hunk repair still misses after grounded re-emit";
               ctx.appendSystem(
-                `[${agent.id}] [apply-miss] hunk repair still misses: ${(gate.error ?? "apply failed").slice(0, 200)} — proposing original`,
+                `[${agent.id}] [apply-miss] hunk repair still misses: ${failMsg.slice(0, 200)} — failing todo (not proposing)`,
               );
+              ctx.getWrappers().failTodoQ(todo.id, failMsg.slice(0, 500), "hunk-fail");
+              recordCycleFail(failMsg, runIdForStats);
+              ctx.bumpRejectedAttempts(agent.id);
+              return { outcome: "stale" };
             }
           } else {
             noteRepairFailure(runIdForStats);
             ctx.appendSystem(
-              `[${agent.id}] [apply-miss] hunk repair parse failed — proposing original hunks`,
+              `[${agent.id}] [apply-miss] hunk repair parse failed — failing todo (not proposing)`,
             );
+            const pr = (dryApply.error ?? "hunk repair parse failed").slice(0, 500);
+            ctx.getWrappers().failTodoQ(todo.id, pr, "hunk-fail");
+            recordCycleFail(pr, runIdForStats);
+            ctx.bumpRejectedAttempts(agent.id);
+            return { outcome: "stale" };
           }
+        } else {
+          noteRepairFailure(runIdForStats);
+          ctx.appendSystem(
+            `[${agent.id}] [apply-miss] hunk repair empty — failing todo (not proposing)`,
+          );
+          const er = (dryApply.error ?? "hunk repair empty").slice(0, 500);
+          ctx.getWrappers().failTodoQ(todo.id, er, "hunk-fail");
+          recordCycleFail(er, runIdForStats);
+          ctx.bumpRejectedAttempts(agent.id);
+          return { outcome: "stale" };
         }
+      }
+
+      if (!repaired) {
+        // Non-repairable miss, missing file content, or no repair path.
+        noteApplyMiss(originalMissKind, runIdForStats);
+        ctx.appendSystem(
+          `[${agent.id}] [apply-miss] unrepaired dry-run fail — failing todo (not proposing)`,
+        );
+        ctx.getWrappers().failTodoQ(todo.id, dryApply.error.slice(0, 500), "hunk-fail");
+        recordCycleFail(dryApply.error, runIdForStats);
+        ctx.bumpRejectedAttempts(agent.id);
+        return { outcome: "stale" };
       }
     }
   }

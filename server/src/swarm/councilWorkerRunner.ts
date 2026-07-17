@@ -13,8 +13,8 @@ import {
   validateHunkPayload,
   WORKER_SYSTEM_PROMPT,
   isLiteratureTodo,
-  extractAnchorsFromTodoDescription,
 } from "./blackboard/prompts/worker.js";
+import { mergeAnchorsForTodo } from "./grounding/mergeAnchors.js";
 import { repairAndParseJson } from "./repairJson.js";
 import { buildResearchToolsNote } from "./blackboard/prompts/planner.js";
 import { chatOnce } from "./chatOnce.js";
@@ -638,11 +638,13 @@ async function tryWorkerPrompt(
   // never emitted JSON. Cap emit tools tightly; literature already ran.
   const workerToolTurnCap = Math.min(defaultCap ?? 0, 6);
 
-  // Planner anchors + headings pulled from free-text todo descriptions.
-  const descAnchors = extractAnchorsFromTodoDescription(todo.description);
-  const expectedAnchors = [
-    ...new Set([...(todo.expectedAnchors ?? []), ...descAnchors]),
-  ];
+  // RR-B: unified merge — planner expected ∪ description ∪ autoDetect.
+  const expectedAnchors: string[] = mergeAnchorsForTodo({
+    todoDescription: todo.description,
+    expectedAnchors: todo.expectedAnchors ? [...todo.expectedAnchors] : undefined,
+    fileContents,
+    expectedFiles,
+  });
 
   const progressBlock = wrapProgressContextForPrompt(state.progressContext ?? "");
   const userBlock = opts.repairFrom
@@ -708,10 +710,16 @@ async function tryWorkerPrompt(
       if (!sizeCheck.ok) {
         return { outcome: "retry", reason: sizeCheck.reason, lastResponse: res };
       }
+      // RR-A: never coerce create→replace with a 2KB prefix search (silent
+      // half-file corruption). Prefer full-file write when create targets
+      // an existing path; applyHunks still rejects bare create-on-existing.
       const fixedHunks = parsed.hunks.map((h) => {
         if ((h as any).op === "create" && fileContents[(h as any).file] !== null) {
-          const currentContent = fileContents[(h as any).file]!;
-          return { op: "replace", file: (h as any).file, search: currentContent.slice(0, 2000), replace: (h as any).content } as any;
+          return {
+            op: "write",
+            file: (h as any).file,
+            content: (h as any).content ?? "",
+          } as any;
         }
         return h;
       });

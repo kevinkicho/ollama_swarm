@@ -48,6 +48,7 @@ import {
   type CouncilAdapterState,
 } from "./councilAdapter.js";
 import { startApplyIntegrityTracking } from "./applyIntegrityStats.js";
+import { startCycleIntegrityTracking } from "./cycleIntegrityStats.js";
 import { clearLocalCatalogCache } from "./research/localCatalogIndex.js";
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { SwarmControlCenter } from "./control/SwarmControlCenter.js";
@@ -237,6 +238,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
     clearLocalCatalogCache();
     // Apply/repair integrity counters for summary.applyIntegrity (PR6).
     startApplyIntegrityTracking(cfg.runId);
+    // RR-D: cycle fail taxonomy counters.
+    startCycleIntegrityTracking(cfg.runId);
 
     // Gather project context
     this.repoFiles = await this.opts.repos.listRepoFiles(destPath, { maxFiles: 500 });

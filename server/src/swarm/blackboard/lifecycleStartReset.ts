@@ -3,6 +3,7 @@
 import type { LifecycleContext } from "./lifecycleRunner.js";
 import { config as appConfig } from "../../config.js";
 import { startApplyIntegrityTracking } from "../applyIntegrityStats.js";
+import { startCycleIntegrityTracking } from "../cycleIntegrityStats.js";
 import { clearLocalCatalogCache } from "../research/localCatalogIndex.js";
 
 /**
@@ -55,6 +56,7 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   // Fresh clone docs per run (avoid stale index across consecutive runs).
   clearLocalCatalogCache();
   startApplyIntegrityTracking(cfg.runId);
+  startCycleIntegrityTracking(cfg.runId);
   {
     const plannerModel = cfg.plannerModel ?? cfg.model;
     const workerModel = cfg.workerModel ?? cfg.model;

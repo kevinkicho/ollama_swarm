@@ -626,11 +626,12 @@ export const REPAIRABLE_APPLY_MISS_KINDS: ReadonlySet<string> = new Set([
   "search_not_unique",
   "start_not_found",
   "start_not_unique",
+  "end_not_found", // RR-B: replace_between endExclusive misses are repairable
 ]);
 
 /**
- * Whether an apply failure is a repairable anchor miss (search/start not found
- * or not unique). Prefer structured miss.kind; fall back to reason text.
+ * Whether an apply failure is a repairable anchor miss (search/start/end not
+ * found or not unique). Prefer structured miss.kind; fall back to reason text.
  */
 export function isRepairableApplyMiss(input: {
   miss?: ApplyMissReport;
@@ -641,7 +642,9 @@ export function isRepairableApplyMiss(input: {
   }
   const reason = input.reason ?? input.miss?.message ?? "";
   if (!reason) return false;
-  if (/\b(search|start)\b/i.test(reason) && /not found/i.test(reason)) return true;
+  if (/\b(search|start|endExclusive|end)\b/i.test(reason) && /not found/i.test(reason)) {
+    return true;
+  }
   if (/must be unique|matches \d+ times|not[_ ]unique/i.test(reason)) return true;
   return false;
 }

@@ -58,6 +58,15 @@ export async function runWorkerLiteratureResearch(
     forAgentId: agent.id,
   });
   const litDirective = litExtras.effectiveDirective ?? cfg.userDirective;
+  // RR-C local-first: inject catalog before web when offline docs hit.
+  const localFirst = localCatalogNotesOnResearchFail(todo.description, clonePath);
+  if (localFirst && localFirst.length >= 200) {
+    ctx.appendSystem(
+      `[${agent.id}] Local catalog (local-first): injected ${localFirst.length} chars — skipping web literature pre-pass.`,
+    );
+    return localFirst.length > 8000 ? `${localFirst.slice(0, 8000)}…` : localFirst;
+  }
+
   const prompt = [
     "You are a research worker gathering sources BEFORE writing file edits.",
     buildResearchToolsNote(true),
@@ -65,7 +74,11 @@ export async function runWorkerLiteratureResearch(
     `TODO: ${todo.description}`,
     `Target files: ${todo.expectedFiles.join(", ")}`,
     litDirective ? `User directive: ${litDirective}` : "",
+    localFirst
+      ? `\nLOCAL CATALOG NOTES (also try read/grep on clone docs):\n${localFirst.slice(0, 3000)}`
+      : "",
     "",
+    "Prefer local clone docs (API_ENDPOINTS, GOVERNMENT_API_CATALOG, PANELS) via read/grep when available.",
     "Use web_search and web_fetch to gather citable findings. Output plain prose with bullet points and URLs.",
     "Do NOT emit JSON hunks in this phase.",
   ].filter(Boolean).join("\n");
@@ -78,7 +91,14 @@ export async function runWorkerLiteratureResearch(
     runId: cfg.runId,
     mcpServers: cfg.mcpServers,
     maxToolTurns: EXPLORE_MAX_LITERATURE_TOOL_TURNS,
-    toolsOverride: [...LITERATURE_RESEARCH_TOOLS],
+    // RR-C: allow read/grep/list so local-first is executable.
+    toolsOverride: [
+      "read",
+      "grep",
+      "list",
+      "glob",
+      ...LITERATURE_RESEARCH_TOOLS,
+    ] as const,
     toolLoopNudge: {
       atTurn: LITERATURE_RESEARCH_NUDGE_TURN,
       message: LITERATURE_RESEARCH_NUDGE_MESSAGE,
@@ -113,7 +133,7 @@ export async function runWorkerLiteratureResearch(
   }
 
   // Hard search fail / unusable brief: offline catalog grounding (shared with council).
-  const localNotes = localCatalogNotesOnResearchFail(todo.description, clonePath);
+  const localNotes = localFirst || localCatalogNotesOnResearchFail(todo.description, clonePath);
   if (localNotes) {
     ctx.appendSystem(
       `[${agent.id}] Local catalog: injected ${localNotes.length} chars of endpoint notes (literature fail path).`,

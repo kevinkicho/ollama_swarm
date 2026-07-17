@@ -32,6 +32,7 @@
     "./finalizeAgentOutput": "./src/finalizeAgentOutput.ts",
     "./streamIntegrityReport": "./src/streamIntegrityReport.ts",
     "./applyIntegrityReport": "./src/applyIntegrityReport.ts",
+    "./cycleIntegrityReport": "./src/cycleIntegrityReport.ts",
     "./jsonFormatSniff": "./src/jsonFormatSniff.ts",
     "./thinkGuardBudget": "./src/thinkGuardBudget.ts",
     "./thinkGuardErrors": "./src/thinkGuardErrors.ts",

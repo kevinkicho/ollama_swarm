@@ -55,6 +55,10 @@ async function dryRunHunks(
   wouldApply: number;
   reasons: string[];
   misses: ApplyMissReport[];
+  /** Hunks for files that dry-ran clean (RR-A fail-closed subset). */
+  cleanHunks: Hunk[];
+  /** Hunks for files that failed dry-run. */
+  dirtyHunks: Hunk[];
 }> {
   const fsAdapter = realFilesystemAdapter(clonePath);
   const byFile = new Map<string, Hunk[]>();
@@ -66,6 +70,8 @@ async function dryRunHunks(
   let wouldApply = 0;
   const reasons: string[] = [];
   const misses: ApplyMissReport[] = [];
+  const cleanHunks: Hunk[] = [];
+  const dirtyHunks: Hunk[] = [];
   for (const [file, fileHunks] of byFile) {
     let current: string | null = null;
     try {
@@ -74,13 +80,16 @@ async function dryRunHunks(
       current = null;
     }
     const r = applyHunks({ [file]: current }, fileHunks);
-    if (r.ok) wouldApply += fileHunks.length;
-    else {
+    if (r.ok) {
+      wouldApply += fileHunks.length;
+      cleanHunks.push(...fileHunks);
+    } else {
       reasons.push(`${file}: ${r.error}`);
       if (r.miss) misses.push(r.miss);
+      dirtyHunks.push(...fileHunks);
     }
   }
-  return { wouldApply, reasons, misses };
+  return { wouldApply, reasons, misses, cleanHunks, dirtyHunks };
 }
 
 /** Build re-prompt context from synthesizer total-miss (reasons + ApplyMissReport). */
@@ -225,10 +234,19 @@ export async function runWrapUpApplyPhase(
       `Wrap-up apply: dry-running ${synthHunks.length} synthesizer hunk(s)…`,
     );
     const dry = await dryRunHunks(input.clonePath, synthHunks);
-    if (dry.wouldApply > 0) {
-      hunksToApply = synthHunks;
+    // RR-A fail-closed: only apply files that dry-ran clean — never land a
+    // mixed set where some files fail (prior bug applied all synth hunks).
+    if (dry.cleanHunks.length > 0 && dry.dirtyHunks.length === 0) {
+      hunksToApply = dry.cleanHunks;
       input.appendSystem(
         `Wrap-up apply: synthesizer dry-run ok (${dry.wouldApply}/${synthHunks.length} would land) — applying.`,
+      );
+    } else if (dry.cleanHunks.length > 0 && dry.dirtyHunks.length > 0) {
+      hunksToApply = dry.cleanHunks;
+      synthesizerMissReasons = dry.reasons;
+      synthesizerMisses = dry.misses;
+      input.appendSystem(
+        `Wrap-up apply: synthesizer partial dry-run (${dry.cleanHunks.length} clean / ${dry.dirtyHunks.length} miss) — applying clean files only; miss reasons for log: ${dry.reasons.join("; ").slice(0, 300)}.`,
       );
     } else {
       synthesizerMissReasons = dry.reasons;

@@ -13,7 +13,7 @@ import type { ToolTraceEntry } from "../toolCallTranscript.js";
 import type { AgentManager } from "../../services/AgentManager.js";
 import type { AgentState } from "../../types.js";
 import type { TodoQueueWrappers } from "./todoQueueWrappers.js";
-import { autoDetectAnchors } from "./autoAnchor.js";
+import { mergeAnchorsForTodo } from "../grounding/mergeAnchors.js";
 import { getModelBudget } from "../modelContextBudget.js";
 import { isWebToolsEnabled } from "../toolProfiles.js";
 import { resolveWorkerScaffoldPlan } from "./workerScaffold.js";
@@ -73,15 +73,18 @@ export async function prepareWorkerTodoSeed(
     return { ok: false, outcome: "stale" };
   }
 
-  let effectiveAnchors = todo.expectedAnchors;
-  if (!effectiveAnchors || effectiveAnchors.length === 0) {
-    const autoAnchors = autoDetectAnchors(todo.description, contents, todo.expectedFiles);
-    if (autoAnchors.length > 0) {
-      effectiveAnchors = autoAnchors;
-      ctx.appendSystem(
-        `[auto-anchor] Detected ${autoAnchors.length} anchor(s) from description: ${autoAnchors.join(", ")}`,
-      );
-    }
+  // RR-B: always merge planner + description + autoDetect (same as council).
+  const merged = mergeAnchorsForTodo({
+    todoDescription: todo.description,
+    expectedAnchors: todo.expectedAnchors,
+    fileContents: contents,
+    expectedFiles: todo.expectedFiles,
+  });
+  let effectiveAnchors = merged.length > 0 ? merged : todo.expectedAnchors;
+  if (merged.length > 0 && (!todo.expectedAnchors || todo.expectedAnchors.length === 0)) {
+    ctx.appendSystem(
+      `[auto-anchor] Merged ${merged.length} anchor(s): ${merged.slice(0, 6).join(", ")}${merged.length > 6 ? "…" : ""}`,
+    );
   }
 
   const budget = getModelBudget(agent.model);

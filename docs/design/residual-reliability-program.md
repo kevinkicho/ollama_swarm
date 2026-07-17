@@ -5,7 +5,7 @@
 | **Author** | Design program for post-grounding residual work |
 | **Date** | 2026-07-17 |
 | **Revision** | 1 |
-| **Status** | Proposed — formal designs ready; **do not re-open shipped PR1–6** |
+| **Status** | **In progress on `main`** — partial RR-A/B/C/D landed; remainder remains proposed |
 | **Related runs** | `eee6718f-03f3-45dd-a3a2-593076734102`, `9f449937-a060-49e6-9417-aba2774dfb16` |
 | **Predecessor (shipped)** | [`eee6718f-grounding-and-research-resilience.md`](./eee6718f-grounding-and-research-resilience.md) (`1063fa7` + polish `09f704d`) |
 | **Workflow** | Implement on **`main` only** (no multi-branch PR stacks unless user asks) |

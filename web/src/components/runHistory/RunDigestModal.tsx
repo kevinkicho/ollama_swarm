@@ -222,6 +222,25 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
                   </DataValue>
                 </>
               ) : null}
+              {summary?.cycleIntegrity ? (
+                <>
+                  <DataLabel>Cycle integrity</DataLabel>
+                  <DataValue>
+                    {summary.cycleIntegrity.todosSucceeded}✓/{summary.cycleIntegrity.todosFailed}✗ todos
+                    {summary.cycleIntegrity.emptyExecutionCycles > 0
+                      ? ` · empty×${summary.cycleIntegrity.emptyExecutionCycles}`
+                      : ""}
+                    {summary.cycleIntegrity.maxEmptyStreak > 0
+                      ? ` · max empty streak ${summary.cycleIntegrity.maxEmptyStreak}`
+                      : ""}
+                    {Object.keys(summary.cycleIntegrity.failByBucket ?? {}).length > 0
+                      ? ` · ${Object.entries(summary.cycleIntegrity.failByBucket)
+                          .map(([k, n]) => `${k}=${n}`)
+                          .join(", ")}`
+                      : ""}
+                  </DataValue>
+                </>
+              ) : null}
             </div>
             {summary?.startCommand ? (
               <details className="mt-2 group">
