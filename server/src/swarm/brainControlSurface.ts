@@ -85,13 +85,12 @@ export const BRAIN_CONTROL_SURFACE = {
       method: "POST",
       path: "/api/swarm/reconfig",
       phase: "during",
-      purpose: "Extend rounds / wall-clock / token budget / think-guard referee",
+      purpose: "Extend rounds / wall-clock / token budget (extend-only)",
       bodyHints: [
         "runId",
         "extendRounds?|rounds?",
         "extendWallClockCapMin?|wallClockCapMin?",
         "extendTokenBudget?|tokenBudget?",
-        "thinkGuardReferee*",
       ],
     },
     {

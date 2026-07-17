@@ -36,7 +36,6 @@ import {
   type ToolTraceEntry,
 } from "./toolCallTranscript.js";
 import type { ToolResultHook } from "../tools/ToolDispatcher.js";
-import { config as appConfig } from "../config.js";
 import { createThinkGuardHandler } from "./blackboard/thinkGuardHandler.js";
 import {
   collectPendingMentionsForAgent,
@@ -233,10 +232,7 @@ export async function runDiscussionAgentCore(
   });
 
   try {
-    const getRefereeOn = () =>
-      host.active?.thinkGuardRefereeEnabled ?? appConfig.THINK_GUARD_REFEREE_ENABLED === true;
-
-    // Discussion drafts: salvage partial on think-guard instead of silent fail.
+    // Discussion drafts: deterministic stream-triage salvage on hard think abort.
     const thinkGuardHandler = createThinkGuardHandler({
       getActive: () => host.active,
       isStopping: () => host.getStopping(),
@@ -273,10 +269,7 @@ export async function runDiscussionAgentCore(
       logDiag: host.logDiag,
       runId: host.active?.runId,
       describeError: describeSdkError,
-      refereeOn: getRefereeOn(),
-      getRefereeOn,
-      minThinkCharsForReferee: host.active?.thinkGuardRefereeMinThinkChars,
-      getMinThinkCharsForReferee: () => host.active?.thinkGuardRefereeMinThinkChars,
+      refereeOn: false,
       thinkGuardHandler,
       // Emit-biased draft rounds: fewer tool turns + earlier "write draft now" nudge.
       ...(draftMode

@@ -468,9 +468,9 @@ Focus on helping the user understand the current state. Format replies in Markdo
         if (duringRun) {
           systemPrompt += `\n\nSTRUCTURED OUTPUT MODE (active run): After your normal reply, also output when relevant:
 RECONFIG: { "extendWallClockCapMin": 15 } OR { "extendRounds": 2 } OR { "extendTokenBudget": 500000 }
-OR referee (absolute): { "thinkGuardRefereeEnabled": true, "thinkGuardRefereeMaxCallsPerRun": 8, "thinkGuardRefereeMinThinkChars": 30000, "thinkGuardRefereeThinkTailMinChars": 4000, "thinkGuardRefereeThinkTailMaxChars": 12000, "thinkGuardRefereeMaxOutputTokens": 512 }
-Run limits use extend-only fields — never lower rounds/cap/budget. Referee fields are absolute setters (you may raise OR lower within server limits).
-When agents show long reasoning / think loops, proactively suggest enabling referee or increasing max calls. Omit RECONFIG if not needed.
+Run limits use extend-only fields — never lower rounds/cap/budget.
+When agents show long reasoning / pure-think thrash, suggest model failover or lower explore tool budget — not a referee (retired; deterministic stream-triage handles hard think aborts).
+Omit RECONFIG if not needed.
 You may also output: amend: one-line directive addendum (plain text, not JSON).`;
         } else {
           systemPrompt += `\n\nSTRUCTURED OUTPUT MODE: After your normal reply, also output exactly:

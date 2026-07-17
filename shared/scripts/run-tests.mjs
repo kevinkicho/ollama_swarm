@@ -23,6 +23,7 @@ const TEST_FILES = [
   "src/providers.test.ts",
   "src/replanPolicy.test.ts",
   "src/streamThinkGuard.test.ts",
+  "src/streamTriagePolicy.test.ts",
   "src/stripAgentText.test.ts",
   "src/summarizeAgentJson.test.ts",
   "src/thinkGuardBudget.test.ts",

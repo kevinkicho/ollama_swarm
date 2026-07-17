@@ -15,13 +15,15 @@ export type PromptGuardOpts = {
    * Default: max(5 × wallClockMs, 10 min) when wallClockMs set; else 15 min.
    */
   absoluteMaxMs?: number;
-  refereeOn?: boolean;
   /**
-   * Live re-read for mid-run reconfig (e.g. user turns referee on).
-   * When set, each chunk uses the latest value instead of a frozen bool.
+   * @deprecated Soft-tier referee retired — always hard-only. Kept for call-site compat.
    */
+  refereeOn?: boolean;
+  /** @deprecated ignored — soft tier off */
   getRefereeOn?: () => boolean;
+  /** @deprecated ignored */
   minThinkCharsForReferee?: number;
+  /** @deprecated ignored */
   getMinThinkCharsForReferee?: () => number | undefined;
   activityKind?: string;
   /** Reuse session for continuation prompts (budgetExtended may already be set). */
@@ -92,8 +94,11 @@ export function composePromptGuardSignals(
       ? AbortSignal.any([parent, trip.signal])
       : parent;
 
-  const resolveRefereeOn = () =>
-    opts.getRefereeOn ? opts.getRefereeOn() === true : opts.refereeOn === true;
+  // Soft-tier LLM referee retired — always hard think caps only.
+  void opts.refereeOn;
+  void opts.getRefereeOn;
+  void opts.minThinkCharsForReferee;
+  void opts.getMinThinkCharsForReferee;
 
   let formatSniffDone = false;
   const wrapOnChunk = (fn?: (text: string) => void) => {
@@ -101,9 +106,7 @@ export function composePromptGuardSignals(
     return (text: string) => {
       armWallClock(); // extend prompt wall-clock while provider is streaming
       const hit = checkThinkStream(text, session, {
-        refereeOn: resolveRefereeOn(),
-        minThinkCharsForReferee:
-          opts.getMinThinkCharsForReferee?.() ?? opts.minThinkCharsForReferee,
+        refereeOn: false,
       });
       if (hit) {
         session.lastTrip = hit;

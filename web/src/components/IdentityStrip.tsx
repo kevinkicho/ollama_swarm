@@ -16,7 +16,6 @@ function shouldUseEventLogRunId(): boolean {
 }
 import { CopyChip } from "./CopyChip";
 import { ToolingConfigPanel } from "./ToolingConfigPanel";
-import { ThinkGuardRefereePanel } from "./ThinkGuardRefereePanel";
 import { SwarmControlPanel } from "./SwarmControlPanel";
 import { RunHealthChip } from "./RunHealthChip";
 import type { ConformanceSample, DriftSample } from "../state/store";
@@ -111,7 +110,6 @@ export function IdentityStrip() {
         <PresetBadge preset={cfg.preset} />
       ) : null}
       {cfg ? <ToolingConfigPanel cfg={cfg} /> : null}
-      {cfg ? <ThinkGuardRefereePanel /> : null}
       {cfg ? <SwarmControlPanel /> : null}
       <RunHealthChip />
       {cfg ? (

@@ -45,13 +45,9 @@ describe("inferStructuredBrainMode", () => {
     );
   });
 
-  it("structured when user asks about think-guard referee budget", () => {
+  it("structured when user asks about runtime limits during run", () => {
     assert.equal(
-      inferStructuredBrainMode("enable the think guard referee and add more calls", { duringRun: true }),
-      true,
-    );
-    assert.equal(
-      inferStructuredBrainMode("agent 1 is stuck in a reasoning loop — increase referee tail", { duringRun: true }),
+      inferStructuredBrainMode("please extend wall clock and add more rounds", { duringRun: true }),
       true,
     );
   });

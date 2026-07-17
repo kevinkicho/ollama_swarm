@@ -12,7 +12,7 @@ import { runPlannerAuditorSalvage } from "./plannerAuditorAssist.js";
 import { isRetryableSdkError } from "./retry.js";
 import { describeSdkError } from "../sdkError.js";
 import { isThinkGuardAbort } from "@ollama-swarm/shared/thinkGuardErrors";
-import { runRecoveryRefereeCheckpoint } from "./thinkGuardHandler.js";
+import { runRecoveryStreamTriage } from "./thinkGuardHandler.js";
 import type { RunConfig } from "../RunConfig.js";
 
 export const PLANNER_EMIT_MAX_ATTEMPTS = 4;
@@ -112,7 +112,7 @@ async function applyRecoveryRefereeSalvage<T>(
     exploreResponse: string;
   },
 ): Promise<{ exploreResponse: string; lastReason: string; applied: boolean }> {
-  const salvage = await runRecoveryRefereeCheckpoint(
+  const salvage = await runRecoveryStreamTriage(
     {
       getActive: opts.getActive as () => RunConfig | undefined,
       isStopping: opts.getStopping,

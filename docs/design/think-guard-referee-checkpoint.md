@@ -5,7 +5,7 @@
 | **Author** | Design-doc-writer (systems architect) |
 | **Date** | 2026-07-09 |
 | **Revision** | 3 (re-review — N1–N4 addressed) |
-| **Status** | Proposed |
+| **Status** | **Retired (2026-07-17)** — LLM referee removed; deterministic `streamTriagePolicy` + hard think caps only |
 | **Related decisions** | `docs/decisions.md` (2026-07-09: No stream guards) — **requires Phase −1 reconciliation + extension entry** |
 | **Related postmortem** | `docs/postmortems/stream-guards-removed.md`, `docs/postmortems/e182490a-2026-07-09.md` |
 | **Primary files** | `shared/src/streamThinkGuard.ts`, `server/src/swarm/thinkStreamGuardRuntime.ts`, `server/src/swarm/promptWithRetry.ts`, `server/src/swarm/chatOnce.ts`, `server/src/swarm/blackboard/plannerRecovery.ts`, `server/src/swarm/blackboard/promptRunner.ts` |

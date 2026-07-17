@@ -289,9 +289,11 @@ const Schema = z.object({
   PROVIDER_RATE_LIMIT_OPENCODE: z.coerce.number().positive().default(5),
   PROVIDER_CIRCUIT_BREAKER_THRESHOLD: z.coerce.number().int().min(1).default(3),
   PROVIDER_CIRCUIT_BREAKER_COOLDOWN_MS: z.coerce.number().int().min(1000).default(60_000),
+  // Deprecated: LLM think-guard referee retired (hard caps + streamTriagePolicy).
+  // Kept so old env files parse; value is ignored at runtime.
   THINK_GUARD_REFEREE_ENABLED: z
     .enum(["true", "false", "1", "0", "yes", "no"])
-    .default("true")
+    .default("false")
     .transform((v) => v === "true" || v === "1" || v === "yes"),
   // Brain auto-start of follow-up runs. Default off (approve-to-provision):
   // startRunForProposal requires { approved: true } or this flag.

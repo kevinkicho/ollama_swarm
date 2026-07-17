@@ -25,9 +25,7 @@ export function formatReconfigLabel(patch: RunReconfigPatch): string {
   if (patch.wallClockCapMin != null) parts.push(`cap → ${patch.wallClockCapMin}m`);
   if (patch.rounds != null) parts.push(`rounds → ${patch.rounds}`);
   if (patch.tokenBudget != null) parts.push(`budget → ${patch.tokenBudget.toLocaleString()}`);
-  if (patch.thinkGuardRefereeEnabled != null) {
-    parts.push(`referee ${patch.thinkGuardRefereeEnabled ? "on" : "off"}`);
-  }
+  // thinkGuardReferee* RECONFIG fields are ignored (referee retired).
   if (patch.thinkGuardRefereeMaxCallsPerRun != null) {
     parts.push(`referee calls → ${patch.thinkGuardRefereeMaxCallsPerRun}`);
   }

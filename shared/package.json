@@ -37,6 +37,7 @@
     "./thinkGuardBudget": "./src/thinkGuardBudget.ts",
     "./thinkGuardErrors": "./src/thinkGuardErrors.ts",
     "./thinkGuardReferee": "./src/thinkGuardReferee.ts",
+    "./streamTriagePolicy": "./src/streamTriagePolicy.ts",
     "./swarmControl/types": "./src/swarmControl/types.ts",
     "./swarmControl/stallRules": "./src/swarmControl/stallRules.ts",
     "./swarmControl/replannerSkipGrounding": "./src/swarmControl/replannerSkipGrounding.ts",

@@ -29,7 +29,6 @@ import { chatOnce, type ChatOnceOpts, type ChatOnceResult } from "../chatOnce.js
 import {
   createThinkGuardHandler,
   isThinkGuardRefereeEligible,
-  resolveThinkGuardRefereeOn,
 } from "./thinkGuardHandler.js";
 import { extractText } from "../extractText.js";
 import type { PendingPrompt } from "./runnerUtil.js";
@@ -351,12 +350,7 @@ export async function promptAgent(
   try {
     const failoverCfg = buildFailoverConfig(ctx);
     const cfg = ctx.getActive();
-    const resolveReferee = () =>
-      resolveThinkGuardRefereeOn(activity, ctx.getActive(), {
-        stopping: ctx.isStopping(),
-        draining: ctx.isDraining(),
-      });
-    const refereeOn = resolveReferee();
+    // Soft-tier LLM referee retired — hard think caps only; salvage via deterministic triage.
     const thinkGuardHandlerState = { continuationUsed: false };
     const thinkGuardHandler = isThinkGuardRefereeEligible(activity)
       ? createThinkGuardHandler(
@@ -371,6 +365,7 @@ export async function promptAgent(
             promptExcerpt: prompt.slice(0, 1500),
             signal: controller.signal,
             clonePath: cfg?.localPath,
+            formatExpect,
           },
           thinkGuardHandlerState,
         )
@@ -380,10 +375,7 @@ export async function promptAgent(
       manager: ctx.manager,
       runId: cfg?.runId,
       onToolResultHook: buildToolCoachHook(ctx, agent),
-      refereeOn,
-      getRefereeOn: resolveReferee,
-      minThinkCharsForReferee: cfg?.thinkGuardRefereeMinThinkChars,
-      getMinThinkCharsForReferee: () => ctx.getActive()?.thinkGuardRefereeMinThinkChars,
+      refereeOn: false,
       thinkGuardHandler,
       ...(activity ? { activity } : {}),
       formatExpect,

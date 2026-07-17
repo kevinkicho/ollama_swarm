@@ -1,3 +1,9 @@
+/**
+ * Verdict shape + prompt helpers for stream triage.
+ * The LLM "think-guard referee" call is retired (2026-07-17); verdicts are
+ * produced by deterministic `streamTriagePolicy`. Prompt builders remain for
+ * tests / offline experiments only.
+ */
 import { extractThinkTags } from "./extractThinkTags.js";
 
 export type ThinkGuardVerdictKind =
