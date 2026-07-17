@@ -15,7 +15,7 @@ import { detectSemanticConvergence } from "./semanticConvergence.js";
 import { detectConvergence as detectJaccardConvergence } from "./moaConsensus.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { finalizeAgentOutput } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import {
@@ -130,7 +130,7 @@ export async function runStructuredSynthesisPass(
       host.appendSystem(`[improvement #4] Synthesis returned empty response; skipping.`);
       return null;
     }
-    const stripped = stripAgentText(text);
+    const stripped = finalizeAgentOutput(text, { role: "general" });
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "agent",
@@ -256,7 +256,7 @@ export async function runRoleDiffSynthesisPass(
     // Task #108: defensive guard — see CouncilRunner.runSynthesisPass.
     const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
     // #230: strip <think> + XML pseudo-tool-call markers first.
-    const strippedSyn = stripAgentText(text);
+    const strippedSyn = finalizeAgentOutput(text, { role: "general" });
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "agent",

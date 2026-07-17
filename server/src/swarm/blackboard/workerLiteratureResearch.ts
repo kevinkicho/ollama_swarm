@@ -16,6 +16,14 @@ import { resolveBlackboardPromptExtras } from "./blackboardPromptContext.js";
 import { chatOnceWithStreaming, type ChatStreamingSurface } from "./promptRunner.js";
 import { isUsableResearchBrief } from "../researchBrief.js";
 import { localCatalogNotesOnResearchFail } from "../research/localCatalogIndex.js";
+import {
+  isResearchBlackout,
+  noteCatalogInject,
+  noteResearchAttempt,
+  noteResearchFailure,
+  noteResearchSuccess,
+  getResearchBlackoutReason,
+} from "../research/researchBudget.js";
 import { isPromptHaltError } from "./lifecycleState.js";
 import {
   LITERATURE_RESEARCH_NUDGE_MESSAGE,
@@ -50,6 +58,7 @@ export async function runWorkerLiteratureResearch(
   if (!cfg || !isWebToolsEnabled(cfg) || !isLiteratureTodo(todo.description)) {
     return undefined;
   }
+  const runId = cfg.runId;
   const profile = LITERATURE_RESEARCH_PROFILE;
   const litExtras = resolveBlackboardPromptExtras({
     active: cfg,
@@ -61,10 +70,29 @@ export async function runWorkerLiteratureResearch(
   // RR-C local-first: inject catalog before web when offline docs hit.
   const localFirst = localCatalogNotesOnResearchFail(todo.description, clonePath);
   if (localFirst && localFirst.length >= 200) {
+    noteCatalogInject(runId);
     ctx.appendSystem(
       `[${agent.id}] Local catalog (local-first): injected ${localFirst.length} chars — skipping web literature pre-pass.`,
     );
     return localFirst.length > 8000 ? `${localFirst.slice(0, 8000)}…` : localFirst;
+  }
+
+  // RR-C: shared blackout with council (process/run-scoped budget).
+  if (isResearchBlackout(runId)) {
+    const why = getResearchBlackoutReason(runId) ?? "budget/blackout";
+    ctx.appendSystem(
+      `[${agent.id}] Literature research skipped (research blackout: ${why.slice(0, 80)}) — local tools only.`,
+    );
+    if (localFirst) {
+      noteCatalogInject(runId);
+      return localFirst.length > 8000 ? `${localFirst.slice(0, 8000)}…` : localFirst;
+    }
+    const notes = localCatalogNotesOnResearchFail(todo.description, clonePath);
+    if (notes) {
+      noteCatalogInject(runId);
+      return notes;
+    }
+    return undefined;
   }
 
   const prompt = [
@@ -115,26 +143,41 @@ export async function runWorkerLiteratureResearch(
       isDraining: ctx.isDraining,
     },
   };
+  noteResearchAttempt(runId);
   try {
     const res = await chatOnceWithStreaming(agent, surface, chatOpts);
     const text = extractText(res)?.trim() ?? "";
     if (isUsableResearchBrief(text)) {
       const capped = text.length > 8000 ? `${text.slice(0, 8000)}…` : text;
       ctx.appendAgent(agent, capped);
+      noteResearchSuccess(runId);
       return capped;
     }
+    const { blackoutJustActivated } = noteResearchFailure("unusable brief", runId);
     ctx.appendSystem(
       `[${agent.id}] Literature research: no usable brief — trying local endpoint catalog.`,
     );
+    if (blackoutJustActivated) {
+      ctx.appendSystem(
+        `[research] Run-level literature blackout activated — further web literature pre-passes skipped.`,
+      );
+    }
   } catch (err) {
     if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) return undefined;
     const msg = err instanceof Error ? err.message : String(err);
+    const { blackoutJustActivated } = noteResearchFailure(msg, runId);
     ctx.appendSystem(`[${agent.id}] Literature research failed: ${msg}`);
+    if (blackoutJustActivated) {
+      ctx.appendSystem(
+        `[research] Run-level literature blackout activated — further web literature pre-passes skipped.`,
+      );
+    }
   }
 
   // Hard search fail / unusable brief: offline catalog grounding (shared with council).
   const localNotes = localFirst || localCatalogNotesOnResearchFail(todo.description, clonePath);
   if (localNotes) {
+    noteCatalogInject(runId);
     ctx.appendSystem(
       `[${agent.id}] Local catalog: injected ${localNotes.length} chars of endpoint notes (literature fail path).`,
     );

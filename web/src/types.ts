@@ -267,6 +267,19 @@ export interface RunSummary {
     lastEmptyStreak: number;
     maxEmptyStreak: number;
   };
+  /** Research blackout / catalog inject stats (optional, RR-C). */
+  researchIntegrity?: {
+    searchAttempts: number;
+    searchSuccesses: number;
+    failByBackend: Record<string, number>;
+    http403Count: number;
+    catalogInjects: number;
+    blackoutActive: boolean;
+    usableBriefs: number;
+    unusableBriefs: number;
+    budgetExhausted: boolean;
+    consecutiveFailures: number;
+  };
   agents: PerAgentStat[];
   contract?: ExitContract;
   // Brain chat history persisted for recovery/FAB continuity (per-run).

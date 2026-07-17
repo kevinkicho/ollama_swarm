@@ -33,7 +33,7 @@ import { snapshotLifetimeTokens } from "../services/ollamaProxy.js";
 import { OutputEmptyDeadLoopGuard } from "./deadLoopGuard.js";
 import { notifyGuardTrip } from "./guardNotify.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { finalizeAgentOutput } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import {
   type AnnotationState,
@@ -542,7 +542,7 @@ export class StigmergyRunner extends DiscussionRunnerBase {
         appendSystem: (msg) => this.appendSystem(msg),
       });
       // #230: strip <think> + XML pseudo-tool-call markers first.
-      const strippedAgent = stripAgentText(text);
+      const strippedAgent = finalizeAgentOutput(text, { role: "general" });
       let entryText = strippedAgent.finalText || "(empty response)";
       let entrySummary: TranscriptEntrySummary | undefined;
       // #303: apply caller-supplied transform (e.g. strip stigmergy

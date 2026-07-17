@@ -30,7 +30,7 @@ import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
 import { staggerStart } from "./staggerStart.js";
 // runEndReflection moved into runFinallyHooks (Phase D).
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { finalizeAgentOutput } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import {
@@ -556,7 +556,7 @@ export class OrchestratorWorkerRunner extends DiscussionRunnerBase {
       // so the UI renders a glance line + bullet list instead of
       // raw JSON. Workers' free-text responses get no summary.
       // #230: strip <think> + XML pseudo-tool-call markers first.
-      const stripped = stripAgentText(text);
+      const stripped = finalizeAgentOutput(text, { role: "general" });
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",

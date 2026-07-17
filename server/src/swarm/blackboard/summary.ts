@@ -123,6 +123,14 @@ export function buildSummary(input: BuildSummaryInput): RunSummary {
           },
         }
       : {}),
+    ...(input.researchIntegrity
+      ? {
+          researchIntegrity: {
+            ...input.researchIntegrity,
+            failByBackend: { ...input.researchIntegrity.failByBackend },
+          },
+        }
+      : {}),
     agents: input.agents.slice(),
     contract: input.contract ? cloneContract(input.contract) : undefined,
     // Task #65: cap transcript at TRANSCRIPT_MAX_ENTRIES (head) so a

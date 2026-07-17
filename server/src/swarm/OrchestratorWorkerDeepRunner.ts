@@ -86,7 +86,7 @@ import {
   parseMidLeadTierSkip,
 } from "./orchestratorWorkerDeepPromptHelpers.js";
 // runEndReflection moved into runFinallyHooks (Phase D).
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { finalizeAgentOutput } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import {
@@ -578,7 +578,7 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
         appendSystem: (msg) => this.appendSystem(msg),
       });
       // #230: strip <think> + XML pseudo-tool-call markers first.
-      const stripped = stripAgentText(text);
+      const stripped = finalizeAgentOutput(text, { role: "general" });
       // Phase 2 (writeMode: multi): collect hunk proposals if multi-writer active
       if (this.multiWriter?.isActive()) {
         const proposalResult = this.multiWriter.addProposal(agent, stripped.finalText);

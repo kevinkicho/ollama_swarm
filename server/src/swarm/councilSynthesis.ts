@@ -14,7 +14,7 @@ import { describeSdkError } from "./sdkError.js";
 import { buildCouncilSynthesisPrompt } from "./councilPromptHelpers.js";
 import { runPostSynthesisCritique } from "./postSynthesisCritique.js";
 import { parseConvergenceSignal } from "./convergenceSignal.js";
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { finalizeAgentOutput } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { resolveCouncilToolProfile } from "./toolProfiles.js";
 import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import { buildCouncilToolCoachHook } from "./control/councilControlHooks.js";
@@ -653,7 +653,7 @@ export async function runSynthesisPass(
       text = revised;
     }
 
-    const stripped = stripAgentText(text);
+    const stripped = finalizeAgentOutput(text, { role: "general" });
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "agent",

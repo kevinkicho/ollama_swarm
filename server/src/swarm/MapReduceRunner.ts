@@ -22,7 +22,7 @@ import { retryEmptyResponse } from "./promptAndExtract.js";
 
 // runEndReflection moved into runFinallyHooks (Phase D).
 
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { finalizeAgentOutput } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import {
@@ -432,7 +432,7 @@ export class MapReduceRunner extends DiscussionRunnerBase {
         appendSystem: (msg) => this.appendSystem(msg),
       });
       // #230: strip <think> + XML pseudo-tool-call markers first.
-      const stripped = stripAgentText(text);
+      const stripped = finalizeAgentOutput(text, { role: "general" });
       const entry: TranscriptEntry = {
         id: randomUUID(),
         role: "agent",

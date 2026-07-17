@@ -33,6 +33,7 @@ import type { RunConfig } from "./SwarmRunner.js";
 import { resolveRunGitMetrics } from "./blackboard/gitRunDelta.js";
 import { snapshotApplyIntegrityForRun } from "./applyIntegrityStats.js";
 import { snapshotCycleIntegrityForRun } from "./cycleIntegrityStats.js";
+import { snapshotResearchIntegrity } from "./research/researchBudget.js";
 
 export interface DiscussionWriteSummaryOpts {
   cfg: RunConfig;
@@ -139,6 +140,10 @@ export async function discussionWriteSummary(opts: DiscussionWriteSummaryOpts): 
     ...((): { cycleIntegrity?: import("@ollama-swarm/shared/cycleIntegrityReport").CycleIntegrityReport } => {
       const cycleIntegrity = snapshotCycleIntegrityForRun(opts.cfg.runId);
       return cycleIntegrity ? { cycleIntegrity } : {};
+    })(),
+    ...((): { researchIntegrity?: import("./research/researchBudget.js").ResearchIntegrityReport } => {
+      const researchIntegrity = snapshotResearchIntegrity(opts.cfg.runId);
+      return researchIntegrity ? { researchIntegrity } : {};
     })(),
   };
   const summary = buildDiscussionSummary(summaryInput);

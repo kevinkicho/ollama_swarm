@@ -17,6 +17,7 @@ import { resolveRunGitMetrics } from "./gitRunDelta.js";
 import { config } from "../../config.js";
 import { snapshotApplyIntegrityForRun } from "../applyIntegrityStats.js";
 import { snapshotCycleIntegrityForRun } from "../cycleIntegrityStats.js";
+import { snapshotResearchIntegrity } from "../research/researchBudget.js";
 
 export interface PerAgentCounters {
   agentRoster: Array<{ id: string; index: number }>;
@@ -185,6 +186,10 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     ...((): { cycleIntegrity?: import("@ollama-swarm/shared/cycleIntegrityReport").CycleIntegrityReport } => {
       const cycleIntegrity = snapshotCycleIntegrityForRun(cfg.runId);
       return cycleIntegrity ? { cycleIntegrity } : {};
+    })(),
+    ...((): { researchIntegrity?: import("../research/researchBudget.js").ResearchIntegrityReport } => {
+      const researchIntegrity = snapshotResearchIntegrity(cfg.runId);
+      return researchIntegrity ? { researchIntegrity } : {};
     })(),
   });
 

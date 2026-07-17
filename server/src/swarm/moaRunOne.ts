@@ -6,7 +6,7 @@ import type { SwarmEvent, TranscriptEntry } from "../types.js";
 import type { RunConfig } from "./SwarmRunner.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractText } from "./extractText.js";
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { finalizeAgentOutput } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { describeSdkError } from "./sdkError.js";
 import type { MultiWriterState } from "./multiWriterState.js";
 
@@ -51,7 +51,7 @@ export async function moaRunOne(
       agentName: proposerAgentName,
     })) as { data: { parts: Array<{ type: "text"; text: string }> } };
     const raw = extractText(res) ?? "";
-    const stripped = stripAgentText(raw);
+    const stripped = finalizeAgentOutput(raw, { role: "general" });
     const cleaned = stripped.finalText;
     if (host.multiWriter?.isActive()) {
       const proposalResult = host.multiWriter.addProposal(agent, cleaned);

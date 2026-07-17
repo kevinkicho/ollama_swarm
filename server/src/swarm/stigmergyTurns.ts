@@ -13,7 +13,7 @@ import { startSseAwareTurnWatchdog } from "./sseAwareTurnWatchdog.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extractText.js";
 import { retryEmptyResponse } from "./promptAndExtract.js";
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { finalizeAgentOutput } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import {
   type AnnotationState,
@@ -220,7 +220,7 @@ host: StigmergyTurnsHost,
     // Task #108: defensive guard — see CouncilRunner.runSynthesisPass.
     const isJunkSynthesis = looksLikeJunk(text) || extracted.isEmpty;
     // #230: strip <think> + XML pseudo-tool-call markers first.
-    const stripped = stripAgentText(text);
+    const stripped = finalizeAgentOutput(text, { role: "general" });
     const entry: TranscriptEntry = {
       id: randomUUID(),
       role: "agent",

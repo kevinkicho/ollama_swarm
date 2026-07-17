@@ -136,6 +136,8 @@ export interface RunSummary {
   applyIntegrity?: import("../../../../shared/src/applyIntegrityReport.js").ApplyIntegrityReport;
   /** RR-D: cycle fail taxonomy + empty-execution streaks (optional). */
   cycleIntegrity?: import("../../../../shared/src/cycleIntegrityReport.js").CycleIntegrityReport;
+  /** RR-C: research blackout / catalog inject stats (optional). */
+  researchIntegrity?: import("../research/researchBudget.js").ResearchIntegrityReport;
   agents: PerAgentStat[];
   // Task #65 (2026-04-24): persist the in-memory transcript at run-end
   // so the history modal / review view can replay what happened.
@@ -320,6 +322,8 @@ export interface BuildSummaryInput {
   applyIntegrity?: RunSummary["applyIntegrity"];
   /** RR-D cycle fail taxonomy (optional). */
   cycleIntegrity?: RunSummary["cycleIntegrity"];
+  /** RR-C research integrity (optional). */
+  researchIntegrity?: RunSummary["researchIntegrity"];
   // V2 Step 3b.2: parallel-track V2 reducer state at run end.
   v2State?: RunSummary["v2State"];
   // V2 Step 5c.1: parallel-track V2 TodoQueue state at run end.

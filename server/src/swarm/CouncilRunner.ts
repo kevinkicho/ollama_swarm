@@ -50,6 +50,7 @@ import {
 import { startApplyIntegrityTracking } from "./applyIntegrityStats.js";
 import { startCycleIntegrityTracking } from "./cycleIntegrityStats.js";
 import { clearLocalCatalogCache } from "./research/localCatalogIndex.js";
+import { startResearchBudget } from "./research/researchBudget.js";
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import type { StallGateVerdict } from "@ollama-swarm/shared/swarmControl/types";
@@ -240,6 +241,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
     startApplyIntegrityTracking(cfg.runId);
     // RR-D: cycle fail taxonomy counters.
     startCycleIntegrityTracking(cfg.runId);
+    // RR-C: shared research blackout / integrity.
+    startResearchBudget(cfg.runId);
 
     // Gather project context
     this.repoFiles = await this.opts.repos.listRepoFiles(destPath, { maxFiles: 500 });

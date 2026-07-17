@@ -22,7 +22,7 @@ import { extractTextWithDiag, looksLikeJunk, trackPostRetryJunk } from "./extrac
 import { retryEmptyResponse } from "./promptAndExtract.js";
 
 // runEndReflection moved into runFinallyHooks (Phase D).
-import { stripAgentText } from "@ollama-swarm/shared/stripAgentText";
+import { finalizeAgentOutput } from "@ollama-swarm/shared/finalizeAgentOutput";
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import { describeSdkError } from "./sdkError.js";
 import { type DerivedProposition } from "./propositionDerive.js";
@@ -499,7 +499,7 @@ export class DebateJudgeRunner extends DiscussionRunnerBase {
       // one (JUDGE upgrades to debate_verdict). Fall back to the
       // basic debate_turn tag for PRO/CON.
       // #230: strip <think> + XML pseudo-tool-call markers first.
-      const stripped = stripAgentText(text);
+      const stripped = finalizeAgentOutput(text, { role: "general" });
       const enriched = enrichSummary?.(stripped.finalText);
       // Phase 2 (writeMode: multi): collect hunk proposals if multi-writer active
       if (this.multiWriter?.isActive()) {

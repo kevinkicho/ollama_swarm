@@ -21,6 +21,14 @@ import { postCouncilTodoBatch } from "./councilTodoPlan.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractProviderText, parseJsonArrayFromResponse } from "./councilUtils.js";
 import { resolveCouncilToolProfile } from "./toolProfiles.js";
+import {
+  formatEmptyExecutionReason,
+  updateEmptyExecutionStreak,
+} from "./emptyExecutionGuard.js";
+import {
+  recordEmptyExecutionCycle,
+  recordNonEmptyExecutionCycle,
+} from "./cycleIntegrityStats.js";
 
 export interface CouncilStandupHost {
   manager: AgentManager;
@@ -28,6 +36,8 @@ export interface CouncilStandupHost {
     contract?: ExitContract | null;
     progressContext?: string;
     committedFiles: string[];
+    /** RR-D: consecutive empty standup/execution cycles. */
+    emptyExecutionStreak?: number;
   };
   progressLedger: CouncilProgressLedger;
   active?: RunConfig | null;
@@ -41,6 +51,8 @@ export interface CouncilStandupHost {
     opts: Record<string, unknown>,
   ) => Promise<unknown>;
   stats: unknown;
+  /** Optional: host may set early-stop / reconfig when empty streak hits limit. */
+  onEmptyExecutionLimit?: (streak: number, reason: string) => void;
 }
 
 export async function synthesizeStandup(
@@ -147,6 +159,27 @@ export async function synthesizeStandup(
     host.appendSystem(
       `[Standup] Synthesized ${standupEnqueued} proposals into unified plan.`,
     );
+  }
+
+  // RR-D: empty-execution streak (0 todos after merge + fallback).
+  const runId = host.active?.runId;
+  if (standupEnqueued === 0) {
+    recordEmptyExecutionCycle(runId);
+    const prev = host.state.emptyExecutionStreak ?? 0;
+    const { streak, shouldAct } = updateEmptyExecutionStreak(prev, true);
+    host.state.emptyExecutionStreak = streak;
+    host.appendSystem(
+      `[cycle-integrity] empty_execution streak=${streak}` +
+        (shouldAct ? " — limit reached" : ""),
+    );
+    if (shouldAct) {
+      const reason = formatEmptyExecutionReason(streak);
+      host.appendSystem(`[empty-execution] ${reason}`);
+      host.onEmptyExecutionLimit?.(streak, reason);
+    }
+  } else {
+    recordNonEmptyExecutionCycle(runId);
+    host.state.emptyExecutionStreak = 0;
   }
 }
 

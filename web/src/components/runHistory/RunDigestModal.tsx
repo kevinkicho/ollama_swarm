@@ -241,6 +241,22 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
                   </DataValue>
                 </>
               ) : null}
+              {summary?.researchIntegrity ? (
+                <>
+                  <DataLabel>Research integrity</DataLabel>
+                  <DataValue>
+                    {summary.researchIntegrity.searchSuccesses}/{summary.researchIntegrity.searchAttempts} ok
+                    {summary.researchIntegrity.catalogInjects > 0
+                      ? ` · catalog×${summary.researchIntegrity.catalogInjects}`
+                      : ""}
+                    {summary.researchIntegrity.http403Count > 0
+                      ? ` · 403×${summary.researchIntegrity.http403Count}`
+                      : ""}
+                    {summary.researchIntegrity.blackoutActive ? " · BLACKOUT" : ""}
+                    {summary.researchIntegrity.budgetExhausted ? " · budget exhausted" : ""}
+                  </DataValue>
+                </>
+              ) : null}
             </div>
             {summary?.startCommand ? (
               <details className="mt-2 group">

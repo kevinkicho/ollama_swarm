@@ -50,6 +50,14 @@ import { scoreCouncilTodoForDequeue } from "./councilTodoPlan.js";
 import type { CouncilAdapterState } from "./councilAdapter.js";
 import { wrapProgressContextForPrompt } from "./councilProgressLedger.js";
 import { noteRepairFailure, noteRepairSuccess } from "./applyIntegrityStats.js";
+import {
+  isResearchBlackout,
+  noteCatalogInject,
+  noteResearchAttempt,
+  noteResearchFailure,
+  noteResearchSuccess,
+  getResearchBlackoutReason,
+} from "./research/researchBudget.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { checkBuildCommand } from "./blackboard/buildCommandAllowlist.js";
 import simpleGit from "simple-git";
@@ -193,19 +201,23 @@ async function runCouncilLiteratureResearch(
     return cached ?? undefined;
   }
 
-  // Run-level blackout after repeated research tool failures.
+  // Run-level blackout: prefer shared researchBudget (RR-C) + legacy adapter field.
   const blackout = state.researchBlackout ?? (state.researchBlackout = {
     consecutiveFailures: 0,
     active: false,
   });
-  if (blackout.active) {
+  const runId = cfg.runId;
+  if (blackout.active || isResearchBlackout(runId)) {
+    const why =
+      blackout.lastReason ||
+      getResearchBlackoutReason(runId) ||
+      "research blackout";
     appendSystem(
-      `[${agent.id}] Literature research skipped (run blackout after ${blackout.consecutiveFailures} failures` +
-        `${blackout.lastReason ? `: ${blackout.lastReason.slice(0, 80)}` : ""}) — using local tools only.`,
+      `[${agent.id}] Literature research skipped (run blackout: ${why.slice(0, 80)}) — using local tools only.`,
     );
-    // Offline grounding: inject local endpoint catalog when web research is blacked out.
     const localNotes = localCatalogNotesOnResearchFail(todo.description, state.clonePath);
     if (localNotes) {
+      noteCatalogInject(runId);
       appendSystem(
         `[${agent.id}] Local catalog: injected ${localNotes.length} chars of endpoint notes (blackout path).`,
       );
@@ -236,6 +248,7 @@ async function runCouncilLiteratureResearch(
     "Do NOT emit JSON hunks in this phase.",
   ].filter(Boolean).join("\n");
 
+  noteResearchAttempt(runId);
   try {
     // Literature is tool-heavy; keep budget tight so thrash fails fast.
     const litToolTurns = Math.min(EXPLORE_MAX_LITERATURE_TOOL_TURNS, 8);
@@ -250,7 +263,7 @@ async function runCouncilLiteratureResearch(
       manager: state.manager as any,
       activity: { kind: "worker", label: "literature research" },
       maxToolTurns: litToolTurns,
-      toolsOverride: [...LITERATURE_RESEARCH_TOOLS],
+      toolsOverride: ["read", "grep", "list", "glob", ...LITERATURE_RESEARCH_TOOLS] as const,
       toolLoopNudge: {
         atTurn: Math.min(LITERATURE_RESEARCH_NUDGE_TURN, 4),
         message: LITERATURE_RESEARCH_NUDGE_MESSAGE,
@@ -264,6 +277,7 @@ async function runCouncilLiteratureResearch(
       const capped = text.length > 8000 ? `${text.slice(0, 8000)}…` : text;
       appendSystem(`[${agent.id}] Literature research: captured ${capped.length} chars of notes.`);
       blackout.consecutiveFailures = 0;
+      noteResearchSuccess(runId);
       cache.set(todo.id, capped);
       return capped;
     }
@@ -274,14 +288,18 @@ async function runCouncilLiteratureResearch(
     }
     blackout.consecutiveFailures += 1;
     blackout.lastReason = "unusable brief";
+    const { blackoutJustActivated } = noteResearchFailure("unusable brief", runId);
+    if (blackoutJustActivated) blackout.active = true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     appendSystem(`[${agent.id}] Literature research failed: ${msg}`);
     blackout.consecutiveFailures += 1;
     blackout.lastReason = msg.slice(0, 160);
+    const { blackoutJustActivated } = noteResearchFailure(msg, runId);
+    if (blackoutJustActivated) blackout.active = true;
   }
 
-  if (blackout.consecutiveFailures >= LITERATURE_BLACKOUT_AFTER) {
+  if (blackout.consecutiveFailures >= LITERATURE_BLACKOUT_AFTER || isResearchBlackout(runId)) {
     blackout.active = true;
     appendSystem(
       `[research] Run-level literature blackout after ${blackout.consecutiveFailures} consecutive failures — ` +
@@ -292,6 +310,7 @@ async function runCouncilLiteratureResearch(
   // Hard search / unusable brief: fall back to local endpoint catalog (zero network).
   const localNotes = localCatalogNotesOnResearchFail(todo.description, state.clonePath);
   if (localNotes) {
+    noteCatalogInject(runId);
     appendSystem(
       `[${agent.id}] Local catalog: injected ${localNotes.length} chars of endpoint notes (literature fail path).`,
     );

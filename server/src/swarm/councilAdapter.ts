@@ -85,6 +85,8 @@ export interface CouncilAdapterState {
     active: boolean;
     lastReason?: string;
   };
+  /** RR-D: consecutive empty standup/execution cycles. */
+  emptyExecutionStreak?: number;
   /** Per-todo literature notes cache — avoid re-running research on repair/failover. */
   literatureNotesByTodoId?: Map<string, string | null>;
 }
