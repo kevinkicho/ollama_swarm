@@ -203,6 +203,25 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
                   </DataValue>
                 </>
               ) : null}
+              {summary?.applyIntegrity ? (
+                <>
+                  <DataLabel>Apply integrity</DataLabel>
+                  <DataValue>
+                    {summary.applyIntegrity.applied}/{summary.applyIntegrity.attempts} applied
+                    {summary.applyIntegrity.repairSuccesses > 0
+                      ? ` · repair ✓${summary.applyIntegrity.repairSuccesses}`
+                      : ""}
+                    {summary.applyIntegrity.repairFailures > 0
+                      ? ` · repair ✗${summary.applyIntegrity.repairFailures}`
+                      : ""}
+                    {Object.keys(summary.applyIntegrity.missByKind ?? {}).length > 0
+                      ? ` · misses: ${Object.entries(summary.applyIntegrity.missByKind)
+                          .map(([k, n]) => `${k}=${n}`)
+                          .join(", ")}`
+                      : ""}
+                  </DataValue>
+                </>
+              ) : null}
             </div>
             {summary?.startCommand ? (
               <details className="mt-2 group">

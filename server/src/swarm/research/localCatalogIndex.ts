@@ -219,12 +219,38 @@ export function getLocalCatalogIndex(root: string): CatalogSnippet[] {
   return buildLocalCatalogIndex(abs);
 }
 
+/** Escape a literal for use inside a RegExp. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * True when `haystack` contains `term` as a whole token / phrase.
+ * Avoids false positives like Alfred→FRED or business→BIS from bare `includes`.
+ */
+export function textHasWholeTerm(haystack: string, term: string): boolean {
+  const t = term.trim().toLowerCase();
+  if (!t) return false;
+  const h = haystack.toLowerCase();
+  if (t.includes(" ") || t.includes(".") || t.includes("/")) {
+    // Multi-word or domain-ish phrases: require contiguous match with
+    // non-letter boundaries (not mid-word).
+    const re = new RegExp(
+      `(?:^|[^a-z0-9])${escapeRegExp(t)}(?:[^a-z0-9]|$)`,
+      "i",
+    );
+    return re.test(h);
+  }
+  // Single token: word boundary on both sides (alphanumeric edges).
+  const re = new RegExp(`(?:^|[^a-z0-9])${escapeRegExp(t)}(?:[^a-z0-9]|$)`, "i");
+  return re.test(h);
+}
+
 function expandQueryTerms(todoDescription: string): Set<string> {
   const raw = tokenize(todoDescription);
   const terms = new Set(raw);
-  const lower = todoDescription.toLowerCase();
   for (const alias of KEYWORD_ALIASES) {
-    if (alias.terms.some((t) => lower.includes(t))) {
+    if (alias.terms.some((t) => textHasWholeTerm(todoDescription, t))) {
       for (const t of alias.terms) {
         for (const tok of tokenize(t)) terms.add(tok);
       }
@@ -234,6 +260,18 @@ function expandQueryTerms(todoDescription: string): Set<string> {
   return terms;
 }
 
+function queryMentionsAlias(queryTerms: Set<string>, aliasKey: string, aliasTerms: string[]): boolean {
+  if (queryTerms.has(aliasKey)) return true;
+  for (const t of aliasTerms) {
+    for (const tok of tokenize(t)) {
+      if (queryTerms.has(tok)) return true;
+    }
+    // Exact multi-word / domain terms that survive as full query tokens
+    if (queryTerms.has(t.toLowerCase())) return true;
+  }
+  return false;
+}
+
 function scoreSnippet(snippet: CatalogSnippet, queryTerms: Set<string>): number {
   if (queryTerms.size === 0) return 0;
   let score = 0;
@@ -241,24 +279,20 @@ function scoreSnippet(snippet: CatalogSnippet, queryTerms: Set<string>): number 
   for (const term of queryTerms) {
     if (term.length < 3 || STOPWORDS.has(term)) continue;
     if (snippet.tokens.has(term)) score += term.length >= 4 ? 3 : 2;
-    if (headingLower.includes(term)) score += 4;
+    if (textHasWholeTerm(headingLower, term)) score += 4;
     for (const url of snippet.urls) {
-      if (url.toLowerCase().includes(term)) score += 5;
+      if (textHasWholeTerm(url, term) || url.toLowerCase().includes(term)) score += 5;
     }
   }
   // Agency alias boost when both query and snippet mention same key.
   for (const alias of KEYWORD_ALIASES) {
-    const qHit = alias.terms.some((t) => {
-      for (const qt of queryTerms) {
-        if (qt === alias.key || t.includes(qt) || qt.includes(alias.key)) return true;
-      }
-      return false;
-    });
-    if (!qHit) continue;
+    if (!queryMentionsAlias(queryTerms, alias.key, alias.terms)) continue;
     const sHit =
       snippet.tokens.has(alias.key)
       || alias.terms.some((t) => tokenize(t).some((tok) => snippet.tokens.has(tok)))
-      || snippet.urls.some((u) => alias.terms.some((t) => u.toLowerCase().includes(t.split(" ")[0]!)));
+      || snippet.urls.some((u) =>
+        alias.terms.some((t) => textHasWholeTerm(u, t.split(" ")[0]!) || u.toLowerCase().includes(t.split(" ")[0]!)),
+      );
     if (sHit) score += 10;
   }
   return score;

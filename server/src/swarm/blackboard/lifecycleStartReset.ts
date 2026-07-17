@@ -3,6 +3,7 @@
 import type { LifecycleContext } from "./lifecycleRunner.js";
 import { config as appConfig } from "../../config.js";
 import { startApplyIntegrityTracking } from "../applyIntegrityStats.js";
+import { clearLocalCatalogCache } from "../research/localCatalogIndex.js";
 
 /**
  * Clear all prior-run mutable fields so start() begins from a clean slate.
@@ -51,6 +52,8 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   ctx.clearStateSnapshotScheduler();
   ctx.setGitPorcelainAtRunStart("");
   ctx.setRunBootedAt(Date.now());
+  // Fresh clone docs per run (avoid stale index across consecutive runs).
+  clearLocalCatalogCache();
   startApplyIntegrityTracking(cfg.runId);
   {
     const plannerModel = cfg.plannerModel ?? cfg.model;

@@ -4,8 +4,8 @@
 |-------|-------|
 | **Author** | Design for postmortem follow-through |
 | **Date** | 2026-07-16 |
-| **Revision** | 2 |
-| **Status** | Proposed — ready for `/execute-plan` (PR Plan labels normalized) |
+| **Revision** | 3 |
+| **Status** | **Shipped on `main`** (`1063fa7` + follow-up polish) |
 | **Related runs** | `eee6718f-03f3-45dd-a3a2-593076734102`, `9f449937-a060-49e6-9417-aba2774dfb16` |
 | **Related code** | `applyHunks.ts`, `windowFile.ts`, `autoAnchor.ts`, `worker.ts` prompts, `webTools.ts`, `researchPolicy.ts`, `councilWorkerRunner.ts`, `buildHunkRepairPrompt` |
 | **Already shipped (do not re-do)** | Stream loop abort/collapse, finalizeAgentOutput, research policy gate, literature false-positive fix (`isLiteratureTodo`), literature blackout/cache, think-aware `formatExpect` JSON sniff |
@@ -259,12 +259,12 @@ Everything raised across **9f449937** and **eee6718f** postmortems, mapped so no
 | 7 | Think-only JSON parse (formatExpect dead on Ollama) | eee6718f | **Shipped** | Think-aware JSON sniff wired (`5248497`) |
 | 8 | Research tool-loop stuck / fail streak | both | **Shipped** | researchPolicy + hard search fail + fail streak |
 | 9 | streamIntegrity summary + UI ribbon | both | **Shipped** | `e661536` |
-| 10 | **Real search-anchor misses** (`search`/`start` not in file) | both | **OPEN** | **PR 1–3** (report + candidates + grounded repair) |
-| 11 | **Non-unique `replace_between` / `replace`** | eee6718f | **OPEN** | **PR 1–2** (normalize + expand-to-unique) |
-| 12 | Wrap-up synthesizer 16→0 (stale anchors) | 9f449937 | **Partial** | Fallthrough exists; **PR 3** feeds ApplyMissReport + candidates |
-| 13 | **DDG 403 when true literature needed** | both | **OPEN** | **PR 4–5** (local catalog first, then pluggable backends) |
-| 14 | Cycle fail 20–36% (apply-dominated residual) | eee6718f | **OPEN metric** | Improves via PR 1–3; **PR 6** measures |
-| 15 | Wall-clock idle / no progress UI | eee6718f | **N/A here** | Observability only; not a code bug in this stack |
+| 10 | **Real search-anchor misses** (`search`/`start` not in file) | both | **Shipped** | PR 1–3 on main (`ApplyMissReport` + grounded repair) |
+| 11 | **Non-unique `replace_between` / `replace`** | eee6718f | **Shipped** | PR 1–2 (normalize + expand-to-unique candidates) |
+| 12 | Wrap-up synthesizer 16→0 (stale anchors) | 9f449937 | **Shipped** | PR 3 feeds miss reports + candidates into wrap-up fallthrough |
+| 13 | **DDG 403 when true literature needed** | both | **Shipped** | PR 4–5 (local catalog + pluggable backends) |
+| 14 | Cycle fail 20–36% (apply-dominated residual) | eee6718f | **Measure on next runs** | PR 6 `applyIntegrity`; expect improvement from PR 1–3 |
+| 15 | Wall-clock idle / no progress UI | eee6718f | **Out of scope** | Observability only; not a code bug in this stack |
 
 **Hard problems that must not be “fixed away” with another detector (user guidance):**
 
@@ -354,12 +354,20 @@ Linearized for `/execute-plan`: **PR1 → PR2 → PR3 → PR4 → PR5 → PR6**.
 
 ## Acceptance checklist for the stack
 
-- [ ] PR1–2: apply tests for miss kinds + candidates; replace_between normalize parity  
-- [ ] PR3: repair prompt grounded on council + blackboard + wrap-up; no literature re-entry on repair  
-- [ ] PR4: local catalog injection when web blackout / hard search fail  
-- [ ] PR5: optional adapters; default free path works; never invent results  
-- [ ] PR6: summary.json includes missByKind after apply activity  
+- [x] PR1–2: apply tests for miss kinds + candidates; replace_between normalize parity  
+- [x] PR3: repair prompt grounded on council + blackboard + wrap-up; no literature re-entry on repair  
+- [x] PR4: local catalog injection when web blackout / hard search fail  
+- [x] PR5: optional adapters; default free path works; never invent results  
+- [x] PR6: summary.json includes missByKind after apply activity  
 - [ ] Manual: re-run panel-heavy council directive; literature noise near zero; apply miss rate down; true research still possible with key **or** catalog  
+- [x] Polish: whole-token catalog aliases; clear catalog cache on run start; applyIntegrity on run digest UI  
+
+## Shipped commit map (main)
+
+| Area | Commits / tip |
+|------|----------------|
+| PR1–6 stack | through `1063fa7` |
+| Follow-up polish | commit after `1063fa7` (catalog match + cache + digest UI) |
 
 ---
 

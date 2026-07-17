@@ -48,6 +48,7 @@ import {
   type CouncilAdapterState,
 } from "./councilAdapter.js";
 import { startApplyIntegrityTracking } from "./applyIntegrityStats.js";
+import { clearLocalCatalogCache } from "./research/localCatalogIndex.js";
 import { gatherCodeContext } from "./gatherCodeContext.js";
 import { SwarmControlCenter } from "./control/SwarmControlCenter.js";
 import type { StallGateVerdict } from "@ollama-swarm/shared/swarmControl/types";
@@ -232,6 +233,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
       this.pendingToolTraceByAgent,
       () => this.opts.getAmendments?.() ?? [],
     );
+    // Fresh local catalog index per run (PR4 polish).
+    clearLocalCatalogCache();
     // Apply/repair integrity counters for summary.applyIntegrity (PR6).
     startApplyIntegrityTracking(cfg.runId);
 

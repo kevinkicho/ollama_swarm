@@ -9,6 +9,7 @@ import {
   localCatalogNotesOnResearchFail,
   lookupLocalCatalog,
   splitMarkdownSections,
+  textHasWholeTerm,
 } from "./localCatalogIndex.js";
 
 const FRED_SECTION = `
@@ -183,5 +184,31 @@ describe("localCatalogIndex", () => {
     } finally {
       await rm(other, { recursive: true, force: true });
     }
+  });
+
+  it("does not false-positive Alfred→FRED or business→BIS via substring aliases", () => {
+    assert.equal(
+      lookupLocalCatalog("Rename AlfredPanel helper in the business layer", 4, {
+        catalogRoot: dir,
+      }),
+      "",
+      "must not boost FRED/BIS from mid-word substrings",
+    );
+  });
+
+  it("textHasWholeTerm rejects mid-word matches", () => {
+    assert.equal(textHasWholeTerm("alfred panel", "fred"), false);
+    assert.equal(textHasWholeTerm("use FRED series", "fred"), true);
+    assert.equal(textHasWholeTerm("business metrics", "bis"), false);
+    assert.equal(textHasWholeTerm("BIS credit", "bis"), true);
+    assert.equal(textHasWholeTerm("bank for international settlements", "bank for international settlements"), true);
+  });
+
+  it("clearLocalCatalogCache drops cached indexes", () => {
+    buildLocalCatalogIndex(dir);
+    clearLocalCatalogCache();
+    // Rebuild after wipe should still work (no throw) and find docs.
+    const snippets = buildLocalCatalogIndex(dir);
+    assert.ok(snippets.length >= 1);
   });
 });
