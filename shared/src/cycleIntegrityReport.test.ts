@@ -18,6 +18,14 @@ describe("cycleIntegrityReport", () => {
     assert.equal(classifyCycleFailReason("search text not found"), "apply_miss");
     assert.equal(classifyCycleFailReason("JSON parse failed"), "json_parse");
     assert.equal(classifyCycleFailReason("tool loop stuck: research"), "tool_loop");
+    assert.equal(
+      classifyCycleFailReason('create on existing file "src/x.js" — use op "write"'),
+      "schema",
+    );
+    assert.equal(
+      classifyCycleFailReason("endExclusive text not found after start"),
+      "apply_miss",
+    );
   });
 
   it("tracks empty execution streak", () => {

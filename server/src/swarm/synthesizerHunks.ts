@@ -204,6 +204,7 @@ export async function runSynthesizerHunksAndApply(
     appendSystem: (text: string) => void;
     presetName: string;
     verifyCommand?: string;
+    runId?: string;
   },
 ): Promise<{ ok: boolean; reason?: string; hunksAttempted: number; hunksApplied: number; commitSha?: string }> {
   const result = await runSynthesizerHunks(input);
@@ -224,6 +225,7 @@ export async function runSynthesizerHunksAndApply(
     clonePath: input.clonePath,
     model: input.model,
     agent: input.agent,
+    runId: input.runId,
     repos: input.repos,
     manager: input.manager,
     emit: input.emit,

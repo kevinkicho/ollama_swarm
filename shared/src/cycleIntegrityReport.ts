@@ -86,11 +86,15 @@ export function classifyCycleFailReason(reason: string): CycleFailBucket {
   if (/reaper|ttl|timed out|timeout/.test(r)) return "reaper";
   if (/no-op|noop|zero files|wrote zero/.test(r)) return "noop";
   if (/permanent|wont-do|won't do|already done/.test(r)) return "permanent_skip";
-  if (/schema|validation/.test(r)) return "schema";
+  if (/schema|validation|create on existing|not in expectedfiles|hunks: required/i.test(r)) {
+    return "schema";
+  }
   if (/empty plan|0 proposal|no todo/.test(r)) return "empty_plan";
   if (
-    /apply-miss|hunk-fail|not unique|matches \d+ times|endExclusive/.test(r) ||
-    (/\b(search|start)\b/.test(r) && /not found|not[_ ]unique/.test(r))
+    /apply-miss|hunk-fail|not unique|matches \d+ times|endExclusive|refusing silent full overwrite/.test(
+      r,
+    ) ||
+    (/\b(search|start|end)\b/.test(r) && /not found|not[_ ]unique/.test(r))
   ) {
     return "apply_miss";
   }

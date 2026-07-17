@@ -21,15 +21,12 @@ import { chatOnce } from "./chatOnce.js";
 import { extractText } from "./extractText.js";
 import { isWebToolsEnabled, resolveCouncilToolProfile, resolveToolProfile } from "./toolProfiles.js";
 import {
-  effectiveToolProfileId,
   EMIT_ONLY_PROFILE_ID,
   EXPLORE_MAX_LITERATURE_TOOL_TURNS,
   LITERATURE_RESEARCH_NUDGE_MESSAGE,
   LITERATURE_RESEARCH_NUDGE_TURN,
   LITERATURE_RESEARCH_PROFILE,
   LITERATURE_RESEARCH_TOOLS,
-  resolveMaxToolTurnsForProfile,
-  type ToolProfileId,
 } from "../../../shared/src/toolProfiles.js";
 import { isUsableResearchBrief } from "./researchBrief.js";
 import { localCatalogNotesOnResearchFail } from "./research/localCatalogIndex.js";
@@ -50,6 +47,11 @@ import { scoreCouncilTodoForDequeue } from "./councilTodoPlan.js";
 import type { CouncilAdapterState } from "./councilAdapter.js";
 import { wrapProgressContextForPrompt } from "./councilProgressLedger.js";
 import { noteRepairFailure, noteRepairSuccess } from "./applyIntegrityStats.js";
+import {
+  recordCycleFail,
+  recordCycleTodoSuccess,
+} from "./cycleIntegrityStats.js";
+import { classifyCycleFailReason } from "@ollama-swarm/shared/cycleIntegrityReport";
 import {
   isResearchBlackout,
   noteCatalogInject,
@@ -207,6 +209,22 @@ async function runCouncilLiteratureResearch(
     active: false,
   });
   const runId = cfg.runId;
+
+  // RR-C local-first (parity with blackboard workerLiteratureResearch):
+  // inject catalog before web when offline docs hit ≥200 chars. Live eee6718f
+  // burned tool loops on panel/API todos that already had GOVERNMENT_API_CATALOG.
+  const localFirst = localCatalogNotesOnResearchFail(todo.description, state.clonePath);
+  if (localFirst && localFirst.length >= 200) {
+    noteCatalogInject(runId);
+    appendSystem(
+      `[${agent.id}] Local catalog (local-first): injected ${localFirst.length} chars — skipping web literature pre-pass.`,
+    );
+    const capped =
+      localFirst.length > 8000 ? `${localFirst.slice(0, 8000)}…` : localFirst;
+    cache.set(todo.id, capped);
+    return capped;
+  }
+
   if (blackout.active || isResearchBlackout(runId)) {
     const why =
       blackout.lastReason ||
@@ -215,14 +233,13 @@ async function runCouncilLiteratureResearch(
     appendSystem(
       `[${agent.id}] Literature research skipped (run blackout: ${why.slice(0, 80)}) — using local tools only.`,
     );
-    const localNotes = localCatalogNotesOnResearchFail(todo.description, state.clonePath);
-    if (localNotes) {
+    if (localFirst) {
       noteCatalogInject(runId);
       appendSystem(
-        `[${agent.id}] Local catalog: injected ${localNotes.length} chars of endpoint notes (blackout path).`,
+        `[${agent.id}] Local catalog: injected ${localFirst.length} chars of endpoint notes (blackout path).`,
       );
-      cache.set(todo.id, localNotes);
-      return localNotes;
+      cache.set(todo.id, localFirst);
+      return localFirst;
     }
     cache.set(todo.id, null);
     return undefined;
@@ -243,6 +260,7 @@ async function runCouncilLiteratureResearch(
     `Target files: ${todo.expectedFiles.join(", ")}`,
     cfg.userDirective ? `User directive: ${cfg.userDirective}` : "",
     "",
+    "Prefer clone docs (API_ENDPOINTS, GOVERNMENT_API_CATALOG, PANELS) via read/grep before web_search.",
     "Use web_search and web_fetch to gather citable findings. Output plain prose with bullet points and URLs.",
     "If search backends fail, stop tool use immediately and say so — do not retry the same query.",
     "Do NOT emit JSON hunks in this phase.",
@@ -388,6 +406,7 @@ async function runCouncilWorker(
       state.todoQueue.complete(todo.id);
       emitCouncilTodoCommitted(state.emit, todo.id);
       completed++;
+      recordCycleTodoSuccess(state.cfg.runId);
       const settled = {
         todoId: todo.id,
         description: todo.description,
@@ -410,6 +429,10 @@ async function runCouncilWorker(
       state.todoQueue.skip(todo.id, result.reason);
       emitCouncilTodoSkipped(state.emit, state.todoQueue, todo.id);
       skipped++;
+      // Skip is not a hard fail bucket unless permanent/noop-ish.
+      if (/permanent|noop|exhausted|wont-do|won't do/i.test(result.reason)) {
+        recordCycleFail(result.reason, state.cfg.runId);
+      }
       ctx.onTodoSettled?.(settled);
     } else {
       const settled = {
@@ -423,6 +446,7 @@ async function runCouncilWorker(
       state.todoQueue.fail(todo.id, result.error);
       emitCouncilTodoFailed(state.emit, state.todoQueue, todo.id);
       failed++;
+      recordCycleFail(result.error, state.cfg.runId);
       ctx.recordFailure?.(todo.id, todo.description, result.error.slice(0, 200));
       ctx.onTodoSettled?.(settled);
     }
@@ -543,17 +567,46 @@ async function executeTodoWithRetryChain(
   const primaryResult = await tryWorkerPrompt(agent, todo, expectedFiles, state, fsAdapter, gitAdapter, ctx);
   if (!isWorkerRetry(primaryResult)) return primaryResult;
   const primaryReason = summarizeWorkerFailureReason(primaryResult.reason);
+  const primaryBucket = classifyCycleFailReason(primaryReason);
 
-  // Stage 2: JSON repair prompt (same agent, echoes parse error + prior response)
-  ctx.appendSystem(
-    `[execution] ${agent.id} primary failed (${primaryReason}) — trying repair prompt.`,
-  );
-  const repairResult = await tryWorkerPrompt(agent, todo, expectedFiles, state, fsAdapter, gitAdapter, ctx, {
-    repairFrom:
-      primaryResult.lastResponse && primaryReason
-        ? { previousResponse: primaryResult.lastResponse, parseError: primaryReason }
-        : undefined,
-  });
+  // Stage 2: class-aware recovery (live eee6718f / 9f449937).
+  // Apply misses already got grounded hunk repair inside tryWorkerPrompt —
+  // parse-shaped repairFrom wastes a full attempt. JSON/schema/no_hunks keep
+  // the envelope repair prompt; apply thrash re-emits on fresh disk only.
+  let repairResult: WorkerAttemptResult;
+  if (primaryBucket === "apply_miss") {
+    ctx.appendSystem(
+      `[execution] ${agent.id} primary failed (${primaryReason}) — apply-class: fresh-disk re-emit (skip JSON repair framing).`,
+    );
+    repairResult = await tryWorkerPrompt(
+      agent,
+      todo,
+      expectedFiles,
+      state,
+      fsAdapter,
+      gitAdapter,
+      ctx,
+    );
+  } else {
+    ctx.appendSystem(
+      `[execution] ${agent.id} primary failed (${primaryReason}) — trying JSON/envelope repair prompt.`,
+    );
+    repairResult = await tryWorkerPrompt(
+      agent,
+      todo,
+      expectedFiles,
+      state,
+      fsAdapter,
+      gitAdapter,
+      ctx,
+      {
+        repairFrom:
+          primaryResult.lastResponse && primaryReason
+            ? { previousResponse: primaryResult.lastResponse, parseError: primaryReason }
+            : undefined,
+      },
+    );
+  }
   if (!isWorkerRetry(repairResult)) return repairResult;
   const repairReason = summarizeWorkerFailureReason(repairResult.reason);
 
@@ -649,14 +702,6 @@ async function tryWorkerPrompt(
     ctx.promptSignal,
     { skip: !!opts.repairFrom },
   );
-  // Emit-biased profile: prefer JSON hunks over open-ended tool tours.
-  // Read tools still available via a small turn cap when not pure emit.
-  const workerProfile = effectiveToolProfileId("swarm-builder", state.cfg) as ToolProfileId;
-  const defaultCap = resolveMaxToolTurnsForProfile(workerProfile);
-  // eee6718f: workers with full tool budgets spent turns thinking/tooling and
-  // never emitted JSON. Cap emit tools tightly; literature already ran.
-  const workerToolTurnCap = Math.min(defaultCap ?? 0, 6);
-
   // RR-B: unified merge — planner expected ∪ description ∪ autoDetect.
   const expectedAnchors: string[] = mergeAnchorsForTodo({
     todoDescription: todo.description,
@@ -697,16 +742,17 @@ async function tryWorkerPrompt(
     ctx.promptSignal?.addEventListener("abort", onPromptAbort, { once: true });
     ctx.registerTodoAbort?.(agent.id, controller);
     try {
-    // formatExpect wired into stream guard (think-aware JSON sniff).
-    // Prefer ollamaFormat json whenever tools are off; with a small tool
-    // budget still request formatExpect so pure-think streams abort early.
+    // Live eee6718f/9f449937: workers with tool budgets emitted <think>-only
+    // blobs and failed JSON parse 10–50×. Literature already ran separately;
+    // file windows are in the prompt — emit-only + ollamaFormat json forces
+    // an envelope. formatExpect still arms the stream sniff.
     const raw = await promptWithFailoverAuto(agent, basePrompt, {
       manager: state.manager as any,
-      agentName: workerProfile,
+      agentName: EMIT_ONLY_PROFILE_ID,
       signal: controller.signal,
-      maxToolTurns: workerToolTurnCap,
+      maxToolTurns: 1,
       formatExpect: "json",
-      ...(workerToolTurnCap === 0 ? { ollamaFormat: "json" as const } : {}),
+      ollamaFormat: "json" as const,
       activity: { kind: "worker", label: `todo ${todo.id.slice(0, 8)}` },
       onTool: makeBufferedToolHandler(state.pendingToolTraceByAgent, agent.id),
       onToolResultHook: toolCoachHook,
@@ -730,18 +776,21 @@ async function tryWorkerPrompt(
         return { outcome: "retry", reason: sizeCheck.reason, lastResponse: res };
       }
       // RR-A: never coerce create→replace with a 2KB prefix search (silent
-      // half-file corruption). Prefer full-file write when create targets
-      // an existing path; applyHunks still rejects bare create-on-existing.
-      const fixedHunks = parsed.hunks.map((h) => {
+      // half-file corruption). Also refuse silent create→write full overwrite
+      // (live risk: model says create but path exists → whole file replaced).
+      // Fail closed with a clear re-emit reason so stage-2 can fix the op.
+      for (const h of parsed.hunks) {
         if ((h as any).op === "create" && fileContents[(h as any).file] !== null) {
           return {
-            op: "write",
-            file: (h as any).file,
-            content: (h as any).content ?? "",
-          } as any;
+            outcome: "retry",
+            reason:
+              `create on existing file "${(h as any).file}" — use op "write" (full rewrite) ` +
+              `or "replace"/"replace_between" (anchor edit); refusing silent full overwrite`,
+            lastResponse: res,
+          };
         }
-        return h;
-      });
+      }
+      const fixedHunks = parsed.hunks;
 
       const applyResult = await applyAndCommit({
         todoId: todo.id,

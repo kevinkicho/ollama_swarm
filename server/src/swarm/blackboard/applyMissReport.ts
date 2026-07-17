@@ -388,6 +388,8 @@ function computeUniqueCandidatesPrimary(
   switch (kind) {
     case "search_not_found":
     case "start_not_found":
+    case "end_not_found":
+      // RR-B: endExclusive misses also get unique substring anchors for repair.
       return findUniqueSubstrings(needle, fileText);
     case "search_not_unique":
     case "start_not_unique": {
@@ -416,6 +418,7 @@ export function computeUniqueCandidates(
   if (
     kind !== "search_not_found" &&
     kind !== "start_not_found" &&
+    kind !== "end_not_found" &&
     kind !== "search_not_unique" &&
     kind !== "start_not_unique"
   ) {

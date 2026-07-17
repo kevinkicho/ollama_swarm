@@ -41,11 +41,15 @@ import {
   realVerifyAdapter,
 } from "./blackboard/v2Adapters.js";
 import {
-  applyBaselineHunks,
   buildBaselinePrompt,
   collectAllFiles,
 } from "./BaselineRunner.js";
 import { pickProvider } from "../providers/pickProvider.js";
+import {
+  noteApplyAttempt,
+  noteApplyMiss,
+  noteApplySuccess,
+} from "./applyIntegrityStats.js";
 
 /** Pure dry-run: would these hunks apply? Does not write disk. */
 async function dryRunHunks(
@@ -168,6 +172,8 @@ export interface WrapUpApplyInput {
   /** Preset name used in commit message + author attribution
    *  ("council", "moa", etc.). */
   presetName: string;
+  /** Optional run id for applyIntegrity counters (wrap-up was invisible). */
+  runId?: string;
   /** T171 (2026-05-04): when set, runs as a pre-commit verification
    *  gate. Same semantics as blackboard's WorkerPipeline verify gate
    *  — apply hunks, run command, on non-zero exit revert the writes
@@ -351,64 +357,63 @@ export async function runWrapUpApplyPhase(
   }
 
   // Apply + (optional verify) + commit
+  // RR-A: fail-closed multi-file apply (no partial land via applyBaselineHunks).
+  // Live 9f449937: wrap-up 16→0 or mixed partials left confusing state.
   const fsAdapter = realFilesystemAdapter(input.clonePath);
   const gitAdapter = realGitAdapter(input.clonePath);
-  // T171: snapshot pre-hunk content of touched files BEFORE applying.
-  // Required for the verify-failure revert path. Skipped when no
-  // verify command is configured (don't pay the read cost).
   const touchedFiles = Array.from(new Set(hunksToApply.map((h) => h.file)));
   const preHunkContents: Record<string, string | null> = {};
-  if (input.verifyCommand) {
-    for (const f of touchedFiles) {
-      try {
-        preHunkContents[f] = await fsAdapter.read(f);
-      } catch {
-        preHunkContents[f] = null; // treat as "didn't exist before"
-      }
+  // Always snapshot for integrity + verify revert (cheap vs wrong partial write).
+  for (const f of touchedFiles) {
+    try {
+      preHunkContents[f] = await fsAdapter.read(f);
+    } catch {
+      preHunkContents[f] = null;
     }
   }
   try {
-    const apply = await applyBaselineHunks({
-      hunks: hunksToApply,
-      fs: fsAdapter,
-    });
-    if (apply.applied === 0) {
+    noteApplyAttempt(input.runId);
+    const pure = applyHunks(preHunkContents, hunksToApply);
+    if (!pure.ok) {
+      noteApplyMiss(pure.miss?.kind ?? "other", input.runId);
       input.appendSystem(
-        `Wrap-up apply: ${hunksToApply.length} hunk(s) returned, 0 applied — ${apply.reasons.join("; ")}`,
+        `Wrap-up apply: ${hunksToApply.length} hunk(s) returned, 0 applied (fail-closed) — ${pure.error}` +
+          (pure.miss?.kind ? ` [miss=${pure.miss.kind}]` : ""),
       );
       return {
         ok: false,
-        reason: `0 of ${hunksToApply.length} hunks landed: ${apply.reasons.join("; ")}`,
+        reason: `0 of ${hunksToApply.length} hunks landed: ${pure.error}`,
         hunksAttempted: hunksToApply.length,
         hunksApplied: 0,
       };
     }
+    // All files clean — write as a batch only after pure apply succeeds.
+    for (const [file, content] of Object.entries(pure.newTextsByFile)) {
+      await fsAdapter.write(file, content);
+    }
+    const applied = hunksToApply.length;
     // T171: pre-commit verify gate. Mirrors WorkerPipeline.applyAndCommit.
     if (input.verifyCommand) {
       const verify = realVerifyAdapter(input.clonePath, input.verifyCommand);
       const v = await verify.run();
       if (!v.ok) {
-        // Revert touched files to pre-hunk content. Files that didn't
-        // exist before (preHunkContents[f] === null) get left in place
-        // — we don't have an explicit delete adapter and the next
-        // commit (if any) will see a dirty working tree to clean up.
         for (const f of touchedFiles) {
           const before = preHunkContents[f];
           if (before === null) continue;
           try {
             await fsAdapter.write(f, before);
           } catch {
-            // best-effort; revert failure is logged but doesn't stop us
+            // best-effort
           }
         }
         input.appendSystem(
-          `Wrap-up apply: ${apply.applied} hunk(s) applied but verify gate failed — reverted. ${v.reason.slice(0, 400)}`,
+          `Wrap-up apply: ${applied} hunk(s) applied but verify gate failed — reverted. ${v.reason.slice(0, 400)}`,
         );
         return {
           ok: false,
           reason: `verify failed: ${v.reason.slice(0, 400)}`,
           hunksAttempted: hunksToApply.length,
-          hunksApplied: apply.applied,
+          hunksApplied: applied,
           verifyFailed: true,
         };
       }
@@ -420,23 +425,24 @@ export async function runWrapUpApplyPhase(
     );
     if (!commitResult.ok) {
       input.appendSystem(
-        `Wrap-up apply: ${apply.applied} hunk(s) applied to disk but commit failed — ${commitResult.reason}`,
+        `Wrap-up apply: ${applied} hunk(s) applied to disk but commit failed — ${commitResult.reason}`,
       );
       return {
         ok: false,
         reason: commitResult.reason,
         hunksAttempted: hunksToApply.length,
-        hunksApplied: apply.applied,
+        hunksApplied: applied,
       };
     }
+    noteApplySuccess(input.runId);
     const verifyTag = input.verifyCommand ? " (verify ✓)" : "";
     input.appendSystem(
-      `Wrap-up apply: ${apply.applied}/${hunksToApply.length} hunk(s) applied → committed${verifyTag} (${commitResult.sha.slice(0, 7)}).`,
+      `Wrap-up apply: ${applied}/${hunksToApply.length} hunk(s) applied → committed${verifyTag} (${commitResult.sha.slice(0, 7)}).`,
     );
     return {
       ok: true,
       hunksAttempted: hunksToApply.length,
-      hunksApplied: apply.applied,
+      hunksApplied: applied,
       commitSha: commitResult.sha,
     };
   } catch (err) {
@@ -534,6 +540,7 @@ export async function maybeRunWrapUpApply(
       verifyCommand: input.cfg.verifyCommand,
       discussionContext: input.discussionContext,
       relevantFiles: input.relevantFiles,
+      runId: input.cfg.runId,
     });
   }
 
@@ -549,6 +556,7 @@ export async function maybeRunWrapUpApply(
     appendSystem: input.appendSystem,
     presetName: input.presetName,
     verifyCommand: input.cfg.verifyCommand,
+    runId: input.cfg.runId,
   });
 }
 

@@ -56,7 +56,13 @@ test("councilWorkerRunner — persists worker JSON to transcript via appendAgent
 
 test("councilWorkerRunner — retry messages include real failure reasons", () => {
   assert.doesNotMatch(SRC, /parse failed — trying repair/, "must not use generic parse-failed label");
-  assert.match(SRC, /primary failed \(\$\{primaryReason\}\) — trying repair prompt/, "stage 2 names primary failure");
+  // Stage 2 is class-aware: apply_miss → fresh-disk re-emit; else JSON/envelope repair.
+  assert.match(
+    SRC,
+    /primary failed \(\$\{primaryReason\}\) — (?:apply-class: fresh-disk re-emit|trying JSON\/envelope repair prompt)/,
+    "stage 2 names primary failure with class-aware recovery",
+  );
+  assert.match(SRC, /classifyCycleFailReason/, "must branch stage-2 on fail class");
   assert.match(SRC, /repair failed \(\$\{repairReason\}\) — trying failover model/, "stage 3 names repair failure");
   assert.match(SRC, /summarizeWorkerFailureReason/, "must summarize reasons for transcript");
 });
@@ -65,6 +71,7 @@ test("councilWorkerRunner — stage 2 uses buildWorkerRepairPrompt (not duplicat
   assert.match(SRC, /buildWorkerRepairPrompt/, "must import JSON repair prompt builder");
   assert.match(SRC, /repairFrom/, "must pass prior response into repair attempt");
   assert.match(SRC, /repairAndParseJson/, "must lenient-parse before declaring JSON failure");
+  assert.match(SRC, /apply-class: fresh-disk re-emit/, "apply misses skip JSON repair framing");
   assert.doesNotMatch(SRC, /tryBrainFallback/i, "worker recovery stays in swarm agents, not in-run brain");
 });
 
