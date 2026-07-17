@@ -122,18 +122,20 @@ export const WORKER_JSON_NUDGE_MESSAGE =
   "Stop exploring. Emit your JSON hunk array now (or {\"skip\":true} if out of scope). No more tool calls.";
 
 /**
- * Council / discussion draft rounds: emit-biased tool budget.
- * Full planner profile (20) was too open-ended — agents grepped until
- * "Ollama tool loop exceeded 20 turns" and posted no draft.
+ * Soft nudge only — discussion drafts must NOT hard-cap tools at a low N.
+ * Live 37139155: all 3 agents hit "exceeded 10 turns" and posted incomplete drafts.
+ * Use profile default tool budget; nudge later so exploration can finish.
+ *
+ * @deprecated Kept for any remaining import sites; prefer omit maxToolTurns.
  */
-export const EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS = 10;
+export const EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS = 20;
 
-/** Nudge discussion drafters to stop exploring and write the draft. */
-export const DISCUSSION_DRAFT_JSON_NUDGE_TURN = 6;
+/** Soft nudge (not a hard stop) for discussion drafters. */
+export const DISCUSSION_DRAFT_JSON_NUDGE_TURN = 12;
 
 export const DISCUSSION_DRAFT_JSON_NUDGE_MESSAGE =
-  "Stop exploring the repo. Emit your council draft NOW as clear findings "
-  + "(JSON array of issues/actions or structured prose). No more tool calls.";
+  "You have enough exploration. Prefer emitting your council draft soon as clear findings "
+  + "(JSON array of issues/actions or structured prose). More tools only if a specific path is still missing.";
 
 /** Hard wall-clock caps for provider prompts (ms). */
 export const DEFAULT_WORKER_PROMPT_WALL_CLOCK_MS = 120_000;

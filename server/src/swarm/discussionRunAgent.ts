@@ -22,7 +22,6 @@ import {
 import { getAgentAddendum } from "@ollama-swarm/shared/topology";
 import {
   discussionDraftJsonNudge,
-  EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS,
   DEFAULT_DISCUSSION_DRAFT_PROMPT_WALL_CLOCK_MS,
 } from "../../../shared/src/toolProfiles.js";
 import { isThinkGuardAbort } from "@ollama-swarm/shared/thinkGuardErrors";
@@ -271,10 +270,10 @@ export async function runDiscussionAgentCore(
       describeError: describeSdkError,
       refereeOn: false,
       thinkGuardHandler,
-      // Emit-biased draft rounds: fewer tool turns + earlier "write draft now" nudge.
+      // Discussion drafts: no low hard tool cap (live 37139155: 10-turn abort → incomplete).
+      // Soft nudge only; tool budget follows profile (planner/research default).
       ...(draftMode
         ? {
-            maxToolTurns: EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS,
             toolLoopNudge: discussionDraftJsonNudge(),
             promptWallClockMs: DEFAULT_DISCUSSION_DRAFT_PROMPT_WALL_CLOCK_MS,
           }
