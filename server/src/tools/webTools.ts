@@ -31,25 +31,71 @@ export type ToolResult =
 const WEB_TIMEOUT_MS = 30_000;
 const WEB_OUTPUT_CAP = 100 * 1024; // 100KB max per fetch
 
-const RATE_LIMIT_MS = 2000; // simple per-process rate limit between searches
-let lastWebCall = 0;
+/** RR-C §8: separate min intervals for search vs fetch (per process). */
+const DEFAULT_SEARCH_RATE_MS = 2000;
+const DEFAULT_FETCH_RATE_MS = 1500;
+
+export type WebRateKind = "search" | "fetch";
+
+let searchIntervalMs = DEFAULT_SEARCH_RATE_MS;
+let fetchIntervalMs = DEFAULT_FETCH_RATE_MS;
+let lastSearchCall = 0;
+let lastFetchCall = 0;
+/** Async mutex tail — concurrent callers serialize lastCall updates. */
+let rateLimitTail: Promise<void> = Promise.resolve();
 
 /** Placeholder / training-data URLs that never exist — refuse early with guidance. */
 const PLACEHOLDER_HOST_RE =
   /your-org|your-repo|example\.com|example\.org|localhost|127\.0\.0\.1|0\.0\.0\.0/i;
 
-/** Shared rate limit for web_fetch + web_search (per process). */
-export async function applyWebRateLimit(): Promise<void> {
-  const now = Date.now();
-  if (now - lastWebCall < RATE_LIMIT_MS) {
-    await new Promise((r) => setTimeout(r, RATE_LIMIT_MS - (now - lastWebCall)));
+/**
+ * Atomic per-process rate limit for web_search / web_fetch (RR-C §8).
+ * Mutex prevents concurrent stampede past a shared lastCall read.
+ * Search and fetch clocks are independent so a fetch after search is not
+ * double-penalized by the full search interval.
+ */
+export async function applyWebRateLimit(kind: WebRateKind = "search"): Promise<void> {
+  const prev = rateLimitTail;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  rateLimitTail = prev.then(
+    () => gate,
+    () => gate,
+  );
+
+  await prev.catch(() => {
+    /* prior failure must not block us */
+  });
+  try {
+    const interval = kind === "search" ? searchIntervalMs : fetchIntervalMs;
+    const last = kind === "search" ? lastSearchCall : lastFetchCall;
+    const now = Date.now();
+    if (now - last < interval) {
+      await new Promise((r) => setTimeout(r, interval - (now - last)));
+    }
+    const stamped = Date.now();
+    if (kind === "search") lastSearchCall = stamped;
+    else lastFetchCall = stamped;
+  } finally {
+    release();
   }
-  lastWebCall = Date.now();
 }
 
-/** Test helper — reset rate-limit clock. */
-export function _resetWebRateLimitForTests(): void {
-  lastWebCall = 0;
+/**
+ * Test helper — reset rate-limit clocks (and optional intervals).
+ * Call only after prior applyWebRateLimit awaits have settled.
+ */
+export function _resetWebRateLimitForTests(opts?: {
+  searchMs?: number;
+  fetchMs?: number;
+}): void {
+  lastSearchCall = 0;
+  lastFetchCall = 0;
+  searchIntervalMs = opts?.searchMs ?? DEFAULT_SEARCH_RATE_MS;
+  fetchIntervalMs = opts?.fetchMs ?? DEFAULT_FETCH_RATE_MS;
+  rateLimitTail = Promise.resolve();
 }
 
 export interface WebFetchToolOpts {
@@ -108,7 +154,7 @@ export async function webFetchTool(
   }
 
   if (!opts?.skipRateLimit) {
-    await applyWebRateLimit();
+    await applyWebRateLimit("fetch");
   }
 
   // Gov domain preference (soft filter / note)
@@ -375,7 +421,7 @@ export async function webSearchTool(
   }
 
   if (!opts?.skipRateLimit) {
-    await applyWebRateLimit();
+    await applyWebRateLimit("search");
   }
 
   await noteResearchBudgetSafe("attempt", runId);
