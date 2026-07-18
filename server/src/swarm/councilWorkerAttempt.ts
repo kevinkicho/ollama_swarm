@@ -76,6 +76,9 @@ export function buildCouncilToolCoachHook(
       manager: state.manager as any,
       appendSystem: ctx.appendSystem,
       emit: ctx.emit,
+      autoApprove: state.cfg.autoApprove,
+      brainOs: (state.cfg as { brainOs?: boolean | object }).brainOs as boolean | undefined,
+      helperModel: state.cfg.auditorModel ?? state.cfg.model,
     });
   };
 }

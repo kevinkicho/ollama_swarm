@@ -33,6 +33,7 @@ export const TOOL_SCHEMAS: Record<
   | "glob"
   | "list"
   | "bash"
+  | "run"
   | "write"
   | "edit"
   | "propose_hunks"
@@ -78,11 +79,22 @@ export const TOOL_SCHEMAS: Record<
   },
   bash: {
     description:
-      "Run a host shell command in the clone (Windows: cmd). Prefer write/edit/git_status/git_diff for file work. " +
-      "Use for npm/node/git when available. Bounded timeout. Prefer swarm read/grep/list over Unix-only CLIs on Windows.",
+      "Alias of `run` — host shell in the clone (Windows: cmd). Prefer the `run` tool name. " +
+      "Prefer write/edit/git_status/git_diff for file work; use npm/node/git/pwsh when available.",
     input_schema: {
       type: "object",
       properties: { command: { type: "string" } },
+      required: ["command"],
+    },
+  },
+  run: {
+    description:
+      "Preferred host shell in the clone directory (Windows: cmd.exe; Unix: sh). " +
+      "Use for npm/node/npx/git/pwsh. Prefer write/edit/git_status/git_diff for file edits. " +
+      "Do not invent Unix-only CLIs (grep/sed/awk) on Windows — use swarm read/grep/glob tools. Bounded timeout.",
+    input_schema: {
+      type: "object",
+      properties: { command: { type: "string", description: "shell command, cwd=clone" } },
       required: ["command"],
     },
   },
@@ -341,7 +353,7 @@ export class AnthropicProvider implements SessionProvider {
       const toolResults: unknown[] = [];
       for (const t of toolUses) {
         const dispatchResult = await opts.dispatcher!.dispatch({
-          tool: t.name as "read" | "grep" | "glob" | "list" | "bash" | "web_fetch" | "web_search",
+          tool: t.name as import("../tools/toolDispatchProfiles.js").ToolName,
           args: t.input,
         });
         const preview = formatToolInvokePreview(

@@ -346,16 +346,18 @@ Brain OS helpers inherit the same tool layer. Separately (can land in parallel P
 - Wire `apply_miss` unrepaired dry-run **and** `worker_decline` UNVERIFIED.
 - Compare against legacy: resolution rate, tokens, wall time (still needed in production runs).
 
-### Phase 3 — Expand events — **partial**
+### Phase 3 — Expand events — **landed (partial)**
 
-- `progress_stuck` (before tier-stuck stop) landed.
-- `tool_block`, batch apply fail, child dispatches (depth 1) still open.
+- `progress_stuck`, `tool_block` (coach thrash), `apply_miss`, `worker_decline` landed.
+- Child dispatches (depth 1, shared budget) + `summary.brainOs` metrics landed.
+- Batch apply fail interrupt still open.
 
-### Phase 4 — Substrate honesty — **partial**
+### Phase 4 — Substrate honesty — **landed (partial)**
 
 - **Git-native working tree:** write/edit/git_status/git_diff tools; workers finish with
   `{workingTree:true}`; orchestrator commits disk reality (no re-apply no-op).
-- Host `run` tool rename still open; Unix-bash rewrite on win32 improved.
+- Host **`run`** tool (preferred name; `bash` alias) + more Unix→in-process rewrites on win32.
+- Further pwsh-first shell policy optional.
 
 ### Phase 5 — Default on for trusted local runs — **landed**
 

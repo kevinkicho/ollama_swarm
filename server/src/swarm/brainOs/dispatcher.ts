@@ -11,8 +11,9 @@ import type {
 import { defaultBrainDispatchBudget } from "@ollama-swarm/shared/brainOs";
 import { BrainOsBudgetLedger } from "./budgets.js";
 import { applyBrainEffects, type BrainEffectApplicatorDeps } from "./effects.js";
-import { parseHelperResult } from "./parseHelperResult.js";
+import { parseHelperResult, type ParsedChildDispatch } from "./parseHelperResult.js";
 import { runHelperSession, type HelperSessionDeps } from "./helperSession.js";
+import { mergeBrainOsMetrics } from "./metricsRegistry.js";
 
 export interface BrainOsConfig {
   enabled?: boolean;
@@ -25,15 +26,14 @@ export interface BrainOsConfig {
   privilegeCap?: HelperPrivilege;
 }
 
+export type BrainOsDispatchDeps = HelperSessionDeps & {
+  effectDeps: Omit<BrainEffectApplicatorDeps, "privilege" | "onEffect">;
+};
+
 export interface BrainOsDispatcher {
   readonly enabled: boolean;
   readonly ledger: BrainOsBudgetLedger;
-  dispatch(
-    req: BrainDispatchRequest,
-    deps: HelperSessionDeps & {
-      effectDeps: Omit<BrainEffectApplicatorDeps, "privilege" | "onEffect">;
-    },
-  ): Promise<BrainDispatchResult>;
+  dispatch(req: BrainDispatchRequest, deps: BrainOsDispatchDeps): Promise<BrainDispatchResult>;
 }
 
 function capPrivilege(
@@ -59,91 +59,147 @@ export function createBrainOsDispatcher(cfg: BrainOsConfig = {}): BrainOsDispatc
   });
   const maxDepth = cfg.maxDepth ?? 2;
 
-  return {
-    enabled,
-    ledger,
-    async dispatch(req, deps) {
-      const t0 = Date.now();
-      if (!enabled) {
-        return {
-          dispatchId: "disabled",
-          status: "blocked",
-          summary: "brain OS disabled",
-          effects: [{ type: "none" }],
-          usage: { wallMs: 0 },
-        };
-      }
-      if (req.depth > maxDepth) {
-        return {
-          dispatchId: "depth-exceeded",
-          status: "blocked",
-          summary: `brain OS maxDepth ${maxDepth} exceeded`,
-          effects: [{ type: "none" }],
-          usage: { wallMs: 0 },
-        };
-      }
-      if (!ledger.beginHelper()) {
-        return {
-          dispatchId: "budget-exhausted",
-          status: "blocked",
-          summary: "brain OS helper budget exhausted",
-          effects: [{ type: "none" }],
-          usage: { wallMs: 0 },
-        };
-      }
-
-      const privileges = capPrivilege(req.privileges, cfg.privilegeCap);
-      const budget = {
-        ...defaultBrainDispatchBudget(),
-        maxWallMs: cfg.maxWallMsPerDispatch ?? req.budget.maxWallMs,
-        maxToolTurns: cfg.maxToolTurnsPerDispatch ?? req.budget.maxToolTurns,
-        maxDepth,
-        maxSubAgents: req.budget.maxSubAgents,
+  async function dispatchImpl(
+    req: BrainDispatchRequest,
+    deps: BrainOsDispatchDeps,
+  ): Promise<BrainDispatchResult> {
+    const t0 = Date.now();
+    if (!enabled) {
+      return {
+        dispatchId: "disabled",
+        status: "blocked",
+        summary: "brain OS disabled",
+        effects: [{ type: "none" }],
+        usage: { wallMs: 0 },
       };
-      const model = req.helperModel ?? cfg.helperModel ?? "deepseek-v4-flash:cloud";
+    }
+    if (req.depth > maxDepth) {
+      return {
+        dispatchId: "depth-exceeded",
+        status: "blocked",
+        summary: `brain OS maxDepth ${maxDepth} exceeded`,
+        effects: [{ type: "none" }],
+        usage: { wallMs: 0 },
+      };
+    }
+    if (!ledger.beginHelper()) {
+      return {
+        dispatchId: "budget-exhausted",
+        status: "blocked",
+        summary: "brain OS helper budget exhausted",
+        effects: [{ type: "none" }],
+        usage: { wallMs: 0 },
+      };
+    }
 
-      deps.effectDeps.appendSystem(
-        `[brain-os] dispatch kind=${req.kind} privilege=${privileges} depth=${req.depth} todo=${req.context.todoId ?? "—"}`,
+    const privileges = capPrivilege(req.privileges, cfg.privilegeCap);
+    const budget = {
+      ...defaultBrainDispatchBudget(),
+      maxWallMs: cfg.maxWallMsPerDispatch ?? req.budget.maxWallMs,
+      maxToolTurns: cfg.maxToolTurnsPerDispatch ?? req.budget.maxToolTurns,
+      maxDepth,
+      maxSubAgents: req.budget.maxSubAgents,
+    };
+    const model = req.helperModel ?? cfg.helperModel ?? "deepseek-v4-flash:cloud";
+
+    deps.effectDeps.appendSystem(
+      `[brain-os] dispatch kind=${req.kind} privilege=${privileges} depth=${req.depth} todo=${req.context.todoId ?? "—"}`,
+    );
+
+    try {
+      const raw = await runHelperSession(
+        {
+          ...req,
+          privileges,
+          budget,
+          helperModel: model,
+        },
+        deps,
       );
+      const parsed = parseHelperResult(raw, Date.now() - t0);
+      if (req.depth > 0) ledger.recordChild();
+      ledger.recordDispatch(parsed.status, parsed.usage);
 
-      try {
-        const raw = await runHelperSession(
+      const { applied, rejected } = await applyBrainEffects(parsed.effects, {
+        ...deps.effectDeps,
+        privilege: privileges,
+        onEffect: (ok) => ledger.recordEffect(ok),
+      });
+
+      // Child dispatches share this ledger (anti fork-bomb).
+      let childCount = 0;
+      const children: ParsedChildDispatch[] = parsed.children ?? [];
+      const maxChildren = Math.min(budget.maxSubAgents, children.length);
+      for (let i = 0; i < maxChildren; i++) {
+        const child = children[i]!;
+        if (req.depth + 1 > maxDepth) break;
+        if (!ledger.canSpawn()) break;
+        deps.effectDeps.appendSystem(
+          `[brain-os] child dispatch ${i + 1}/${maxChildren} kind=${child.kind}`,
+        );
+        await dispatchImpl(
           {
-            ...req,
-            privileges,
-            budget,
+            runId: req.runId,
+            kind: child.kind,
+            hints: child.hints,
+            clonePath: req.clonePath,
+            privileges: privileges === "observer" ? "observer" : "repairer",
+            depth: req.depth + 1,
+            parentDispatchId: parsed.dispatchId,
             helperModel: model,
+            budget: {
+              ...budget,
+              maxWallMs: Math.min(budget.maxWallMs, 180_000),
+              maxSubAgents: Math.max(0, budget.maxSubAgents - 1),
+            },
+            context: {
+              ...req.context,
+              todoId: child.todoId ?? req.context.todoId,
+              phase: `child:${child.kind}`,
+            },
           },
           deps,
         );
-        const result = parseHelperResult(raw, Date.now() - t0);
-        if (req.depth > 0) ledger.recordChild();
-        ledger.recordDispatch(result.status, result.usage);
-
-        const { applied, rejected } = await applyBrainEffects(result.effects, {
-          ...deps.effectDeps,
-          privilege: privileges,
-          onEffect: (ok) => ledger.recordEffect(ok),
-        });
-
-        deps.effectDeps.appendSystem(
-          `[brain-os] done status=${result.status} effects+${applied}/-${rejected}: ${result.summary.slice(0, 240)}`,
-        );
-        return result;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        ledger.recordDispatch("blocked", { wallMs: Date.now() - t0 });
-        deps.effectDeps.appendSystem(`[brain-os] dispatch failed: ${msg.slice(0, 300)}`);
-        return {
-          dispatchId: "error",
-          status: "blocked",
-          summary: msg.slice(0, 500),
-          effects: [{ type: "none" }],
-          usage: { wallMs: Date.now() - t0 },
-        };
-      } finally {
-        ledger.endHelper();
+        childCount += 1;
       }
-    },
+
+      deps.effectDeps.appendSystem(
+        `[brain-os] done status=${parsed.status} effects+${applied}/-${rejected}` +
+          (childCount ? ` children=${childCount}` : "") +
+          `: ${parsed.summary.slice(0, 240)}`,
+      );
+
+      const result: BrainDispatchResult = {
+        ...parsed,
+        followUpDispatches: childCount,
+      };
+      // Snapshot once at top-level only to avoid double-counting nested merges.
+      if (req.depth === 0) {
+        mergeBrainOsMetrics(req.runId, ledger.snapshot());
+      }
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ledger.recordDispatch("blocked", { wallMs: Date.now() - t0 });
+      if (req.depth === 0) {
+        mergeBrainOsMetrics(req.runId, ledger.snapshot());
+      }
+      deps.effectDeps.appendSystem(`[brain-os] dispatch failed: ${msg.slice(0, 300)}`);
+      return {
+        dispatchId: "error",
+        status: "blocked",
+        summary: msg.slice(0, 500),
+        effects: [{ type: "none" }],
+        usage: { wallMs: Date.now() - t0 },
+      };
+    } finally {
+      ledger.endHelper();
+    }
+  }
+
+  return {
+    enabled,
+    ledger,
+    dispatch: dispatchImpl,
   };
 }

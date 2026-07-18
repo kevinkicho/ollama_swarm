@@ -3,8 +3,25 @@ import type {
   BrainDispatchStatus,
   BrainEffect,
   BrainDispatchResult,
+  BrainConflictKind,
 } from "@ollama-swarm/shared/brainOs";
 import { randomUUID } from "node:crypto";
+
+const CONFLICT_KINDS = new Set<BrainConflictKind>([
+  "tool_block",
+  "apply_miss",
+  "worker_decline",
+  "parse_fail",
+  "progress_stuck",
+  "contract_stuck",
+  "open",
+]);
+
+export type ParsedChildDispatch = {
+  kind: BrainConflictKind;
+  hints?: string[];
+  todoId?: string;
+};
 
 function asStatus(v: unknown): BrainDispatchStatus {
   if (
@@ -103,11 +120,30 @@ function asEffects(raw: unknown): BrainEffect[] {
   return out.length > 0 ? out : [{ type: "none" }];
 }
 
+/** Extract optional child dispatches the helper requested. */
+export function parseChildDispatches(obj: Record<string, unknown>): ParsedChildDispatch[] {
+  const raw = obj.children ?? obj.followUp ?? obj.childDispatches;
+  if (!Array.isArray(raw)) return [];
+  const out: ParsedChildDispatch[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const kind = String(o.kind ?? "open") as BrainConflictKind;
+    if (!CONFLICT_KINDS.has(kind)) continue;
+    out.push({
+      kind,
+      hints: Array.isArray(o.hints) ? o.hints.map(String).slice(0, 6) : undefined,
+      todoId: typeof o.todoId === "string" ? o.todoId : undefined,
+    });
+  }
+  return out.slice(0, 3);
+}
+
 /** Parse helper model output into a dispatch result. */
 export function parseHelperResult(
   raw: string,
   wallMs: number,
-): BrainDispatchResult {
+): BrainDispatchResult & { children?: ParsedChildDispatch[] } {
   const dispatchId = randomUUID();
   const extracted = extractJsonFromText(raw);
   if (!extracted) {
@@ -126,12 +162,15 @@ export function parseHelperResult(
   }
   try {
     const obj = JSON.parse(extracted) as Record<string, unknown>;
+    const children = parseChildDispatches(obj);
     return {
       dispatchId,
       status: asStatus(obj.status),
       summary: String(obj.summary ?? "").slice(0, 2000) || "(no summary)",
       effects: asEffects(obj.effects),
       usage: { wallMs },
+      followUpDispatches: children.length,
+      ...(children.length ? { children } : {}),
     };
   } catch {
     return {

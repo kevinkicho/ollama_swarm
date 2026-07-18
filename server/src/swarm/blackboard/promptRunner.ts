@@ -107,6 +107,11 @@ function buildToolCoachHook(ctx: PromptContext, agent: Agent): ToolResultHook | 
       runId: active?.runId,
       appendSystem: ctx.appendSystem,
       emit: ctx.emit,
+      autoApprove: active?.autoApprove,
+      brainOs: (active as { brainOs?: boolean | object } | undefined)?.brainOs as
+        | boolean
+        | undefined,
+      helperModel: active?.auditorModel ?? active?.model,
     });
   };
 }

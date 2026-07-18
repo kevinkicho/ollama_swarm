@@ -17,6 +17,7 @@ import { resolveRunGitMetrics } from "./gitRunDelta.js";
 import { config } from "../../config.js";
 import { snapshotApplyIntegrityForRun } from "../applyIntegrityStats.js";
 import { snapshotCycleIntegrityForRun } from "../cycleIntegrityStats.js";
+import { snapshotBrainOsMetrics } from "../brainOs/metricsRegistry.js";
 import { snapshotResearchIntegrity } from "../research/researchBudget.js";
 
 export interface PerAgentCounters {
@@ -196,6 +197,10 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     ...((): { researchIntegrity?: import("../research/researchBudget.js").ResearchIntegrityReport } => {
       const researchIntegrity = snapshotResearchIntegrity(cfg.runId);
       return researchIntegrity ? { researchIntegrity } : {};
+    })(),
+    ...((): { brainOs?: import("@ollama-swarm/shared/brainOs").BrainOsRunMetrics } => {
+      const brainOs = snapshotBrainOsMetrics(cfg.runId);
+      return brainOs ? { brainOs } : {};
     })(),
   });
 

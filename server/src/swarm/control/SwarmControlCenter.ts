@@ -321,16 +321,32 @@ export class SwarmControlCenter {
     const ruleHint = deterministicToolCoachHint(tool, error);
     if (ruleHint) {
       applyHint(ruleHint, "rule");
-      return;
+    } else {
+      void runToolFailureCoach(record, preview, {
+        ...deps,
+        priorPatterns: this.priorPatterns.slice(0, 6),
+      }).then((hint) => {
+        if (!hint) return;
+        applyHint(hint, "llm");
+      });
     }
 
-    void runToolFailureCoach(record, preview, {
-      ...deps,
-      priorPatterns: this.priorPatterns.slice(0, 6),
-    }).then((hint) => {
-      if (!hint) return;
-      applyHint(hint, "llm");
-    });
+    // Brain OS tool_block: after coach thrash, recruit a helper (async, non-blocking).
+    void import("../brainOs/toolBlockDispatch.js").then(({ maybeDispatchToolBlock }) =>
+      maybeDispatchToolBlock({
+        runId: deps.runId,
+        clonePath: deps.clonePath,
+        autoApprove: deps.autoApprove,
+        brainOs: deps.brainOs,
+        helperModel: deps.helperModel,
+        agentId,
+        tool,
+        error,
+        count: record.count,
+        appendSystem: deps.appendSystem,
+        coachAgent: deps.agent,
+      }),
+    );
   }
 }
 
@@ -341,4 +357,8 @@ export interface ToolCoachRecordDeps {
   appendSystem?: (msg: string) => void;
   emit?: SwarmControlEmit;
   manager?: AgentManager;
+  /** When set, Brain OS may recruit a helper after coach thrash (tool_block). */
+  autoApprove?: boolean;
+  brainOs?: boolean | { enabled?: boolean; helperModel?: string };
+  helperModel?: string;
 }

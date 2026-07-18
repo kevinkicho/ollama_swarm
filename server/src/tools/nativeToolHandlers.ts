@@ -463,6 +463,27 @@ async function tryFulfillUnixBashViaTools(
     return globTool(clone, { pattern });
   }
 
+  // pwd → clone root label (agents often want cwd confirmation)
+  if (/^pwd\s*$/i.test(trimmed)) {
+    return { ok: true, output: clone.replace(/\\/g, "/") };
+  }
+
+  // echo SIMPLE — no redirects/vars (avoid shell injection in rewrite path)
+  const echoM = /^echo\s+(.+)$/i.exec(trimmed);
+  if (echoM && !/[><|`$]/.test(echoM[1]!)) {
+    return { ok: true, output: echoM[1]!.replace(/^["']|["']$/g, "") };
+  }
+
+  // git status / git diff short-circuits (prefer native git tools semantics)
+  if (/^git\s+status(?:\s+--porcelain)?\s*$/i.test(trimmed)) {
+    return gitStatusTool(clone);
+  }
+  if (/^git\s+diff(?:\s+--cached)?(?:\s+--\s+\S+)?\s*$/i.test(trimmed)) {
+    const staged = /--cached/.test(trimmed);
+    const pathM = /--\s+(\S+)\s*$/.exec(trimmed);
+    return gitDiffTool(clone, { staged, path: pathM?.[1] });
+  }
+
   // cd PATH && rest — only rewrite rest if pure (cd alone is no-op list)
   const cdOnly = /^cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
   if (cdOnly) {
@@ -493,13 +514,17 @@ function windowsUnixBashHint(binary: string): string {
   );
 }
 
+/**
+ * Host shell in the clone (Windows: cmd via shell:true; Unix: sh).
+ * Prefer the `run` tool name in profiles; `bash` is kept as an alias.
+ */
 export async function bashTool(
   clone: string,
   args: Record<string, unknown>,
   opts?: { timeoutMs?: number },
 ): Promise<ToolResult> {
-  const command = String(args.command ?? "");
-  if (!command) return { ok: false, error: "bash: missing `command` arg" };
+  const command = String(args.command ?? args.cmd ?? "");
+  if (!command) return { ok: false, error: "run/bash: missing `command` arg" };
   // Policy: any non-empty shell command is allowed (including &&, pipes, cd).
   // Still bound to clone cwd + wall-clock timeout (ToolDispatcher sandbox).
   const allow = checkBuildCommand(command);

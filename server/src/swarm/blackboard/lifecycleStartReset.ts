@@ -8,6 +8,8 @@ import { clearLocalCatalogCache } from "../research/localCatalogIndex.js";
 import { startResearchBudget } from "../research/researchBudget.js";
 import { startProgressHeartbeat } from "../progressHeartbeat.js";
 import { resetAgentSessionGuards } from "../runTelemetryCleanup.js";
+import { startBrainOsMetrics } from "../brainOs/metricsRegistry.js";
+import { resetToolBlockDispatchFires } from "../brainOs/toolBlockDispatch.js";
 
 /**
  * Clear all prior-run mutable fields so start() begins from a clean slate.
@@ -65,6 +67,8 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   startCycleIntegrityTracking(cfg.runId);
   startResearchBudget(cfg.runId);
   startProgressHeartbeat(cfg.runId);
+  startBrainOsMetrics(cfg.runId);
+  resetToolBlockDispatchFires();
   {
     const plannerModel = cfg.plannerModel ?? cfg.model;
     const workerModel = cfg.workerModel ?? cfg.model;

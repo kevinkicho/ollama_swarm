@@ -38,6 +38,7 @@ export type ToolName =
   | "glob"
   | "list"
   | "bash"
+  | "run"
   | "write"
   | "edit"
   | "propose_hunks"
@@ -76,6 +77,7 @@ export function defaultToolsForProfile(
   | "glob"
   | "list"
   | "bash"
+  | "run"
   | "write"
   | "edit"
   | "propose_hunks"
@@ -90,9 +92,9 @@ export function defaultToolsForProfile(
     case "swarm-read":
       return ["read", "grep", "glob", "list", "git_status", "git_diff"];
     case "swarm-planner":
-      return ["read", "grep", "glob", "list", "bash", "git_status", "git_diff", "web_fetch", "web_search"];
+      return ["read", "grep", "glob", "list", "bash", "run", "git_status", "git_diff", "web_fetch", "web_search"];
     case "swarm-builder":
-      return ["read", "grep", "glob", "list", "bash", "write", "edit", "propose_hunks", "git_status", "git_diff"];
+      return ["read", "grep", "glob", "list", "bash", "run", "write", "edit", "propose_hunks", "git_status", "git_diff"];
     case "swarm-builder-research":
       return [
         "read",
@@ -100,6 +102,7 @@ export function defaultToolsForProfile(
         "glob",
         "list",
         "bash",
+        "run",
         "write",
         "edit",
         "web_fetch",
@@ -115,6 +118,7 @@ export function defaultToolsForProfile(
         "glob",
         "list",
         "bash",
+        "run",
         "write",
         "edit",
         "web_fetch",
@@ -124,10 +128,15 @@ export function defaultToolsForProfile(
         "git_diff",
       ];
     case "swarm-write":
-      return ["read", "grep", "glob", "list", "bash", "write", "edit", "propose_hunks", "git_status", "git_diff"];
+      return ["read", "grep", "glob", "list", "bash", "run", "write", "edit", "propose_hunks", "git_status", "git_diff"];
     case "swarm-research":
       return ["read", "grep", "glob", "list", "git_status", "git_diff", "web_fetch", "web_search"];
   }
+}
+
+/** Host shell permission mirrors bash (run is the preferred Windows-honest name). */
+function hostShell(perm: Permission): { bash: Permission; run: Permission } {
+  return { bash: perm, run: perm };
 }
 
 export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
@@ -136,7 +145,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     grep: "deny",
     glob: "deny",
     list: "deny",
-    bash: "deny",
+    ...hostShell("deny"),
     write: "deny",
     edit: "deny",
     propose_hunks: "deny",
@@ -150,7 +159,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     grep: "allow",
     glob: "allow",
     list: "allow",
-    bash: "deny",
+    ...hostShell("deny"),
     write: "deny",
     edit: "deny",
     propose_hunks: "deny",
@@ -167,7 +176,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     grep: "allow",
     glob: "allow",
     list: "allow",
-    bash: "allow",
+    ...hostShell("allow"),
     write: "deny",
     edit: "deny",
     propose_hunks: "deny",
@@ -181,7 +190,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     grep: "allow",
     glob: "allow",
     list: "allow",
-    bash: "allow",
+    ...hostShell("allow"),
     write: "allow",
     edit: "allow",
     propose_hunks: "allow",
@@ -195,7 +204,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     grep: "allow",
     glob: "allow",
     list: "allow",
-    bash: "allow",
+    ...hostShell("allow"),
     write: "allow",
     edit: "allow",
     propose_hunks: "allow",
@@ -204,13 +213,13 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     git_status: "allow",
     git_diff: "allow",
   },
-  /** High-trust auto-approve: full toolkit incl. working-tree write + host bash. */
+  /** High-trust auto-approve: full toolkit incl. working-tree write + host shell. */
   "swarm-auto": {
     read: "allow",
     grep: "allow",
     glob: "allow",
     list: "allow",
-    bash: "allow",
+    ...hostShell("allow"),
     write: "allow",
     edit: "allow",
     propose_hunks: "allow",
@@ -224,7 +233,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     grep: "allow",
     glob: "allow",
     list: "allow",
-    bash: "allow",
+    ...hostShell("allow"),
     write: "allow",
     edit: "allow",
     propose_hunks: "allow",
@@ -239,7 +248,7 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     grep: "allow",
     glob: "allow",
     list: "allow",
-    bash: "deny",
+    ...hostShell("deny"),
     write: "deny",
     edit: "deny",
     propose_hunks: "deny",

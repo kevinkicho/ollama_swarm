@@ -43,10 +43,16 @@ test("PROFILES — swarm-builder-research allows bash, web tools, write, and pro
 test("PROFILES — swarm-builder allows propose_hunks", () => {
   assert.equal(PROFILES["swarm-builder"].propose_hunks, "allow");
   assert.equal(PROFILES["swarm-builder"].bash, "allow");
+  assert.equal(PROFILES["swarm-builder"].run, "allow");
   assert.equal(PROFILES["swarm-builder"].write, "allow");
   assert.equal(PROFILES["swarm-builder"].edit, "allow");
   assert.equal(PROFILES["swarm-builder"].git_status, "allow");
   assert.equal(PROFILES["swarm-builder"].git_diff, "allow");
+});
+
+test("PROFILES — swarm denies run with bash", () => {
+  assert.equal(PROFILES.swarm.run, "deny");
+  assert.equal(PROFILES["swarm-read"].run, "deny");
 });
 
 test("ToolDispatcher — write and edit mutate working tree", async () => {

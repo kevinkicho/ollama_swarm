@@ -84,6 +84,7 @@ export interface ChatOnceOpts {
     | "glob"
     | "list"
     | "bash"
+    | "run"
     | "write"
     | "edit"
     | "propose_hunks"

@@ -246,6 +246,26 @@ export class ToolDispatcher {
       case "git_diff":
         result = await gitDiffTool(this.clonePath, call.args);
         break;
+      case "run": {
+        // Preferred host-shell name (Windows-honest). Same sandbox as bash.
+        const autoRun = this.profile === "swarm-auto";
+        if (!autoRun) {
+          const prior = getAgentBashErrors(this.agentId);
+          if (prior >= BASH_ERROR_BACKOFF_THRESHOLD) {
+            result = {
+              ok: false,
+              error:
+                `run disabled after ${prior} consecutive shell failures — use read, grep, or glob instead`,
+            };
+            break;
+          }
+        }
+        result = await bashTool(this.clonePath, call.args, {
+          timeoutMs: autoRun ? BASH_TIMEOUT_AUTO_MS : BASH_TIMEOUT_MS,
+        });
+        if (!autoRun) recordAgentBashResult(this.agentId, result.ok);
+        break;
+      }
       case "web_fetch": {
         const { preflightResearchTool } = await import("./researchPolicy.js");
         const blocked = preflightResearchTool("web_fetch", call.args);

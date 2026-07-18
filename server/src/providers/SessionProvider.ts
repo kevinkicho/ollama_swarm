@@ -63,6 +63,7 @@ export interface ChatOpts {
     | "glob"
     | "list"
     | "bash"
+    | "run"
     | "write"
     | "edit"
     | "propose_hunks"

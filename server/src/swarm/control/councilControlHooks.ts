@@ -11,6 +11,9 @@ export interface CouncilControlHookDeps {
   appendSystem?: (msg: string) => void;
   emit?: (e: SwarmEvent) => void;
   manager?: AgentManager;
+  autoApprove?: boolean;
+  brainOs?: boolean | { enabled?: boolean; helperModel?: string };
+  helperModel?: string;
 }
 
 export function buildCouncilToolCoachHook(
@@ -29,6 +32,9 @@ export function buildCouncilToolCoachHook(
       manager: deps.manager,
       appendSystem: deps.appendSystem,
       emit: deps.emit,
+      autoApprove: deps.autoApprove,
+      brainOs: deps.brainOs,
+      helperModel: deps.helperModel,
     });
   };
 }

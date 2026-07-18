@@ -46,10 +46,12 @@ function buildSystemPrompt(privileges: HelperPrivilege): string {
     "{",
     '  "status": "resolved" | "partial" | "blocked" | "needs_human",',
     '  "summary": "one paragraph",',
-    '  "effects": [ /* objects with type: board_complete|board_skip|board_reopen|append_system|request_apply|recommend_drain|recommend_stop|propose_hunks|board_post_todos|none */ ]',
+    '  "effects": [ /* board_complete|board_skip|board_reopen|append_system|request_apply|recommend_drain|recommend_stop|propose_hunks|board_post_todos|none */ ],',
+    '  "children": [ /* optional: { "kind": "apply_miss"|"tool_block"|..., "hints": ["..."], "todoId": "..." } ] */',
     "}",
     "Do not invent long-term product criteria. Stay inside the clone path.",
-    "Prefer git working-tree reality (git status / git diff / write files) over inventing search-replace hunks when files are already dirty.",
+    "Prefer git working-tree reality (git status / git diff / write|edit|run tools) over inventing search-replace hunks when files are already dirty.",
+    "On Windows prefer the `run` tool (host cmd) for npm/node/git — not Unix-only bash binaries.",
   ].join("\n");
 }
 
