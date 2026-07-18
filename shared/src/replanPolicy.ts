@@ -56,13 +56,15 @@ export function resolveReplanPolicy(
         staleClass,
         emitFirst: true,
         allowExplore: !batch && !cached,
-        maxToolTurns: batch || cached ? 0 : 8,
+        // Tight explore budget — prefer emit (926054b0 replan thrash).
+        maxToolTurns: batch || cached ? 0 : 6,
       };
     case "cas-drift":
     case "hunk-fail":
+      // Emit first from current disk seed; explore only if emit fails.
       return {
         staleClass,
-        emitFirst: false,
+        emitFirst: true,
         allowExplore: true,
         maxToolTurns: 4,
       };
@@ -78,14 +80,14 @@ export function resolveReplanPolicy(
         staleClass,
         emitFirst: true,
         allowExplore: true,
-        maxToolTurns: 6,
+        maxToolTurns: 4,
       };
     default:
       return {
         staleClass,
-        emitFirst: cached || batch,
+        emitFirst: true,
         allowExplore: !cached,
-        maxToolTurns: cached || batch ? 0 : 8,
+        maxToolTurns: cached || batch ? 0 : 6,
       };
   }
 }

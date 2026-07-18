@@ -14,6 +14,7 @@ import { describeSdkError } from "../sdkError.js";
 import { isThinkGuardAbort } from "@ollama-swarm/shared/thinkGuardErrors";
 import { runRecoveryStreamTriage } from "./thinkGuardHandler.js";
 import type { RunConfig } from "../RunConfig.js";
+import { repairAndParseJson } from "../repairJson.js";
 
 export const PLANNER_EMIT_MAX_ATTEMPTS = 4;
 export const PLANNER_EMIT_PAUSE_BASE_MS = 12_000;
@@ -80,14 +81,27 @@ function tryParseWithRuleBasedExtract<T>(
   if (direct.ok) return direct;
 
   const candidate = extractJsonCandidate(raw);
-  if (!candidate) return direct;
+  if (candidate) {
+    const salvaged = parse(candidate.json);
+    if (salvaged.ok) {
+      appendSystem(
+        `[${agentId}] ${kind} rule-based JSON extract (${formatParseTier(candidate.tier)}) succeeded.`,
+      );
+      return salvaged;
+    }
+  }
 
-  const salvaged = parse(candidate.json);
-  if (salvaged.ok) {
-    appendSystem(
-      `[${agentId}] ${kind} rule-based JSON extract (${formatParseTier(candidate.tier)}) succeeded.`,
-    );
-    return salvaged;
+  // Soft repair (fences / bare keys) before burning another LLM emit turn.
+  const soft = repairAndParseJson(raw);
+  if (soft?.value !== undefined) {
+    const asJson = JSON.stringify(soft.value);
+    const salvaged = parse(asJson);
+    if (salvaged.ok) {
+      appendSystem(
+        `[${agentId}] ${kind} soft-repair JSON (${soft.strategy}) succeeded — skipping extra emit.`,
+      );
+      return salvaged;
+    }
   }
   return direct;
 }
@@ -301,10 +315,6 @@ export async function runPlannerEmitRecovery<T>(
     if (opts.getStopping()) return { ok: false, reason: "run stopping", lastRaw: response };
 
     opts.appendAgent(agentUsed, response);
-    if (!useEmitOnly) {
-      exploreResponse = response;
-      opts.onExploreCaptured?.(response);
-    }
     lastRaw = response;
 
     const parsed = tryParseWithRuleBasedExtract(
@@ -316,7 +326,8 @@ export async function runPlannerEmitRecovery<T>(
     );
     if (parsed.ok) {
       opts.appendSystem(
-        `[${opts.agent.id}] ${opts.kind} parsed successfully on attempt ${attempt}/${maxAttempts}.`,
+        `[${opts.agent.id}] ${opts.kind} parsed successfully on attempt ${attempt}/${maxAttempts}` +
+          (useEmitOnly ? "." : " (from explore turn)."),
       );
       return {
         ok: true,
@@ -328,6 +339,8 @@ export async function runPlannerEmitRecovery<T>(
 
     lastReason = parsed.reason;
     if (!useEmitOnly) {
+      exploreResponse = response;
+      opts.onExploreCaptured?.(response);
       opts.appendSystem(
         `[${opts.agent.id}] ${opts.kind} explore complete (attempt ${attempt}/${maxAttempts}) — structured emit pending.`,
       );

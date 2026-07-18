@@ -32,6 +32,13 @@ import { v2Router } from "./routes/v2.js";
 import { discoverAnthropicModels } from "./providers/discoverAnthropicModels.js";
 import { discoverOpenAIModels } from "./providers/discoverOpenAIModels.js";
 import { discoverOpenCodeModels } from "./providers/discoverOpenCodeModels.js";
+import { discoverOllamaCloudModels } from "./providers/discoverOllamaCloudModels.js";
+import {
+  isOllamaFamilyModel,
+  lookupCloudRetirement,
+  ollamaListRunning,
+  ollamaShow,
+} from "./providers/ollamaApiExtras.js";
 import {
   getSystemLayerSettingsPayload,
   resolveSystemLayerModel,
@@ -42,6 +49,7 @@ import {
   OPENAI_MODELS as FALLBACK_OPENAI,
   OLLAMA_CLOUD_MODELS,
   OPENCODE_GO_MODELS,
+  detectProvider,
 } from "@ollama-swarm/shared/providers";
 import type { AgentState, SwarmEvent, SwarmStatus } from "./types.js";
 import { providerGateway } from "./providers/ProviderGateway.js";
@@ -365,7 +373,7 @@ interface ModelCacheEntry {
   /** When models came from live discovery vs. fallback constants. */
   source: "discovery" | "fallback";
 }
-const modelCache = new Map<"anthropic" | "openai" | "opencode", ModelCacheEntry>();
+const modelCache = new Map<"anthropic" | "openai" | "opencode" | "ollama-cloud", ModelCacheEntry>();
 
 async function getProviderModels(
   provider: "anthropic" | "openai",
@@ -406,13 +414,34 @@ app.get("/api/models", async (req, res) => {
     res.json({ models, source });
     return;
   }
-  // 2026-05-03: ollama-cloud returns the hardcoded catalog from
-  // shared/providers.ts (sourced from ollama.com/search?c=cloud). No
-  // live-discovery endpoint exists — the catalog is global and curated
-  // by Ollama, not per-user. Source label is "fallback" so the UI
-  // hint accurately says "catalog" rather than "live discovery".
+  // Ollama Cloud: live GET https://ollama.com/api/tags (same shape as local
+  // /api/tags per docs.ollama.com/cloud + api.md). Maps API names to local
+  // :cloud / -cloud tags for topology. Falls back to shared/providers.ts.
   if (provider === "ollama-cloud") {
-    res.json({ models: OLLAMA_CLOUD_MODELS, source: "fallback" });
+    const cached = modelCache.get("ollama-cloud");
+    if (cached && Date.now() - cached.fetchedAt < DISCOVERY_TTL_MS) {
+      res.json({ models: cached.models, source: cached.source });
+      return;
+    }
+    const cloudKey = config.OLLAMA_CLOUD_API_KEY || config.OLLAMA_API_KEY;
+    const discovered = await discoverOllamaCloudModels({ apiKey: cloudKey });
+    if (discovered && discovered.length > 0) {
+      const entry: ModelCacheEntry = {
+        models: discovered,
+        fetchedAt: Date.now(),
+        source: "discovery",
+      };
+      modelCache.set("ollama-cloud", entry);
+      res.json({ models: entry.models, source: "discovery" });
+      return;
+    }
+    const entry: ModelCacheEntry = {
+      models: OLLAMA_CLOUD_MODELS,
+      fetchedAt: Date.now(),
+      source: "fallback",
+    };
+    modelCache.set("ollama-cloud", entry);
+    res.json({ models: entry.models, source: "fallback" });
     return;
   }
   if (provider === "opencode") {
@@ -467,6 +496,56 @@ app.get("/api/models", async (req, res) => {
       error: err instanceof Error ? err.message : String(err),
     });
   }
+});
+
+// Ollama-only: POST /api/show for capabilities + context (api.md).
+// OpenCode models return { ok: false, reason: "not-ollama" } — never hits Ollama.
+app.get("/api/models/show", async (req, res) => {
+  const model = String(req.query.model ?? "").trim();
+  if (!model) {
+    res.status(400).json({ ok: false, error: "model query required" });
+    return;
+  }
+  if (!isOllamaFamilyModel(model)) {
+    res.json({
+      ok: false,
+      reason: "not-ollama",
+      message:
+        "Model show is only for Ollama / Ollama Cloud. OpenCode and other providers use their own APIs.",
+    });
+    return;
+  }
+  const isCloud = detectProvider(model) === "ollama-cloud";
+  const baseUrl = isCloud
+    ? "https://ollama.com"
+    : config.OLLAMA_BASE_URL.replace(/\/v1\/?$/, "");
+  const apiKey = isCloud
+    ? config.OLLAMA_CLOUD_API_KEY || config.OLLAMA_API_KEY
+    : undefined;
+  const shown = await ollamaShow({ baseUrl, model, apiKey });
+  if (!shown) {
+    res.json({ ok: false, error: "show failed or model unknown" });
+    return;
+  }
+  const retirement = lookupCloudRetirement(model);
+  res.json({
+    ok: true,
+    ...shown,
+    retirement: retirement.retired
+      ? { retired: true, alternative: retirement.alternative }
+      : { retired: false },
+  });
+});
+
+// Local Ollama only: models loaded in memory (GET /api/ps).
+app.get("/api/ollama/ps", async (_req, res) => {
+  const baseUrl = config.OLLAMA_BASE_URL.replace(/\/v1\/?$/, "");
+  const models = await ollamaListRunning({ baseUrl });
+  if (models == null) {
+    res.json({ ok: false, models: [], error: "local Ollama /api/ps unreachable" });
+    return;
+  }
+  res.json({ ok: true, models });
 });
 
 // Token usage endpoint (backed by Ollama proxy). Returns

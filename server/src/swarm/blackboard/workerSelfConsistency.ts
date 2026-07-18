@@ -116,7 +116,9 @@ export async function finalizeWorkerHunks(
     return { outcome: "stale" };
   }
 
-  const sizeCheck = validateHunkPayload(parsed.hunks);
+  // Prefer deterministic demotion (replace→replace_between/write) over an LLM
+  // size-repair round-trip (83dc5910 / large HTML tab expansions).
+  const sizeCheck = validateHunkPayload(parsed.hunks, seed.fileContents);
   if (!sizeCheck.ok) {
     ctx.bumpJsonRepairs(agent.id);
     ctx.appendSystem(
@@ -154,7 +156,7 @@ export async function finalizeWorkerHunks(
       ctx.bumpRejectedAttempts(agent.id);
       return { outcome: "stale" };
     }
-    const repairedSize = validateHunkPayload(repaired.hunks);
+    const repairedSize = validateHunkPayload(repaired.hunks, seed.fileContents);
     if (!repairedSize.ok) {
       ctx.getWrappers().failTodoQ(
         todo.id,
@@ -164,8 +166,26 @@ export async function finalizeWorkerHunks(
       ctx.bumpRejectedAttempts(agent.id);
       return { outcome: "stale" };
     }
-    parsed = repaired;
+    parsed = {
+      ok: true as const,
+      hunks: repairedSize.hunks,
+      skip: repaired.skip,
+      demotions: repairedSize.demotions,
+    };
     commitTier = "repair";
+  } else {
+    if (sizeCheck.demotions && sizeCheck.demotions.length > 0) {
+      ctx.appendSystem(
+        `[${agent.id}] [v2] auto-demoted ${sizeCheck.demotions.length} oversized hunk(s): ` +
+          sizeCheck.demotions.map((d) => `${d.from}→${d.to}`).join(", "),
+      );
+    }
+    parsed = {
+      ok: true,
+      hunks: sizeCheck.hunks,
+      skip: parsed.skip,
+      demotions: sizeCheck.demotions,
+    };
   }
 
   const k = ctx.getSelfConsistencyK();
@@ -427,6 +447,7 @@ export async function finalizeWorkerHunks(
         dryRunOnly: true,
         expectedAnchors: todo.expectedAnchors,
         runId: cfg?.runId,
+        clonePath,
       });
       if (!dry.ok) {
         const reason = dry.reason;

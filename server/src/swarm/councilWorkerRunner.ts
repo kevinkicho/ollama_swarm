@@ -709,6 +709,9 @@ function parseWorkerResponseWithRepair(raw: string, expectedFiles: string[]): Re
   if (repaired?.value !== undefined && typeof repaired.value === "object" && repaired.value !== null) {
     const second = parseWorkerResponse(JSON.stringify(repaired.value), expectedFiles);
     if (second.ok) return second;
+    // Surface schema/allow-list failure instead of the original fence/parse error
+    // so stage-2 recovery and operators see the real problem (83dc5910).
+    if (!second.ok) return second;
   }
   return direct;
 }
@@ -827,15 +830,25 @@ async function tryWorkerPrompt(
 
     const parsed = parseWorkerResponseWithRepair(res, expectedFiles);
     if (parsed.ok && parsed.hunks.length > 0 && !parsed.skip) {
-      const sizeCheck = validateHunkPayload(parsed.hunks);
+      // Auto-demote oversized replace/create → write/replace_between (83dc5910).
+      const sizeCheck = validateHunkPayload(parsed.hunks, fileContents);
       if (!sizeCheck.ok) {
         return { outcome: "retry", reason: sizeCheck.reason, lastResponse: res };
+      }
+      if (sizeCheck.ok && sizeCheck.demotions && sizeCheck.demotions.length > 0) {
+        ctx.appendSystem(
+          `[execution] ${agent.id} auto-demoted ${sizeCheck.demotions.length} oversized hunk(s): ` +
+            sizeCheck.demotions
+              .map((d) => `${d.file} ${d.from}→${d.to}`)
+              .join("; "),
+        );
       }
       // RR-A: never coerce create→replace with a 2KB prefix search (silent
       // half-file corruption). Also refuse silent create→write full overwrite
       // (live risk: model says create but path exists → whole file replaced).
       // Fail closed with a clear re-emit reason so stage-2 can fix the op.
-      for (const h of parsed.hunks) {
+      // Note: demote may already have turned create→write; check post-demote ops.
+      for (const h of sizeCheck.hunks) {
         if ((h as any).op === "create" && fileContents[(h as any).file] !== null) {
           return {
             outcome: "retry",
@@ -846,7 +859,7 @@ async function tryWorkerPrompt(
           };
         }
       }
-      const fixedHunks = parsed.hunks;
+      const fixedHunks = sizeCheck.hunks;
 
       const applyResult = await applyAndCommit({
         todoId: todo.id,
@@ -856,6 +869,7 @@ async function tryWorkerPrompt(
         fs: fsAdapter,
         git: gitAdapter,
         runId: state.cfg.runId,
+        clonePath: state.clonePath,
       });
 
       if (applyResult.ok) {
@@ -976,6 +990,7 @@ async function tryWorkerPrompt(
             fs: fsAdapter,
             git: gitAdapter,
             runId: state.cfg.runId,
+            clonePath: state.clonePath,
           });
           if (repairResult.ok) {
             if (!repairResult.filesWritten || repairResult.filesWritten.length === 0) {

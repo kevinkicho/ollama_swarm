@@ -3,6 +3,9 @@ import { describe, it } from "node:test";
 import {
   buildPlannerUserPrompt,
   parsePlannerResponse,
+  coercePlannerTodoItem,
+  salvagePlannerTodosFromDropped,
+  extractFileMentions,
   PLANNER_SYSTEM_PROMPT,
   type PlannerParseResult,
   type PlannerSeed,
@@ -102,7 +105,7 @@ describe("parsePlannerResponse — rejections", () => {
   it("auto-wrap still validates the object — bad single todos land in dropped (#121)", () => {
     // Wrapping just gives the per-item walk a chance to validate. A
     // single-item object missing required fields gets dropped (not
-    // accepted blindly).
+    // accepted blindly) when no file can be inferred from the text.
     const r = parsePlannerResponse('{"description":"missing expectedFiles"}');
     // Per-item validator drops it for missing expectedFiles → 0 valid
     // todos + 1 dropped entry. Result is technically `ok` (we parsed
@@ -112,6 +115,82 @@ describe("parsePlannerResponse — rejections", () => {
       assert.equal(r.todos.length, 0);
       assert.equal(r.dropped.length, 1);
     }
+  });
+
+  it("coerces expectedFiles string + file alias (d279548d schema salvage)", () => {
+    const r = parsePlannerResponse(
+      JSON.stringify([
+        { description: "Expand tabs", expectedFiles: "01_complex_explorer.html" },
+        { task: "Fix blank canvas in 02_penrose_tiling.html", file: "02_penrose_tiling.html" },
+      ]),
+    );
+    expectOk(r);
+    assert.equal(r.todos.length, 2);
+    assert.deepEqual(r.todos[0]!.expectedFiles, ["01_complex_explorer.html"]);
+    assert.equal(r.todos[1]!.description.includes("Fix blank canvas"), true);
+    assert.deepEqual(r.todos[1]!.expectedFiles, ["02_penrose_tiling.html"]);
+  });
+
+  it("accepts {todos:[...]} envelope", () => {
+    const r = parsePlannerResponse(
+      JSON.stringify({
+        todos: [{ description: "Add tour", expectedFiles: ["tour-data.js"] }],
+      }),
+    );
+    expectOk(r);
+    assert.equal(r.todos.length, 1);
+    assert.equal(r.todos[0]!.expectedFiles[0], "tour-data.js");
+  });
+
+  it("infers expectedFiles from description path mentions", () => {
+    const r = parsePlannerResponse(
+      JSON.stringify([
+        { description: "Expand tab bar in 35_black_holes.html to ≥10 tabs" },
+      ]),
+    );
+    expectOk(r);
+    assert.equal(r.todos.length, 1);
+    assert.deepEqual(r.todos[0]!.expectedFiles, ["35_black_holes.html"]);
+  });
+
+  it("strips trailing slash from directory-like expectedFiles", () => {
+    const r = parsePlannerResponse(
+      JSON.stringify([
+        { description: "Touch module", expectedFiles: ["src/app.ts/"] },
+      ]),
+    );
+    expectOk(r);
+    assert.equal(r.todos.length, 1);
+    assert.deepEqual(r.todos[0]!.expectedFiles, ["src/app.ts"]);
+  });
+
+  it("extractFileMentions finds html modules", () => {
+    const m = extractFileMentions("work on 01_complex_explorer.html and src/x.ts please");
+    assert.ok(m.includes("01_complex_explorer.html"));
+    assert.ok(m.includes("src/x.ts"));
+  });
+
+  it("salvagePlannerTodosFromDropped rebounds basenames against repoFiles", () => {
+    const salvaged = salvagePlannerTodosFromDropped(
+      [
+        {
+          reason: "expectedFiles: Required",
+          raw: { description: "Expand complex explorer tabs", path: "01_complex_explorer.html" },
+        },
+      ],
+      ["01_complex_explorer.html", "02_penrose_tiling.html"],
+    );
+    assert.equal(salvaged.length, 1);
+    assert.deepEqual(salvaged[0]!.expectedFiles, ["01_complex_explorer.html"]);
+  });
+
+  it("coercePlannerTodoItem demotes build without command to hunks", () => {
+    const c = coercePlannerTodoItem({
+      kind: "build",
+      description: "x",
+      expectedFiles: ["a.ts"],
+    }) as Record<string, unknown>;
+    assert.equal(c.kind, undefined);
   });
 
   it("soft-caps to MAX_TODOS_PER_BATCH when more valid todos than the limit", () => {

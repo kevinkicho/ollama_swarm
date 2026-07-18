@@ -130,6 +130,8 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private tierPromotionRetries = 0;
   /** Autonomous: stretch waves used this run (capped). */
   private stretchWaves = 0;
+  /** Autonomous: deterministic unmet-criteria seed waves (progressive recovery). */
+  private criterionProgressWaves = 0;
   /** Autonomous: consecutive cycles without durable progress (commits / durable met / tier). */
   private zeroProgressStreak = 0;
   private maxTiers = Infinity;
@@ -280,7 +282,19 @@ export class CouncilRunner extends DiscussionRunnerBase {
     const executionResume = resumeFrom && this.state.todoQueue.counts().pending > 0;
     if (planner && cfg.userDirective && !executionResume) {
       this.appendSystem(`Deriving tier ${this.state.currentTier} contract from directive…`);
-      await runContractDerivation(this.state, planner, workers, () => this.transcript);
+      try {
+        await runContractDerivation(this.state, planner, workers, () => this.transcript);
+      } catch (err) {
+        // Run 6b17f137: uncaught format sniff during shared explore → Start failed / crash.
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(
+          `Council contract derivation failed (${msg.slice(0, 200)}) — continuing without a full contract.`,
+        );
+        this.opts.emit({
+          type: "error",
+          message: `Contract derivation failed (non-fatal): ${msg.slice(0, 240)}`,
+        });
+      }
     }
 
     this.setPhase("discussing");
@@ -664,6 +678,10 @@ export class CouncilRunner extends DiscussionRunnerBase {
       getStretchWaves: () => this.stretchWaves,
       setStretchWaves: (n) => {
         this.stretchWaves = n;
+      },
+      getCriterionProgressWaves: () => this.criterionProgressWaves,
+      setCriterionProgressWaves: (n) => {
+        this.criterionProgressWaves = n;
       },
       getZeroProgressStreak: () => this.zeroProgressStreak,
       setZeroProgressStreak: (n) => {

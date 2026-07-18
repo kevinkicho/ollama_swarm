@@ -846,6 +846,8 @@ export class Orchestrator {
       const parentOfLocal = nodePath.dirname(resolvedLocal);
       this.lastParentPath = parentOfLocal;
       writePersistedLastParent(this.lastParentPath);
+      // Remember project root + its parent only — never server/logs/<runId>
+      // (those used to flood the 32-slot LRU and hide real workspaces).
       const parentsToRemember = [parentOfLocal, resolvedLocal];
       this.knownParentPaths = [
         ...parentsToRemember,

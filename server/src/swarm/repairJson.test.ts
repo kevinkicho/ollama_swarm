@@ -75,6 +75,31 @@ test("repairAndParseJson — smart quotes → soft-repairs", () => {
   assert.deepEqual(got?.value, { a: "b" });
 });
 
+test("repairAndParseJson — missing brace before op key (83dc5910)", () => {
+  const raw =
+    '{"hunks":[op":"replace","file":"a.ts","search":"x","replace":"y"]}';
+  const got = repairAndParseJson(raw);
+  assert.ok(got);
+  const v = got!.value as { hunks: Array<{ op: string; file: string }> };
+  assert.equal(v.hunks[0]!.op, "replace");
+  assert.equal(v.hunks[0]!.file, "a.ts");
+});
+
+test("repairAndParseJson — unclosed ```json fence", () => {
+  const raw =
+    '```json\n{"hunks":[{"op":"replace","file":"a.ts","search":"x","replace":"y"}]}';
+  const got = repairAndParseJson(raw);
+  assert.ok(got);
+  assert.ok(
+    got!.strategy.includes("fence") ||
+      got!.strategy.includes("soft") ||
+      got!.strategy.includes("balanced") ||
+      got!.strategy === "strict",
+  );
+  const v = got!.value as { hunks: unknown[] };
+  assert.equal(v.hunks.length, 1);
+});
+
 test("repairAndParseJson — irrecoverable garbage → null", () => {
   assert.equal(repairAndParseJson("totally not json blah blah"), null);
 });

@@ -15,6 +15,7 @@ import type { ReplanPolicy } from "@ollama-swarm/shared/replanPolicy";
 import {
   REPLANNER_JSON_SCHEMA,
 } from "./prompts/jsonSchemas.js";
+import { repairAndParseJson } from "../repairJson.js";
 
 export const REPLANNER_EMIT_MAX_ATTEMPTS = 4;
 export const REPLANNER_EMIT_PAUSE_BASE_MS = 10_000;
@@ -62,13 +63,24 @@ function tryParseWithRuleBasedExtract<T>(
   const direct = parse(raw);
   if (direct.ok) return direct;
   const candidate = extractJsonCandidate(raw);
-  if (!candidate) return direct;
-  const salvaged = parse(candidate.json);
-  if (salvaged.ok) {
-    appendSystem(
-      `[${agentId}] replan rule-based JSON extract (${formatParseTier(candidate.tier)}) succeeded.`,
-    );
-    return salvaged;
+  if (candidate) {
+    const salvaged = parse(candidate.json);
+    if (salvaged.ok) {
+      appendSystem(
+        `[${agentId}] replan rule-based JSON extract (${formatParseTier(candidate.tier)}) succeeded.`,
+      );
+      return salvaged;
+    }
+  }
+  const soft = repairAndParseJson(raw);
+  if (soft?.value !== undefined) {
+    const salvaged = parse(JSON.stringify(soft.value));
+    if (salvaged.ok) {
+      appendSystem(
+        `[${agentId}] replan soft-repair JSON (${soft.strategy}) succeeded — skipping extra emit.`,
+      );
+      return salvaged;
+    }
   }
   return direct;
 }
@@ -162,6 +174,22 @@ export async function runReplannerEmitRecovery<T>(
     if (opts.getStopping()) return { ok: false, reason: "run stopping", lastRaw: response };
 
     opts.appendAgent(agentUsed, response);
+    // Even on "explore", accept parseable JSON if the model already emitted
+    // a replan object (926054b0: explore burned tools then still produced usable JSON late).
+    {
+      const early = tryParseWithRuleBasedExtract(
+        response,
+        opts.parse,
+        opts.appendSystem,
+        opts.agent.id,
+      );
+      if (early.ok) {
+        opts.appendSystem(
+          `[${opts.agent.id}] replan parsed from ${mode} turn on attempt ${attempt}/${maxAttempts}.`,
+        );
+        return { ok: true, value: early.value, raw: response };
+      }
+    }
     if (mode === "explore") {
       exploreResponse = response;
       opts.onExploreCaptured?.(response);

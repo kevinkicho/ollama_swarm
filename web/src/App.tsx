@@ -5,7 +5,6 @@ import { useSwarmSocket } from "./hooks/useSwarmSocket";
 import { SetupForm } from "./components/SetupForm";
 import { SwarmView } from "./components/SwarmView";
 import { ErrorBanner } from "./components/ErrorBanner";
-import { BubbleGallery } from "./components/BubbleGallery";
 import { EventLogMirrorPanel } from "./components/EventLogMirrorPanel";
 import { TimeTravelReplayPanel } from "./components/TimeTravelReplayPanel";
 import { RunCompareReplayPanel } from "./components/RunCompareReplayPanel";
@@ -38,14 +37,6 @@ function parseReviewParams(): { runId: string; clonePath: string } | null {
   return { runId, clonePath };
 }
 
-// Validation tour fixture (2026-04-27): ?gallery=1 short-circuits the
-// app and renders BubbleGallery instead. Lets us audit every bubble in
-// isolation without waiting for runs to surface each summary.kind.
-function isGalleryMode(): boolean {
-  if (typeof window === "undefined") return false;
-  return new URLSearchParams(window.location.search).has("gallery");
-}
-
 // E2 next slice (#333): ?eventLogMirror=1 routes to a side-by-side
 // debug view comparing WebSocket-store state to event-log-stream
 // state. Used to validate the data path before the full E2 cutover.
@@ -73,7 +64,6 @@ function isCompareMode(): boolean {
 export default function App() {
   // Short-circuits: rendered as siblings (not nested inside AppMain)
   // so the conditional doesn't violate rules-of-hooks.
-  if (isGalleryMode()) return <BubbleGallery />;
   if (isEventLogMirrorMode()) return <EventLogMirrorPanel />;
   if (isCompareMode()) return <RunCompareReplayPanel />;
   if (isReplayMode()) return <TimeTravelReplayPanel />;

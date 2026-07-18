@@ -57,14 +57,28 @@ test("decideFailover — timeout → retry-same", () => {
   assert.equal(got.action, "retry-same");
 });
 
-test("decideFailover — model-output → retry-same", () => {
+test("decideFailover — model-output with chain → swap (961a885f format failover)", () => {
   const got = decideFailover({
     currentModel: "glm-5.1:cloud",
     classified: classifyError({ message: "empty response" }),
     failoverChain: ["claude-haiku-4-5"],
-    alreadyTried: new Set(),
+    alreadyTried: new Set(["glm-5.1:cloud"]),
   });
-  assert.equal(got.action, "retry-same");
+  assert.equal(got.action, "swap");
+  assert.equal(got.nextModel, "claude-haiku-4-5");
+});
+
+test("decideFailover — model-output empty chain → give-up (no invent)", () => {
+  const got = decideFailover({
+    currentModel: "deepseek-v4-flash:cloud",
+    classified: classifyError({
+      message: "json format sniff: think-only stream 16,008 chars with no JSON markers",
+    }),
+    failoverChain: [],
+    alreadyTried: new Set(["deepseek-v4-flash:cloud"]),
+  });
+  assert.equal(got.action, "give-up");
+  assert.match(got.reason ?? "", /no failover model/i);
 });
 
 test("decideFailover — cap → give-up (terminal)", () => {

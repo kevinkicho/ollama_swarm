@@ -247,6 +247,27 @@ export function swarmRouter(orch: Orchestrator): Router {
     const providerWarnings = missingProviderKeysForModels(preflightModels);
     const providerHealth = healthSummariesForProviders(uniqueProvidersForModels(preflightModels));
     const providerProbeWarnings = probeWarningsForModels(preflightModels);
+    // Ollama Cloud retirement / name hints (OpenCode models skipped).
+    const modelRetirementWarnings: string[] = [];
+    try {
+      const { isOllamaFamilyModel, lookupCloudRetirement } = await import(
+        "../providers/ollamaApiExtras.js"
+      );
+      for (const m of preflightModels) {
+        if (!isOllamaFamilyModel(m)) continue;
+        const ret = lookupCloudRetirement(m);
+        if (ret.retired) {
+          const alt = ret.alternative
+            ? ` Prefer ${ret.alternative}:cloud (or size-tagged -cloud) if using local offload.`
+            : "";
+          modelRetirementWarnings.push(
+            `Ollama Cloud model "${m}" is retired or retiring.${alt}`,
+          );
+        }
+      }
+    } catch {
+      /* non-fatal */
+    }
     // WSL ↔ Windows boundary: clients under /mnt/c send WSL-style
     // paths; on Windows we must re-spell them as <DRIVE>:\... or
     // path.resolve will create a parallel C:\mnt\c\... tree.
@@ -281,6 +302,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         providerWarnings,
         providerHealth,
         providerProbeWarnings,
+        modelRetirementWarnings,
       });
       return;
     }
@@ -301,6 +323,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         providerWarnings,
         providerHealth,
         providerProbeWarnings,
+        modelRetirementWarnings,
       });
       return;
     }
@@ -316,6 +339,7 @@ export function swarmRouter(orch: Orchestrator): Router {
       providerWarnings,
       providerHealth,
       providerProbeWarnings,
+      modelRetirementWarnings,
     });
   });
 

@@ -1,6 +1,11 @@
 /**
  * Worker JSON parse → repair → auditor salvage → sibling retry cascade.
  * Extracted from workerRunner.executeWorkerTodo.
+ *
+ * 926054b0: repair used the full worker tool profile + full seed, so gemma
+ * kept calling tools during "JSON repair" (tool-coach thrash) and fences
+ * still failed after a useless repair turn. Repair is emit-only + short
+ * framing; pure-think/empty skip straight to salvage.
  */
 
 import type { Agent } from "../../services/AgentManager.js";
@@ -19,6 +24,8 @@ import { WORKER_HUNKS_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { runParseSalvage } from "./parseSalvage.js";
 import { withSiblingRetry } from "./siblingRetry.js";
 import { isPromptHaltError } from "./lifecycleState.js";
+import { repairAndParseJson } from "../repairJson.js";
+import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
 
 export type WorkerParseResult =
   | { ok: true; parsed: Extract<ReturnType<typeof parseWorkerResponse>, { ok: true }>; commitTier: CommitTier }
@@ -59,13 +66,20 @@ export interface WorkerParseCascadeCtx {
   workerToolProfile: (kind: "hunk" | "build" | "read") => ProfileName;
 }
 
+/** Failures where another full worker-shaped repair turn rarely helps. */
+function shouldSkipLlmJsonRepair(reason: string): boolean {
+  return (
+    /empty response|pure <think>|no JSON envelope|format\/provider/i.test(reason)
+  );
+}
+
 export async function runWorkerParseCascade(
   ctx: WorkerParseCascadeCtx,
   agent: Agent,
   todo: Todo,
   seed: WorkerSeed,
   response: string,
-  workerProfile: ProfileName,
+  _workerProfile: ProfileName,
   workerActivity: {
     kind: string;
     label: string;
@@ -75,40 +89,66 @@ export async function runWorkerParseCascade(
   },
   modelAtEntry: string,
 ): Promise<WorkerParseResult> {
+  void workerActivity; // API retained for call-site stability; repair uses emit-only opts.
   let parsed = parseWorkerResponse(response, todo.expectedFiles);
   let commitTier: CommitTier = "parse";
   if (parsed.ok) {
     return { ok: true, parsed, commitTier };
   }
 
-  ctx.bumpJsonRepairs(agent.id);
-  ctx.appendSystem(
-    `[${agent.id}] [v2] worker JSON invalid (${parsed.reason}); issuing repair prompt.`,
-  );
-  let repair: string;
-  try {
-    repair = await ctx.promptAgent(
-      agent,
-      `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}\n\n${buildWorkerRepairPrompt(response, parsed.reason)}`,
-      workerProfile,
-      "json",
-      WORKER_HUNKS_JSON_SCHEMA,
-      { ...workerActivity, label: `repair ${todo.id.slice(0, 8)}` },
-    );
-  } catch (err) {
-    if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) {
-      return { ok: false, outcome: "aborted" };
+  // Deterministic soft-repair (fences, bare keys, smart quotes) before any LLM call.
+  const soft = repairAndParseJson(response);
+  if (soft?.value !== undefined && typeof soft.value === "object" && soft.value !== null) {
+    const second = parseWorkerResponse(JSON.stringify(soft.value), todo.expectedFiles);
+    if (second.ok) {
+      ctx.appendSystem(
+        `[${agent.id}] [v2] worker JSON recovered via soft-repair (${soft.strategy}) — skipping LLM repair.`,
+      );
+      return { ok: true, parsed: second, commitTier: "parse" };
     }
-    const msg = err instanceof Error ? err.message : String(err);
-    ctx.getWrappers().failTodoQ(todo.id, `[v2] worker repair prompt failed: ${msg}`, "repair");
-    ctx.bumpPromptErrors(agent.id);
-    ctx.bumpRejectedAttempts(agent.id);
-    return { ok: false, outcome: "stale" };
   }
-  if (ctx.isStopping()) return { ok: false, outcome: "aborted" };
-  ctx.appendAgent(agent, repair);
-  parsed = parseWorkerResponse(repair, todo.expectedFiles);
-  if (parsed.ok) commitTier = "repair";
+
+  ctx.bumpJsonRepairs(agent.id);
+  let repair = "";
+  if (shouldSkipLlmJsonRepair(parsed.reason)) {
+    ctx.appendSystem(
+      `[${agent.id}] [v2] worker JSON invalid (${parsed.reason}); skipping LLM repair — going to salvage/sibling.`,
+    );
+  } else {
+    ctx.appendSystem(
+      `[${agent.id}] [v2] worker JSON invalid (${parsed.reason}); issuing emit-only repair prompt.`,
+    );
+    try {
+      // Emit-only: no tools (926054b0 tool-coach thrash on propose_hunks during "repair").
+      // Short framing only — do not re-paste the full windowed seed.
+      repair = await ctx.promptAgent(
+        agent,
+        `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerRepairPrompt(response, parsed.reason)}`,
+        EMIT_ONLY_PROFILE_ID as ProfileName,
+        "json",
+        WORKER_HUNKS_JSON_SCHEMA,
+        {
+          kind: "worker",
+          label: `repair ${todo.id.slice(0, 8)}`,
+          mode: "emit",
+          maxToolTurns: 1,
+        },
+      );
+    } catch (err) {
+      if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) {
+        return { ok: false, outcome: "aborted" };
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.getWrappers().failTodoQ(todo.id, `[v2] worker repair prompt failed: ${msg}`, "repair");
+      ctx.bumpPromptErrors(agent.id);
+      ctx.bumpRejectedAttempts(agent.id);
+      return { ok: false, outcome: "stale" };
+    }
+    if (ctx.isStopping()) return { ok: false, outcome: "aborted" };
+    ctx.appendAgent(agent, repair);
+    parsed = parseWorkerResponse(repair, todo.expectedFiles);
+    if (parsed.ok) commitTier = "repair";
+  }
 
   if (!parsed.ok) {
     const auditor = ctx.getAuditor();
@@ -181,12 +221,20 @@ export async function runWorkerParseCascade(
           stopAborted = true;
           return;
         }
+        // Sibling re-emit: emit-only (same thrash as repair if tools stay on).
         const siblingResponse = await ctx.promptAgent(
           agent,
-          `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}`,
-          ctx.workerToolProfile("hunk"),
+          `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}\n\n` +
+            `Previous parse failed: ${parsed.reason}. Emit valid {"hunks":[...]} JSON only. No tools.`,
+          EMIT_ONLY_PROFILE_ID as ProfileName,
           "json",
           WORKER_HUNKS_JSON_SCHEMA,
+          {
+            kind: "worker",
+            label: `sibling-emit ${todo.id.slice(0, 8)}`,
+            mode: "emit",
+            maxToolTurns: 1,
+          },
         );
         if (ctx.isStopping()) {
           stopAborted = true;

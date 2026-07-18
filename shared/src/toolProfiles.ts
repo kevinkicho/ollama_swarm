@@ -129,12 +129,18 @@ export const WORKER_JSON_NUDGE_MESSAGE =
  */
 export const EXPLORE_MAX_DISCUSSION_DRAFT_TOOL_TURNS = 100;
 
-/** Soft nudge for discussion drafters (not a hard stop). */
-export const DISCUSSION_DRAFT_JSON_NUDGE_TURN = 40;
+/**
+ * Soft nudge for discussion drafters (not a hard stop).
+ * 2010479c: nudge at 40 let agents hit tool-loop stuck (5 errors) first;
+ * earlier nudge steers toward draft JSON while tools still work.
+ */
+export const DISCUSSION_DRAFT_JSON_NUDGE_TURN = 12;
 
 export const DISCUSSION_DRAFT_JSON_NUDGE_MESSAGE =
-  "You have explored a lot. Prefer emitting your council draft soon as clear findings "
-  + "(JSON array of issues/actions or structured prose). More tools only if a specific path is still missing.";
+  "Prefer emitting your council draft now as a JSON array of issues "
+  + '[{ "issue", "file", "severity", "suggestion" }] or structured findings. '
+  + "Use more tools only if one specific path is still missing. "
+  + "Peer votes use ```deliberate fences or a JSON ballot — not as a substitute for your draft findings.";
 
 /** Hard wall-clock caps for provider prompts (ms). */
 export const DEFAULT_WORKER_PROMPT_WALL_CLOCK_MS = 120_000;
@@ -202,8 +208,10 @@ export function contractExploreJsonNudge(): { atTurn: number; message: string } 
   };
 }
 
-/** Tighter cap for blackboard planning explore turns (todos / research / replan). */
+/** Tighter cap for blackboard planning explore turns (todos / research). */
 export const EXPLORE_MAX_PLANNING_TOOL_TURNS = 12;
+/** Replan explore — keep short so agent-1 does not thrash tools before emit (926054b0). */
+export const EXPLORE_MAX_REPLAN_TOOL_TURNS = 6;
 
 /** Goal-generation pre-pass — seed file list is usually sufficient. */
 export const EXPLORE_MAX_GOAL_PREPASS_TOOL_TURNS = 6;
@@ -234,8 +242,9 @@ export function resolveMaxToolTurnsForPlanningPhase(
     case "planner-todos-explore":
     case "research-pre-pass":
     case "tier-up":
-    case "replan":
       return fast ? 8 : EXPLORE_MAX_PLANNING_TOOL_TURNS;
+    case "replan":
+      return fast ? 4 : EXPLORE_MAX_REPLAN_TOOL_TURNS;
   }
 }
 export function allowsUnboundedToolTurns(profile: ToolProfileId): boolean {

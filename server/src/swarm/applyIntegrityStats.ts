@@ -5,8 +5,9 @@
  * This module holds the active counters so applyAndCommit and repair paths
  * can record without threading a counters object through every context.
  *
- * Keyed by runId when available; falls back to last-started run (single
- * active swarm run is the common case).
+ * Keyed by runId. Mutations without a resolvable runId are no-ops
+ * (fail-closed under multi-run concurrency — no silent __default__ writes).
+ * Reads may still fall back to last-started run for single-tenant status.
  */
 
 import {
@@ -30,15 +31,23 @@ export {
 const byRunId = new Map<string, ApplyIntegrityCounters>();
 let lastRunId: string | undefined;
 
-function resolveKey(runId?: string | null): string {
+/** Explicit runId only — never invent a shared bucket for writers. */
+function resolveWriteKey(runId?: string | null): string | undefined {
   const id = runId?.trim();
   if (id) return id;
-  return lastRunId ?? "__default__";
+  return undefined;
+}
+
+/** Read path: prefer explicit runId, else last-started (single-run UI). */
+function resolveReadKey(runId?: string | null): string | undefined {
+  const id = runId?.trim();
+  if (id) return id;
+  return lastRunId;
 }
 
 /** Start (or reset) counters for a run. Call from runner start(). */
 export function startApplyIntegrityTracking(runId?: string | null): ApplyIntegrityCounters {
-  const key = resolveKey(runId);
+  const key = resolveWriteKey(runId) ?? lastRunId ?? "__unscoped__";
   if (runId?.trim()) lastRunId = runId.trim();
   const c = createApplyIntegrityCounters();
   byRunId.set(key, c);
@@ -47,7 +56,10 @@ export function startApplyIntegrityTracking(runId?: string | null): ApplyIntegri
 
 /** Counters for a run (creates empty set if missing — safe no-op paths). */
 export function getApplyIntegrityCounters(runId?: string | null): ApplyIntegrityCounters {
-  const key = resolveKey(runId);
+  const key = resolveReadKey(runId);
+  if (!key) {
+    return createApplyIntegrityCounters();
+  }
   let c = byRunId.get(key);
   if (!c) {
     c = createApplyIntegrityCounters();
@@ -57,30 +69,41 @@ export function getApplyIntegrityCounters(runId?: string | null): ApplyIntegrity
 }
 
 export function noteApplyAttempt(runId?: string | null): void {
-  recordApplyAttempt(getApplyIntegrityCounters(runId));
+  const key = resolveWriteKey(runId);
+  if (!key) return;
+  recordApplyAttempt(getApplyIntegrityCounters(key));
 }
 
 export function noteApplySuccess(runId?: string | null): void {
-  recordApplySuccess(getApplyIntegrityCounters(runId));
+  const key = resolveWriteKey(runId);
+  if (!key) return;
+  recordApplySuccess(getApplyIntegrityCounters(key));
 }
 
 export function noteApplyMiss(kind: string, runId?: string | null): void {
-  recordApplyMiss(getApplyIntegrityCounters(runId), kind);
+  const key = resolveWriteKey(runId);
+  if (!key) return;
+  recordApplyMiss(getApplyIntegrityCounters(key), kind);
 }
 
 export function noteRepairSuccess(runId?: string | null): void {
-  recordRepairSuccess(getApplyIntegrityCounters(runId));
+  const key = resolveWriteKey(runId);
+  if (!key) return;
+  recordRepairSuccess(getApplyIntegrityCounters(key));
 }
 
 export function noteRepairFailure(runId?: string | null): void {
-  recordRepairFailure(getApplyIntegrityCounters(runId));
+  const key = resolveWriteKey(runId);
+  if (!key) return;
+  recordRepairFailure(getApplyIntegrityCounters(key));
 }
 
 /** Snapshot for summary assembly; does not clear (reset happens at next start). */
 export function snapshotApplyIntegrityForRun(
   runId?: string | null,
 ): ApplyIntegrityReport | undefined {
-  const key = resolveKey(runId);
+  const key = resolveReadKey(runId);
+  if (!key) return undefined;
   return snapshotApplyIntegrity(byRunId.get(key));
 }
 

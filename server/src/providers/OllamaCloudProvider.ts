@@ -14,8 +14,12 @@ export class OllamaCloudProvider implements SessionProvider {
     this.apiKey = key;
   }
 
+  /**
+   * ollama.com chat expects bare API names from GET /api/tags
+   * (e.g. gpt-oss:120b, glm-5.2). Local topology uses :cloud / -cloud tags.
+   */
   private stripCloudSuffix(model: string): string {
-    return model.replace(/(?::|-)cloud$/, "");
+    return model.replace(/(?::|-)cloud$/i, "");
   }
 
   async chat(opts: ChatOpts): Promise<ChatResult> {
@@ -55,6 +59,12 @@ export class OllamaCloudProvider implements SessionProvider {
 
     let usagePrompt = 0;
     let usageResponse = 0;
+    const ollamaOpts = opts.ollama;
+    const mergedOptions = {
+      ...(opts.options ?? {}),
+      ...(ollamaOpts?.options ?? {}),
+      ...(extra.options ?? {}),
+    };
     const result = await ollamaChat({
       baseUrl: this.baseUrl,
       model: this.stripCloudSuffix(opts.model),
@@ -62,7 +72,7 @@ export class OllamaCloudProvider implements SessionProvider {
       signal: opts.signal,
       idleTimeoutMs: opts.idleTimeoutMs,
       firstChunkTimeoutMs: opts.firstChunkTimeoutMs,
-      options: extra.options ?? opts.options,
+      options: Object.keys(mergedOptions).length > 0 ? mergedOptions : undefined,
       logDiag: opts.logDiag,
       agentId: opts.agentId,
       apiKey: this.apiKey,
@@ -76,6 +86,9 @@ export class OllamaCloudProvider implements SessionProvider {
       ...(extra.onChunk ? { onChunk: extra.onChunk } : opts.onChunk ? { onChunk: opts.onChunk } : {}),
       ...(extra.format !== undefined ? { format: extra.format } : opts.format !== undefined ? { format: opts.format } : {}),
       ...(extra.tools && extra.tools.length > 0 ? { tools: extra.tools } : {}),
+      // Ollama Cloud API supports the same chat fields; OpenCode never reaches here.
+      ...(ollamaOpts?.think !== undefined ? { think: ollamaOpts.think } : {}),
+      ...(ollamaOpts?.keepAlive !== undefined ? { keep_alive: ollamaOpts.keepAlive } : {}),
     });
     return {
       ...result,

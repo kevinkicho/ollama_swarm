@@ -2,6 +2,10 @@ import { memo, useMemo, useState } from "react";
 import { parseCouncilIssues } from "../drafts/councilDraftParse";
 import { CouncilIssueList } from "../drafts/CouncilIssueList";
 import {
+  parseDeliberateEnvelopes,
+  stanceChipClass,
+} from "../drafts/deliberateParse";
+import {
   BubbleToggleRow,
   PromptContentPanel,
   ThinkingContentPanel,
@@ -39,10 +43,12 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
 
   const displayText = useMemo(() => resolveAgentDisplayText(entry), [entry]);
   const issues = useMemo(() => parseCouncilIssues(displayText), [displayText]);
+  const deliberates = useMemo(() => parseDeliberateEnvelopes(displayText), [displayText]);
   const prettyJson = useMemo(() => tryPrettyJson(displayText), [displayText]);
   const thinking = useMemo(() => resolveEntryThinking(entry), [entry]);
   const prompt = useMemo(() => resolveEntryPrompt(entry), [entry]);
   const toolTrace = useMemo(() => resolveEntryToolTrace(entry), [entry]);
+  const incomplete = /draft incomplete|draft failed/i.test(displayText);
 
   const chipHeader = (
     <div>
@@ -53,17 +59,92 @@ export const CouncilDraftBubble = memo(function CouncilDraftBubble({
     </div>
   );
 
+  // Peer ```deliberate envelopes (2010479c) — structured card, not raw fence dump.
+  if (deliberates.length > 0 && !issues) {
+    return (
+      <div className={className} style={style}>
+        <div className="mb-2">
+          {chipHeader}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-ink-800/50 bg-ink-950/35 px-2 py-1">
+            <BubbleToggleRow
+              thinking={thinking}
+              prompt={prompt}
+              toolTrace={toolTrace}
+              showThinking={showThinking}
+              showPrompt={showPrompt}
+              showToolTrace={showToolTrace}
+              onToggleThinking={() => setShowThinking((v) => !v)}
+              onTogglePrompt={() => setShowPrompt((v) => !v)}
+              onToggleToolTrace={() => setShowToolTrace((v) => !v)}
+            />
+          </div>
+        </div>
+        {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
+        {showToolTrace && toolTrace?.length ? <ToolTraceContentPanel trace={toolTrace} /> : null}
+        {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
+        <div className="space-y-2">
+          {deliberates.map((d, i) => (
+            <div
+              key={i}
+              className="rounded-md border border-ink-700/60 bg-ink-950/50 px-2.5 py-2 text-[12px] text-ink-200"
+            >
+              <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                <span
+                  className={`inline-block px-1.5 py-px rounded border text-[10px] uppercase tracking-wide font-semibold ${stanceChipClass(d.stance)}`}
+                >
+                  {d.stance}
+                </span>
+                {d.to ? (
+                  <span className="text-[10px] text-ink-500 font-mono">→ {d.to}</span>
+                ) : null}
+              </div>
+              <div className="text-[11px] text-ink-400 mb-0.5">
+                <span className="text-ink-500">subject</span> {d.subject}
+              </div>
+              <div className="text-ink-100 leading-snug mb-1">{d.claim}</div>
+              {d.why ? (
+                <div className="text-[11px] text-ink-400 leading-snug">
+                  <span className="text-ink-500">why </span>
+                  {d.why}
+                </div>
+              ) : null}
+              {d.evidence.length > 0 ? (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {d.evidence.map((ev) => (
+                    <span
+                      key={ev}
+                      className="font-mono text-[10px] px-1 py-px rounded bg-ink-900 text-ink-400 border border-ink-800"
+                    >
+                      {ev}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (!issues && !prettyJson) {
     return (
-      <CollapsibleBlock
-        className={className}
-        style={style}
-        header={chipHeader}
-        text={displayText}
-        thinking={thinking}
-        prompt={prompt}
-        toolTrace={toolTrace}
-      />
+      <div className={className} style={style}>
+        {incomplete ? (
+          <div className="mb-1.5 text-[11px] text-amber-300/90 border border-amber-900/40 bg-amber-950/20 rounded px-2 py-1">
+            Draft incomplete — explore hit tool-loop limits; partial salvage below. Prefer emit-only or fewer tools next round.
+          </div>
+        ) : null}
+        <CollapsibleBlock
+          className=""
+          style={{}}
+          header={chipHeader}
+          text={displayText}
+          thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
+        />
+      </div>
     );
   }
 

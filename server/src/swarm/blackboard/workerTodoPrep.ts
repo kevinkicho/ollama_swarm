@@ -24,7 +24,7 @@ import {
   renderEndpointCatalogBlock,
   todoTouchesApiSurface,
 } from "./endpointCatalogContext.js";
-import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
+import type { PheromoneHeatmap } from "../pheromoneHeatmap.js";
 import { getDispositionForTurn } from "../roundRobinPromptHelpers.js";
 
 export interface WorkerTodoPrepCtx {
@@ -34,6 +34,8 @@ export interface WorkerTodoPrepCtx {
   getRepoFiles?: () => readonly string[];
   getWorkerRoles: () => Map<string, string>;
   getDispositionCycle: () => Map<string, number>;
+  /** Per-run heatmap when stigmergyOnBlackboard is enabled. */
+  getPheromoneHeatmap?: () => PheromoneHeatmap | undefined;
   readExpectedFiles: (files: string[]) => Promise<Record<string, string | null>>;
   getWrappers: () => TodoQueueWrappers;
   appendSystem: (msg: string) => void;
@@ -202,8 +204,9 @@ export async function prepareWorkerTodoSeed(
       : {}),
   };
 
-  if (ctx.getActive()?.stigmergyOnBlackboard && pheromoneHeatmap.size > 0) {
-    seed.hotFiles = pheromoneHeatmap.topFiles(10);
+  const heat = ctx.getPheromoneHeatmap?.();
+  if (ctx.getActive()?.stigmergyOnBlackboard && heat && heat.size > 0) {
+    seed.hotFiles = heat.topFiles(10);
   }
 
   if (ctx.getActive()?.workerDispositions) {

@@ -25,6 +25,10 @@ import {
   noteApplySuccess,
 } from "../applyIntegrityStats.js";
 import { noteProductiveProgress } from "../progressHeartbeat.js";
+import {
+  withCloneApplyLock,
+  type CloneApplyLockMeta,
+} from "../cloneApplyMutex.js";
 
 export interface FilesystemAdapter {
   /** Read a file's text. Returns null when the file doesn't exist
@@ -123,19 +127,39 @@ export interface WorkerPipelineInput {
   gitCommitOptional?: boolean;
   /** Optional run id for applyIntegrity summary counters. */
   runId?: string;
+  /**
+   * Absolute or relative clone root. When set, the full read→apply→write→commit
+   * critical section is serialized with other applyAndCommit calls on the same
+   * path (see cloneApplyMutex). Omit only for isolated in-memory unit tests.
+   */
+  clonePath?: string;
 }
 
 /** V2 post-LLM pipeline: read files → apply hunks → write changed
  *  files → git commit. Returns a structured outcome the caller can
- *  feed back to TodoQueue (complete on ok, fail on !ok). */
+ *  feed back to TodoQueue (complete on ok, fail on !ok).
+ *
+ *  Under clonePath, the critical section re-reads disk *after* the lock
+ *  is held so a peer that finished while we waited is visible. On miss,
+ *  contention is annotated so replanners know this was a lock-wait race. */
 export async function applyAndCommit(input: WorkerPipelineInput): Promise<WorkerOutcomeV2> {
+  return withCloneApplyLock(input.clonePath, (meta) =>
+    applyAndCommitUnlocked(input, meta),
+  );
+}
+
+async function applyAndCommitUnlocked(
+  input: WorkerPipelineInput,
+  lockMeta: CloneApplyLockMeta = { contended: false, waitedMs: 0 },
+): Promise<WorkerOutcomeV2> {
   // Unified guard: auditor-only mutations path requires explicit approval.
   // Workers always go through proposeCommitQ. Auditor calls set auditorApproved: true.
   if (input.auditorApproved === false) {
     return { ok: false, reason: "auditorApproved required for mutation under auditorOnlyMutations" };
   }
 
-  // 1. Read all expected files. Missing files (null) are allowed —
+  // 1. Read all expected files *under the lock* so we see peers that
+  //    finished while we were queued. Missing files (null) are allowed —
   //    applyHunks treats them as "create allowed". Real filesystem
   //    errors (permission denied, etc.) bubble up as exceptions.
   const contents: Record<string, string | null> = {};
@@ -179,12 +203,20 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
         anchorDiag = ` (${anchors.length} expectedAnchor(s) no longer found in file — file may have been modified by another worker)`;
       }
     }
+    // Lock-wait race: we re-read after a peer held the mutex; miss is
+    // often "search not found" because their commit moved the anchor.
+    let lockDiag = "";
+    if (lockMeta.contended) {
+      lockDiag =
+        ` [clone-lock-contended waited=${lockMeta.waitedMs}ms — re-read under lock; ` +
+        `peer may have landed first; replan against current disk]`;
+    }
     const match = applied.error.match(/hunk\[(\d+)\]/i);
     const idx = match ? Number.parseInt(match[1], 10) : undefined;
     if (countIntegrity) noteApplyMiss(applied.miss?.kind ?? "other", input.runId);
     return {
       ok: false,
-      reason: applied.error + anchorDiag,
+      reason: applied.error + anchorDiag + lockDiag,
       ...(idx !== undefined && Number.isFinite(idx) ? { failedHunkIndex: idx } : {}),
       ...(applied.miss ? { miss: applied.miss } : {}),
     };
@@ -282,17 +314,21 @@ export async function applyAndCommit(input: WorkerPipelineInput): Promise<Worker
   if (input.verify) {
     const v = await input.verify.run();
     if (!v.ok) {
-      // Revert: write each modified file back to its pre-hunk content.
-      // For files that were newly created (before === null) we intentionally
-      // leave them (no "undo create").
-      // For deletes (newText==="", before was original content), the loop below
-      // will restore the file by writing `before`.
-      // The git working-tree may be dirty; the next dequeue will re-clone or hit git status.
+      // Full revert: restore modified/deleted files and delete creates so the
+      // next worker/replanner does not see a poisoned half-applied tree.
+      // (Matches dryRunOnly restore semantics.)
       for (const file of filesWritten) {
         const before = contents[file];
-        if (before === null) continue; // created file, leave it
         try {
-          await input.fs.write(file, before);
+          if (before === null) {
+            if (typeof input.fs.delete === "function") {
+              await input.fs.delete(file);
+            } else {
+              await input.fs.write(file, "");
+            }
+          } else {
+            await input.fs.write(file, before);
+          }
         } catch {
           // ignore — best-effort revert
         }

@@ -82,6 +82,18 @@ export interface ChatOpts {
 
   /** Marker that this LLM call is part of a brain-initiated run (for scheduling/priority). */
   brainInitiated?: boolean;
+
+  /**
+   * Ollama-native extras (api.md). **Only OllamaProvider / OllamaCloudProvider
+   * read this.** OpenCodeProvider, AnthropicProvider, and OpenAIProvider must
+   * ignore it so OpenCode models never receive Ollama-only fields.
+   */
+  ollama?: {
+    think?: boolean | "low" | "medium" | "high" | "max";
+    keepAlive?: string | number;
+    /** Merged into Ollama `options` (num_ctx, num_predict, temperature, …). */
+    options?: { temperature?: number; top_p?: number; [k: string]: unknown };
+  };
 }
 
 export type FinishReason = "done" | "aborted" | "idle-timeout" | "error";

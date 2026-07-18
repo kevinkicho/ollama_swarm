@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   councilExecutionTier,
+  hotSharedFilesOverlap,
   MAX_COUNCIL_TODOS_PER_BATCH,
   mergeOverlappingCouncilTodos,
   prepareCouncilTodoBatch,
@@ -63,6 +64,46 @@ test("scoreCouncilTodoForDequeue — defers on file overlap with in-progress", (
   const score = scoreCouncilTodoForDequeue(
     { description: "Add tests", expectedFiles: ["scripts/predict_tc.py"], kind: "hunks" },
     [{ expectedFiles: ["scripts/predict_tc.py"] }],
+    false,
+  );
+  assert.equal(score, Number.NEGATIVE_INFINITY);
+});
+
+test("hotSharedFilesOverlap — panelRegistry basename (961a885f)", () => {
+  assert.equal(
+    hotSharedFilesOverlap(
+      ["src/data/panelRegistry.js"],
+      ["src/markets/fx/panelRegistry.js"],
+    ),
+    true,
+  );
+  assert.equal(
+    hotSharedFilesOverlap(["src/data/marketPanels.js"], ["src/foo/Other.jsx"]),
+    false,
+  );
+});
+
+test("mergeOverlappingCouncilTodos — merges hot shared registry basenames", () => {
+  const { merged, mergeCount } = mergeOverlappingCouncilTodos([
+    {
+      description: "Register panel A",
+      expectedFiles: ["src/data/panelRegistry.js"],
+      createdBy: "a",
+    },
+    {
+      description: "Register panel B",
+      expectedFiles: ["src/data/panelRegistry.js"],
+      createdBy: "b",
+    },
+  ]);
+  assert.equal(mergeCount, 1);
+  assert.equal(merged.length, 1);
+});
+
+test("scoreCouncilTodoForDequeue — defers on hot registry contention", () => {
+  const score = scoreCouncilTodoForDequeue(
+    { description: "Wire marketPanels", expectedFiles: ["src/data/marketPanels.js"], kind: "hunks" },
+    [{ expectedFiles: ["src/other/marketPanels.js"] }],
     false,
   );
   assert.equal(score, Number.NEGATIVE_INFINITY);

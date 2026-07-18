@@ -15,6 +15,12 @@ import { recordChatUsage } from "../services/ollamaProxy.js";
 import { pickProvider } from "../providers/pickProvider.js";
 import { providerGateway } from "../providers/ProviderGateway.js";
 import { config } from "../config.js";
+import {
+  isOllamaFamilyModel,
+  OLLAMA_RUN_KEEP_ALIVE,
+  ollamaOptionsForRole,
+  ollamaThinkForCall,
+} from "../providers/ollamaApiExtras.js";
 import { ToolDispatcher, defaultToolsForProfile, type ProfileName } from "../tools/ToolDispatcher.js";
 import {
   resolveMaxToolTurnsForProfile,
@@ -145,8 +151,20 @@ export interface PromptWithRetryOptions {
   ollamaOptions?: {
     temperature?: number;
     top_p?: number;
+    num_ctx?: number;
+    num_predict?: number;
     [key: string]: unknown;
   };
+  /**
+   * Ollama-only keep_alive (api.md). Ignored for OpenCode / Anthropic / OpenAI
+   * (promptWithRetry only attaches when isOllamaFamilyModel).
+   */
+  ollamaKeepAlive?: string | number;
+  /**
+   * Ollama-only think mode. Ignored for non-Ollama providers.
+   * Default: false for JSON format without tools; else model default.
+   */
+  ollamaThink?: boolean | "low" | "medium" | "high" | "max";
   // PR-6/7: per-run attribution for quota + gateway scheduling.
   runId?: string;
   // T193 (2026-05-04): per-call model override. When set, replaces
@@ -185,6 +203,8 @@ export interface PromptWithRetryOptions {
   getMinThinkCharsForReferee?: () => number | undefined;
   /** Tool-loop nudge before turn N (1-based). Worker profile gets a default when unset. */
   toolLoopNudge?: { atTurn: number; message: string };
+  /** Override think-only char cap for JSON format sniff (emit-biased defaults apply by activity). */
+  jsonThinkOnlyMaxChars?: number;
 }
 
 export interface RetryInfo {
@@ -371,10 +391,24 @@ export async function promptWithRetry(
               minThinkCharsForReferee: opts.minThinkCharsForReferee,
               getMinThinkCharsForReferee: opts.getMinThinkCharsForReferee,
               activityKind: opts.activity?.kind,
+              activityMode: opts.activity?.mode,
               session: guardSession,
               // Wire formatExpect into the live stream guard (was unused on Ollama path).
               formatExpect: opts.formatExpect,
+              ...(opts.jsonThinkOnlyMaxChars !== undefined
+                ? { jsonThinkOnlyMaxChars: opts.jsonThinkOnlyMaxChars }
+                : {}),
             });
+          // Ollama-only extras (keep_alive / think / role options). Never set
+          // for OpenCode/Anthropic/OpenAI — those providers ignore unknown
+          // fields but we still omit `ollama` entirely so they cannot break.
+          const useOllamaExtras = isOllamaFamilyModel(effectiveModel);
+          const ollamaRoleOptions = useOllamaExtras
+            ? ollamaOptionsForRole(
+                opts.activity?.kind ?? agentName,
+                opts.ollamaOptions,
+              )
+            : undefined;
           const chatOpts = {
             modelString: effectiveModel,
             runId: opts.runId,
@@ -383,7 +417,26 @@ export async function promptWithRetry(
             agentId: agent.id,
             logDiag: opts.logDiag,
             ...(isCloud ? { firstChunkTimeoutMs: CLOUD_FIRST_CHUNK_TIMEOUT_MS } : {}),
-            ...(opts.ollamaOptions !== undefined ? { options: opts.ollamaOptions } : {}),
+            // Top-level options still used by some providers; Ollama merges
+            // with opts.ollama.options below.
+            ...(opts.ollamaOptions !== undefined && !useOllamaExtras
+              ? { options: opts.ollamaOptions }
+              : {}),
+            ...(useOllamaExtras
+              ? {
+                  ollama: {
+                    keepAlive: opts.ollamaKeepAlive ?? OLLAMA_RUN_KEEP_ALIVE,
+                    think: ollamaThinkForCall({
+                      hasJsonFormat: opts.ollamaFormat !== undefined,
+                      tools: tools.length > 0,
+                      explicit: opts.ollamaThink,
+                    }),
+                    ...(ollamaRoleOptions && Object.keys(ollamaRoleOptions).length > 0
+                      ? { options: ollamaRoleOptions }
+                      : {}),
+                  },
+                }
+              : {}),
             onChunk: wrapOnChunk((cumulativeText: string) => {
               if (!sawFirstChunk) {
                 sawFirstChunk = true;

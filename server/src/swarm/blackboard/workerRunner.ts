@@ -46,7 +46,7 @@ import { buildJudgePrompt } from "./hunkJudgePrompt.js";
 
 import { v2QueueTodoToWireTodo } from "./boardWireCompat.js";
 import { bumpAgentCounter } from "./runnerHelpers.js";
-import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
+
 import { withSiblingRetry } from "./siblingRetry.js";
 import { verifyWorkerSkip } from "./auditorRunner.js";
 import { resolveBlackboardPromptExtras } from "./blackboardPromptContext.js";

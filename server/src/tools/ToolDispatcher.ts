@@ -836,6 +836,8 @@ async function bashTool(
 export class ToolDispatcher {
   private mcpClients: Map<string, { client: Client; transport: StdioClientTransport; proc?: ChildProcess }> = new Map();
   private mcpToolToClient: Map<string, string> = new Map(); // toolName -> clientKey
+  /** Resolves when MCP spawn/connect finishes (or immediately if MCP disabled). */
+  private readonly mcpReady: Promise<void>;
 
   constructor(
     private readonly profile: ProfileName,
@@ -852,33 +854,39 @@ export class ToolDispatcher {
         || profile === "swarm-planner"
         || profile === "swarm-builder-research")
     ) {
-      // Fire and forget for now; in real use await initMcpServers
-      this.initMcpServers(mcpServers).catch((e) => console.error("MCP init failed", e));
-    } else if (mcpServers && !config.SWARM_ALLOW_MCP_SERVERS) {
-      console.warn(
-        "MCP servers requested but SWARM_ALLOW_MCP_SERVERS=false — ignoring (set true to opt in; RCE surface).",
-      );
+      this.mcpReady = this.initMcpServers(mcpServers).catch((e) => {
+        console.error("MCP init failed", e);
+      });
+    } else {
+      if (mcpServers && !config.SWARM_ALLOW_MCP_SERVERS) {
+        console.warn(
+          "MCP servers requested but SWARM_ALLOW_MCP_SERVERS=false — ignoring (set true to opt in; RCE surface).",
+        );
+      }
+      this.mcpReady = Promise.resolve();
     }
+  }
+
+  /** Await MCP connect before first tool use (avoids race on fire-and-forget init). */
+  async whenMcpReady(): Promise<void> {
+    await this.mcpReady;
+  }
+
+  /** Registered MCP tool names (namespaced `key:tool` plus bare aliases). */
+  listMcpToolNames(): string[] {
+    return [...this.mcpToolToClient.keys()];
   }
 
   private async initMcpServers(mcpServers: string) {
     if (!config.SWARM_ALLOW_MCP_SERVERS) {
       return;
     }
-    const specs = mcpServers.split(/[\s,]+/).filter(Boolean);
+    const { parseMcpServerSpecs, mcpSpawnEnvForCmd } = await import("./mcpServerSpecs.js");
+    const specs = parseMcpServerSpecs(mcpServers);
     // Only allow a small set of package-manager entrypoints when opt-in.
     const MCP_BIN_ALLOW = new Set(["npx", "npx.cmd", "node", "bun", "bunx", "python", "python3"]);
-    for (const spec of specs) {
-      const eq = spec.indexOf("=");
-      if (eq === -1) continue;
-      const key = spec.slice(0, eq).trim();
-      const cmdStr = spec.slice(eq + 1).trim();
-      if (!key || !cmdStr) continue;
+    for (const { key, command, args, rawCmd } of specs) {
       try {
-        // Simple parse: first word command, rest args (improve with shell parse if needed)
-        const parts = cmdStr.split(/\s+/);
-        const command = parts[0];
-        const args = parts.slice(1);
         if (!command || !MCP_BIN_ALLOW.has(command.toLowerCase())) {
           console.error(
             `MCP spawn refused for key=${key}: binary "${command}" not in allowlist (${[...MCP_BIN_ALLOW].join(", ")})`,
@@ -890,6 +898,7 @@ export class ToolDispatcher {
         const transport = new StdioClientTransport({
           command,
           args,
+          env: mcpSpawnEnvForCmd(rawCmd),
         });
         const client = new Client(
           { name: `swarm-mcp-${key}`, version: "0.1.0" },
@@ -914,13 +923,21 @@ export class ToolDispatcher {
         // Auto-detection / friendly message for common free search MCPs
         const isSearchServer = key.toLowerCase().includes("search") || toolNames.some(n => /search|web_search/i.test(n));
         if (isSearchServer) {
-          console.log(`[MCP] Free keyless search server "${key}" connected. This augments the built-in DuckDuckGo web_search (no MCP config required for native version).`);
+          console.log(
+            `[MCP] Search server "${key}" connected. Native profile tools still list web_search (DDG); ` +
+              `MCP tools are available as ${toolNames.map((n) => `${key}:${n}`).join(", ") || "(none)"} if the model calls them by name.`,
+          );
         }
       } catch (e: any) {
         const msg = e?.message || String(e);
         console.error(`[MCP] Failed to spawn/connect "${key}": ${msg}`);
-        if (key.toLowerCase().includes("search") || cmdStr.includes("open-websearch") || cmdStr.includes("heventure")) {
-          console.warn(`[MCP] Tip for free search: try "search=npx -y open-websearch@latest" (Node) or "search=uvx heventure-search-mcp" (Python). Ensure npx/uv is in PATH. Native DuckDuckGo web_search is available without MCP.`);
+        if (key.toLowerCase().includes("search") || rawCmd.includes("open-websearch") || rawCmd.includes("heventure")) {
+          console.warn(
+            `[MCP] Tip: set SWARM_ALLOW_MCP_SERVERS=true and use ` +
+              `"search=npx -y open-websearch@latest" (semicolon-separate multiple servers). ` +
+              `open-websearch needs MODE=stdio for MCP (we set that automatically). ` +
+              `Native DuckDuckGo web_search works without MCP.`,
+          );
         }
       }
     }
@@ -948,6 +965,8 @@ export class ToolDispatcher {
   }
 
   async dispatch(call: ToolCall): Promise<ToolResult> {
+    // Ensure MCP servers finished connecting before first tool dispatch.
+    await this.mcpReady;
     let result: ToolResult;
     const perm = PROFILES[this.profile][call.tool];
     if (perm !== "allow") {

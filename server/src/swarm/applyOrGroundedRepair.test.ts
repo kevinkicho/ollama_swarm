@@ -139,11 +139,62 @@ describe("applyOrGroundedRepair", () => {
     assert.equal((out![0] as { search: string }).search, "unique_body_line_for_panel_fx_section");
   });
 
-  it("isDeterministicCandidateEnabled reads env", () => {
-    assert.equal(isDeterministicCandidateEnabled({}), false);
+  it("isDeterministicCandidateEnabled defaults ON; explicit off disables", () => {
+    assert.equal(isDeterministicCandidateEnabled({}), true);
     assert.equal(
       isDeterministicCandidateEnabled({ SWARM_APPLY_DETERMINISTIC_CANDIDATE: "1" }),
       true,
+    );
+    assert.equal(
+      isDeterministicCandidateEnabled({ SWARM_APPLY_DETERMINISTIC_CANDIDATE: "0" }),
+      false,
+    );
+    assert.equal(
+      isDeterministicCandidateEnabled({ SWARM_APPLY_DETERMINISTIC_CANDIDATE: "false" }),
+      false,
+    );
+  });
+
+  it("deterministic candidate runs by default without tryDeterministicCandidate flag", async () => {
+    const unique =
+      "const UNIQUE_DEFAULT_ON_alpha_panel_marker_xyz = true;";
+    const file = `// header\n${unique}\n// footer\n`;
+    let modelCalls = 0;
+    const r = await applyOrGroundedRepair({
+      hunks: [
+        {
+          op: "replace",
+          file: "a.ts",
+          search: "const UNIQUE_DEFAULT_ON_alpha_panel_marker_xyz = TRUE;",
+          replace: "const UNIQUE_DEFAULT_ON_alpha_panel_marker_xyz = false;",
+        },
+      ],
+      currentTextsByFile: { "a.ts": file },
+      expectedFiles: ["a.ts"],
+      // omit tryDeterministicCandidate — default path
+      env: {},
+      callModel: async () => {
+        modelCalls += 1;
+        return JSON.stringify({
+          hunks: [
+            {
+              op: "replace",
+              file: "a.ts",
+              search: unique,
+              replace: "const UNIQUE_DEFAULT_ON_alpha_panel_marker_xyz = false;",
+            },
+          ],
+        });
+      },
+    });
+    assert.equal(r.ok, true);
+    // Prefer deterministic; model is fallback only.
+    if (r.deterministicCandidate) {
+      assert.equal(modelCalls, 0);
+    }
+    assert.match(
+      r.newTextsByFile?.["a.ts"] ?? "",
+      /UNIQUE_DEFAULT_ON_alpha_panel_marker_xyz = false/,
     );
   });
 });

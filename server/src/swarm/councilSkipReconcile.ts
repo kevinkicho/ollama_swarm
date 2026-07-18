@@ -214,9 +214,30 @@ function isCreateTestLike(description: string): boolean {
 }
 
 /**
+ * Create / wire / panel author todos (run 961a885f t8 permanent-skip) —
+ * broader than pure test authoring.
+ */
+export function isCreateWireLike(description: string): boolean {
+  if (isCreateTestLike(description)) return true;
+  return (
+    /\b(create|add|wire|register|implement|render|scaffold|rewrite)\b/i.test(description)
+    && /\b(panel|component|footer|registry|endpoint|dashboard|bento|market)\b/i.test(
+      description,
+    )
+  );
+}
+
+/** permanent:attempts-exhausted / permanent:noop-exhausted — not "already done". */
+export function isExhaustedPermanentSkipReason(reason: string | undefined): boolean {
+  if (!reason) return false;
+  return /permanent:(attempts-exhausted|noop-exhausted)/i.test(reason);
+}
+
+/**
  * Drop audit todos that re-mint the same create-test / author shape as a
  * permanent-skipped todo, unless durable progress was made this cycle
  * (commits / met flips) — in which case a retry may be warranted.
+ * Also covers create/wire panel shapes (961a885f t8 / t19 thrash).
  */
 export function filterAuditTodosAgainstPermanentSkips<
   T extends { description: string; expectedFiles: readonly string[]; criterionId?: string },
@@ -267,14 +288,76 @@ export function filterAuditTodosAgainstPermanentSkips<
               && normalizeDescKey(s.description).slice(0, 40)
                 === normalizeDescKey(t.description).slice(0, 40),
           )));
+    const createWireRemint =
+      isCreateWireLike(t.description)
+      && permanentSkips.some((s) => isCreateWireLike(s.description))
+      && (sameShape || sameCriterion || fileOverlap
+        || permanentSkips.some(
+          (s) =>
+            isCreateWireLike(s.description)
+            && normalizeDescKey(s.description).slice(0, 48)
+              === normalizeDescKey(t.description).slice(0, 48),
+        ));
 
-    if (sameShape || sameCriterion || createTestRemint) {
+    if (sameShape || sameCriterion || createTestRemint || createWireRemint) {
       dropped.push(t);
     } else {
       kept.push(t);
     }
   }
   return { kept, dropped };
+}
+
+/**
+ * Refuse LLM "met" when the only cycle signal is permanent attempts/noop
+ * exhaustion without a covering commit (run 961a885f: 10/10 after t8 skip).
+ * Keeps met when committedFiles cover criterion expectedFiles.
+ */
+export function refuseMetFromExhaustedPermanentSkips(
+  criteria: ExitCriterion[],
+  permanentSkips: readonly PermanentSkipEvidence[],
+  committedFiles: readonly string[] = [],
+): { criteria: ExitCriterion[]; demotedIds: string[] } {
+  const exhausted = permanentSkips.filter((s) =>
+    isExhaustedPermanentSkipReason(s.reason),
+  );
+  if (exhausted.length === 0) {
+    return { criteria: [...criteria], demotedIds: [] };
+  }
+
+  const commitNorm = new Set(committedFiles.map(normalizePath));
+  const commitBases = new Set(committedFiles.map(basename));
+  const demotedIds: string[] = [];
+
+  const next = criteria.map((c) => {
+    if (c.status !== "met") return c;
+    const covering = exhausted.filter(
+      (s) =>
+        (s.criterionId === c.id || s.criteriaIds?.includes(c.id))
+        || (c.expectedFiles.length > 0
+          && skipCoversCriterionFiles(s.expectedFiles, c.expectedFiles)),
+    );
+    if (covering.length === 0) return c;
+
+    const hasCommit =
+      c.expectedFiles.length > 0
+      && c.expectedFiles.some((f) => {
+        const nf = normalizePath(f);
+        return commitNorm.has(nf) || commitBases.has(basename(nf));
+      });
+    if (hasCommit) return c;
+
+    demotedIds.push(c.id);
+    return {
+      ...c,
+      status: "unmet" as const,
+      rationale:
+        `demoted: permanent-skip exhausted without covering commit ` +
+        `(${(covering[0]!.reason ?? "attempts-exhausted").slice(0, 80)})`,
+    };
+  });
+
+  return { criteria: next, demotedIds };
 }
 
 /**

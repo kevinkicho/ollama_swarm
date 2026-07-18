@@ -320,6 +320,60 @@ describe("applyAndCommit — no-op + empty cases", () => {
   });
 });
 
+describe("applyAndCommit — clone lock contention diagnostic", () => {
+  it("annotates miss when a peer held the clone lock", async () => {
+    // Shared in-memory "disk" for both applyAndCommit calls under one clonePath key.
+    const files = new Map<string, string>([["a.ts", "hello world"]]);
+    let delayFirstWrite = true;
+    const slowFs: FilesystemAdapter = {
+      async read(p) {
+        return files.get(p) ?? null;
+      },
+      async write(p, content) {
+        if (delayFirstWrite && p === "a.ts") {
+          delayFirstWrite = false;
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        files.set(p, content);
+      },
+    };
+    const { git } = makeFakeGit();
+    const clonePath = "/tmp/wp-lock-contention-diag";
+
+    const first = applyAndCommit({
+      todoId: "t1",
+      workerId: "w1",
+      expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "world", replace: "alpha" }],
+      fs: slowFs,
+      git,
+      clonePath,
+      runId: "run-lock-1",
+    });
+
+    // Second starts while first still holds the lock; after wait, "world" is gone.
+    await new Promise((r) => setTimeout(r, 5));
+    const second = applyAndCommit({
+      todoId: "t2",
+      workerId: "w2",
+      expectedFiles: ["a.ts"],
+      hunks: [{ op: "replace", file: "a.ts", search: "world", replace: "beta" }],
+      fs: slowFs,
+      git,
+      clonePath,
+      runId: "run-lock-1",
+    });
+
+    const [r1, r2] = await Promise.all([first, second]);
+    assert.equal(r1.ok, true, "first apply should land");
+    assert.equal(r2.ok, false, "second should miss after peer commit");
+    if (!r2.ok) {
+      assert.match(r2.reason, /clone-lock-contended/i);
+      assert.match(r2.reason, /search/i);
+    }
+  });
+});
+
 describe("applyAndCommit — V2 conflict model", () => {
   it("worker B fails cleanly when worker A's commit changed the search anchor", async () => {
     // V2 conflict-detection scenario: two workers were assigned todos
@@ -521,7 +575,7 @@ describe("applyAndCommit — verification gate (#296)", () => {
     if (!out.ok) assert.match(out.reason, /no file changes|no-op/i);
   });
 
-  it("leaves newly-created files in place on revert (no fs.delete adapter)", async () => {
+  it("deletes newly-created files on verify-fail when fs.delete is available", async () => {
     const { fs, state: fsState } = makeFakeFs({});
     const { git } = makeFakeGit();
     const out = await applyAndCommit({
@@ -533,9 +587,30 @@ describe("applyAndCommit — verification gate (#296)", () => {
     assert.equal(out.ok, false);
     if (out.ok) return;
     assert.equal(out.verifyFailed, true);
-    // Newly-created files on verify-fail revert are intentionally left behind
-    // (no "undo create" semantics in this path). The next worker can modify or skip.
-    assert.equal(fsState.files.get("new.ts"), "freshly created");
+    // Full tree restore: create must not poison the next worker/replanner.
+    assert.equal(fsState.files.has("new.ts"), false);
+  });
+
+  it("removes newly-created files on verify-fail when fs.delete is missing (write empty)", async () => {
+    const { fs, state: fsState } = makeFakeFs({});
+    const { git } = makeFakeGit();
+    // Strip delete so we exercise the write("") fallback path.
+    // Fake (and real) adapters treat write("") as unlink for create undo.
+    const fsNoDelete = {
+      read: fs.read.bind(fs),
+      write: fs.write.bind(fs),
+    };
+    const out = await applyAndCommit({
+      todoId: "t1", workerId: "w", expectedFiles: ["new.ts"],
+      hunks: [{ op: "create", file: "new.ts", content: "freshly created" }],
+      fs: fsNoDelete,
+      git,
+      verify: { async run() { return { ok: false, reason: "lint error" }; } },
+    });
+    assert.equal(out.ok, false);
+    if (out.ok) return;
+    assert.equal(out.verifyFailed, true);
+    assert.equal(fsState.files.has("new.ts"), false);
   });
 
   it("when no verify adapter supplied, behaves identically to pre-#296", async () => {

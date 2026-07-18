@@ -11,10 +11,11 @@ import {
 import { readDirective, buildDirectiveBlock } from "./directivePromptHelpers.js";
 import { readExpectedFiles } from "./sharedFileUtils.js";
 import { windowFileForWorker } from "./blackboard/windowFile.js";
-import type { SkipEvidenceTodo } from "./councilSkipReconcile.js";
+import type { PermanentSkipEvidence, SkipEvidenceTodo } from "./councilSkipReconcile.js";
 import {
   filterAuditTodosAgainstSkips,
   promoteCriteriaFromSkipEvidence,
+  refuseMetFromExhaustedPermanentSkips,
 } from "./councilSkipReconcile.js";
 import type { CouncilProgressLedger } from "./councilProgressLedger.js";
 import { fallbackMayMarkMet } from "./councilLedgerReconcile.js";
@@ -100,9 +101,12 @@ function applyAuditorVerdicts(
   verdicts: ReturnType<typeof parseAuditorResponse> & { ok: true },
   skipEvidence: readonly SkipEvidenceTodo[],
   repoFiles: readonly string[] = [],
+  permanentSkips: readonly PermanentSkipEvidence[] = [],
+  committedFiles: readonly string[] = [],
 ): {
   updatedCriteria: ExitCriterion[];
   newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }>;
+  demotedIds: string[];
 } {
   const criteriaById = new Map(contract.criteria.map((c) => [c.id, c]));
   let newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }> = [];
@@ -122,11 +126,18 @@ function applyAuditorVerdicts(
   });
 
   updatedCriteria = promoteCriteriaFromSkipEvidence(updatedCriteria, skipEvidence, repoFiles);
+  // Exhausted permanent-skips are failures, not success — demote optimistic MET.
+  const refused = refuseMetFromExhaustedPermanentSkips(
+    updatedCriteria,
+    permanentSkips,
+    committedFiles.length > 0 ? committedFiles : repoFiles,
+  );
+  updatedCriteria = refused.criteria;
   newTodos = filterAuditTodosAgainstSkips(newTodos, skipEvidence);
   const metIds = new Set(updatedCriteria.filter((c) => c.status === "met").map((c) => c.id));
   newTodos = newTodos.filter((t) => !t.criterionId || !metIds.has(t.criterionId));
 
-  return { updatedCriteria, newTodos };
+  return { updatedCriteria, newTodos, demotedIds: refused.demotedIds };
 }
 
 export async function runCouncilLlmAudit(
@@ -135,6 +146,7 @@ export async function runCouncilLlmAudit(
   committedFiles: string[],
   ctx: CouncilAuditorContext,
   skipEvidence: readonly SkipEvidenceTodo[] = [],
+  permanentSkips: readonly PermanentSkipEvidence[] = [],
 ): Promise<{
   updatedCriteria: ExitCriterion[];
   newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }>;
@@ -208,6 +220,7 @@ ${skipBlock}
 For each unmet criterion, determine if it is now MET, WONT-DO, or still UNMET.
 - MET: the expected files exist and contain real implementation (not mock/placeholder). When a criterion lists multiple path variants for the same file (e.g. docs/foo.md and foo.md), MET if ANY listed file satisfies the criterion.
 - When worker skip evidence shows work is already done for a criterion's files, prefer MET unless file contents clearly contradict the skip reason.
+- NEVER mark MET solely because a todo was permanent-skipped (attempts-exhausted / noop-exhausted / pure think failures). That means the worker failed, not that the criterion is satisfied — leave UNMET and emit concrete todos.
 - WONT-DO: the criterion is impossible or no longer relevant
 - UNMET: still needs work — provide specific todos
 
@@ -266,12 +279,20 @@ Return ONLY a JSON object:
         return fallbackAudit(cfg, contract, skipEvidence, ledger);
       }
 
-      const { updatedCriteria, newTodos } = applyAuditorVerdicts(
+      const { updatedCriteria, newTodos, demotedIds } = applyAuditorVerdicts(
         contract,
         parsed,
         skipEvidence,
         committedFiles,
+        permanentSkips,
+        committedFiles,
       );
+
+      if (demotedIds.length > 0) {
+        ctx.appendSystem(
+          `[audit] Demoted ${demotedIds.length} criterion(s) still unmet after permanent-skip exhaustion: ${demotedIds.join(", ")}.`,
+        );
+      }
 
       const metCount = updatedCriteria.filter((c) => c.status === "met").length;
       ctx.appendSystem(

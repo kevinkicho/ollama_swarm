@@ -18,9 +18,22 @@ export const RunQueuePanel = memo(function RunQueuePanel({ parentPath, onViewRun
   const { runs, loading } = useRunsList(parentPath);
   const currentRunId = useSwarm((s) => s.runId);
 
-  const sorted = [...runs]
+  // Prefer real runs (hide crash-recovery placeholders with bogus timestamps).
+  const cleaned = runs.filter((r) => {
+    const id = r.runId ?? "";
+    if (id.startsWith("recover-me-")) return false;
+    // Crash templates used startedAt ≈ 10_000 (1970) — not useful in the queue.
+    if (typeof r.startedAt === "number" && r.startedAt > 0 && r.startedAt < 1_000_000_000_000) {
+      return false;
+    }
+    return true;
+  });
+  // Show enough of "today" that a long completed council is not pushed off by
+  // 5-row truncation when multiple projects share the list.
+  const QUEUE_VISIBLE = 12;
+  const sorted = [...cleaned]
     .sort((a, b) => (b.isActive ? 1 : 0) - (a.isActive ? 1 : 0) || (b.startedAt ?? 0) - (a.startedAt ?? 0))
-    .slice(0, 5);
+    .slice(0, QUEUE_VISIBLE);
 
   return (
     <div className="rounded border border-ink-700 bg-ink-800 p-2 space-y-1 text-[10px] min-w-0 max-w-full overflow-hidden">
@@ -29,7 +42,7 @@ export const RunQueuePanel = memo(function RunQueuePanel({ parentPath, onViewRun
       </div>
       {loading ? (
         <div className="text-ink-400 text-[9px]">Loading...</div>
-      ) : runs.length === 0 ? (
+      ) : cleaned.length === 0 ? (
         <div className="text-ink-500 text-[9px]">No runs yet</div>
       ) : (
         <div className="min-w-0 max-w-full overflow-hidden space-y-0">
@@ -42,9 +55,9 @@ export const RunQueuePanel = memo(function RunQueuePanel({ parentPath, onViewRun
               onStop={() => onStopRun?.(run.runId ?? "")}
             />
           ))}
-          {runs.length > 5 && (
+          {cleaned.length > QUEUE_VISIBLE && (
             <div className="text-[9px] text-ink-500 text-center pt-1">
-              +{runs.length - 5} more
+              +{cleaned.length - QUEUE_VISIBLE} more
             </div>
           )}
         </div>

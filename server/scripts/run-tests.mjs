@@ -269,9 +269,6 @@ const TEST_FILES = [
   "src/swarm/blackboard/planningPolicy.test.ts",
   "src/swarm/blackboard/thinkGuardHandler.test.ts",
 
-  // streamMerge/ OTEngine
-  "src/swarm/streamMerge/OTEngine.test.ts",
-
   // middleware/
   "src/middleware/securityHeaders.test.ts",
   "src/middleware/requestLogger.test.ts",

@@ -15,6 +15,7 @@ import { resolveSafe } from "./resolveSafe.js";
 import { writeFileAtomic } from "./writeFileAtomic.js";
 import { checkBuildCommand } from "./buildCommandAllowlist.js";
 import { killByPid } from "../../services/treeKill.js";
+import { withCloneApplyLock } from "../cloneApplyMutex.js";
 import type { FilesystemAdapter, GitAdapter, VerifyAdapter } from "./WorkerPipeline.js";
 
 /** Real filesystem adapter scoped to a clone. Reads return null on
@@ -161,19 +162,22 @@ export type BatchGitCommitResult =
   | { ok: false; reason: string };
 
 /** Single batch commit after auditor-gated applies (skipCommit per todo).
- *  Non-git local workspaces skip commit but still succeed — files are already on disk. */
+ *  Non-git local workspaces skip commit but still succeed — files are already on disk.
+ *  Serialized with WorkerPipeline / wrap-up apply on the same clone. */
 export async function finalizeAuditorBatchCommit(
   clonePath: string,
   message: string,
 ): Promise<BatchGitCommitResult> {
-  if (!(await isGitRepository(clonePath))) {
-    return { ok: true, skippedGit: true };
-  }
-  const commitRes = await realGitAdapter(clonePath).commitAll(message, "auditor");
-  if (commitRes.ok) {
-    return { ok: true, sha: commitRes.sha, skippedGit: false };
-  }
-  return { ok: false, reason: commitRes.reason };
+  return withCloneApplyLock(clonePath, async (_meta) => {
+    if (!(await isGitRepository(clonePath))) {
+      return { ok: true, skippedGit: true };
+    }
+    const commitRes = await realGitAdapter(clonePath).commitAll(message, "auditor");
+    if (commitRes.ok) {
+      return { ok: true, sha: commitRes.sha, skippedGit: false };
+    }
+    return { ok: false, reason: commitRes.reason };
+  });
 }
 
 /** Real git adapter scoped to a clone. commitAll: stage all changes

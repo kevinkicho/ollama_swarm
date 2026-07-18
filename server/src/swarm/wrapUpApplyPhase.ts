@@ -35,6 +35,7 @@ import type { RepoService } from "../services/RepoService.js";
 import { applyHunks, type Hunk, type ApplyMissReport } from "./blackboard/applyHunks.js";
 import { extractText } from "./extractText.js";
 import { parseWorkerResponse } from "./blackboard/prompts/worker.js";
+import { withCloneApplyLock } from "./cloneApplyMutex.js";
 import {
   realFilesystemAdapter,
   realGitAdapter,
@@ -349,8 +350,12 @@ export async function runWrapUpApplyPhase(
       input.appendSystem(
         `Wrap-up apply: worker returned 0 hunks (nothing to apply)${skipNote}`,
       );
+      // Not a successful apply — callers must not treat this as landed work.
       return {
-        ok: true,
+        ok: false,
+        reason: parsed.skip
+          ? `worker-zero-hunks: ${parsed.skip}`
+          : "worker-zero-hunks",
         hunksAttempted: 0,
         hunksApplied: 0,
       };
@@ -358,105 +363,115 @@ export async function runWrapUpApplyPhase(
     hunksToApply = parsed.hunks;
   }
 
-  // Apply + (optional verify) + commit
-  // RR-A: fail-closed multi-file apply (no partial land via applyBaselineHunks).
-  // Live 9f449937: wrap-up 16→0 or mixed partials left confusing state.
-  const fsAdapter = realFilesystemAdapter(input.clonePath);
-  const gitAdapter = realGitAdapter(input.clonePath);
-  const touchedFiles = Array.from(new Set(hunksToApply.map((h) => h.file)));
-  const preHunkContents: Record<string, string | null> = {};
-  // Always snapshot for integrity + verify revert (cheap vs wrong partial write).
-  for (const f of touchedFiles) {
-    try {
-      preHunkContents[f] = await fsAdapter.read(f);
-    } catch {
-      preHunkContents[f] = null;
+  // Apply + (optional verify) + commit — serialized per clone with other
+  // workers (council/blackboard) so git add -A cannot interleave.
+  // Disk re-read happens *inside* the lock (below) so peer commits are visible.
+  return withCloneApplyLock(input.clonePath, async (lockMeta) => {
+    const fsAdapter = realFilesystemAdapter(input.clonePath);
+    const gitAdapter = realGitAdapter(input.clonePath);
+    const touchedFiles = Array.from(new Set(hunksToApply.map((h) => h.file)));
+    const preHunkContents: Record<string, string | null> = {};
+    for (const f of touchedFiles) {
+      try {
+        preHunkContents[f] = await fsAdapter.read(f);
+      } catch {
+        preHunkContents[f] = null;
+      }
     }
-  }
-  try {
-    noteApplyAttempt(input.runId);
-    const pure = applyHunks(preHunkContents, hunksToApply);
-    if (!pure.ok) {
-      noteApplyMiss(pure.miss?.kind ?? "other", input.runId);
+    try {
+      noteApplyAttempt(input.runId);
+      const pure = applyHunks(preHunkContents, hunksToApply);
+      if (!pure.ok) {
+        noteApplyMiss(pure.miss?.kind ?? "other", input.runId);
+        const lockDiag = lockMeta.contended
+          ? ` [clone-lock-contended waited=${lockMeta.waitedMs}ms — re-read under lock; peer may have landed first]`
+          : "";
+        input.appendSystem(
+          `Wrap-up apply: ${hunksToApply.length} hunk(s) returned, 0 applied (fail-closed) — ${pure.error}` +
+            (pure.miss?.kind ? ` [miss=${pure.miss.kind}]` : "") +
+            lockDiag,
+        );
+        return {
+          ok: false,
+          reason: `0 of ${hunksToApply.length} hunks landed: ${pure.error}${lockDiag}`,
+          hunksAttempted: hunksToApply.length,
+          hunksApplied: 0,
+        };
+      }
+      for (const [file, content] of Object.entries(pure.newTextsByFile)) {
+        await fsAdapter.write(file, content);
+      }
+      const applied = hunksToApply.length;
+      if (input.verifyCommand) {
+        const verify = realVerifyAdapter(input.clonePath, input.verifyCommand);
+        const v = await verify.run();
+        if (!v.ok) {
+          for (const f of touchedFiles) {
+            const before = preHunkContents[f];
+            try {
+              if (before === null) {
+                if (typeof fsAdapter.delete === "function") {
+                  await fsAdapter.delete(f);
+                } else {
+                  await fsAdapter.write(f, "");
+                }
+              } else {
+                await fsAdapter.write(f, before);
+              }
+            } catch {
+              // best-effort
+            }
+          }
+          input.appendSystem(
+            `Wrap-up apply: ${applied} hunk(s) applied but verify gate failed — reverted. ${v.reason.slice(0, 400)}`,
+          );
+          return {
+            ok: false,
+            reason: `verify failed: ${v.reason.slice(0, 400)}`,
+            hunksAttempted: hunksToApply.length,
+            hunksApplied: 0,
+            verifyFailed: true,
+          };
+        }
+      }
+      const commitMsg = `${input.presetName} wrap-up: ${directive.slice(0, 60)}`;
+      const commitResult = await gitAdapter.commitAll(
+        commitMsg,
+        `${input.presetName}-wrap-up`,
+      );
+      if (!commitResult.ok) {
+        input.appendSystem(
+          `Wrap-up apply: ${applied} hunk(s) applied to disk but commit failed — ${commitResult.reason}`,
+        );
+        return {
+          ok: false,
+          reason: commitResult.reason,
+          hunksAttempted: hunksToApply.length,
+          hunksApplied: applied,
+        };
+      }
+      noteApplySuccess(input.runId);
+      const verifyTag = input.verifyCommand ? " (verify ✓)" : "";
       input.appendSystem(
-        `Wrap-up apply: ${hunksToApply.length} hunk(s) returned, 0 applied (fail-closed) — ${pure.error}` +
-          (pure.miss?.kind ? ` [miss=${pure.miss.kind}]` : ""),
+        `Wrap-up apply: ${applied}/${hunksToApply.length} hunk(s) applied → committed${verifyTag} (${commitResult.sha.slice(0, 7)}).`,
       );
       return {
+        ok: true,
+        hunksAttempted: hunksToApply.length,
+        hunksApplied: applied,
+        commitSha: commitResult.sha,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      input.appendSystem(`Wrap-up apply: apply/commit failed — ${msg}`);
+      return {
         ok: false,
-        reason: `0 of ${hunksToApply.length} hunks landed: ${pure.error}`,
+        reason: msg,
         hunksAttempted: hunksToApply.length,
         hunksApplied: 0,
       };
     }
-    // All files clean — write as a batch only after pure apply succeeds.
-    for (const [file, content] of Object.entries(pure.newTextsByFile)) {
-      await fsAdapter.write(file, content);
-    }
-    const applied = hunksToApply.length;
-    // T171: pre-commit verify gate. Mirrors WorkerPipeline.applyAndCommit.
-    if (input.verifyCommand) {
-      const verify = realVerifyAdapter(input.clonePath, input.verifyCommand);
-      const v = await verify.run();
-      if (!v.ok) {
-        for (const f of touchedFiles) {
-          const before = preHunkContents[f];
-          if (before === null) continue;
-          try {
-            await fsAdapter.write(f, before);
-          } catch {
-            // best-effort
-          }
-        }
-        input.appendSystem(
-          `Wrap-up apply: ${applied} hunk(s) applied but verify gate failed — reverted. ${v.reason.slice(0, 400)}`,
-        );
-        return {
-          ok: false,
-          reason: `verify failed: ${v.reason.slice(0, 400)}`,
-          hunksAttempted: hunksToApply.length,
-          hunksApplied: applied,
-          verifyFailed: true,
-        };
-      }
-    }
-    const commitMsg = `${input.presetName} wrap-up: ${directive.slice(0, 60)}`;
-    const commitResult = await gitAdapter.commitAll(
-      commitMsg,
-      `${input.presetName}-wrap-up`,
-    );
-    if (!commitResult.ok) {
-      input.appendSystem(
-        `Wrap-up apply: ${applied} hunk(s) applied to disk but commit failed — ${commitResult.reason}`,
-      );
-      return {
-        ok: false,
-        reason: commitResult.reason,
-        hunksAttempted: hunksToApply.length,
-        hunksApplied: applied,
-      };
-    }
-    noteApplySuccess(input.runId);
-    const verifyTag = input.verifyCommand ? " (verify ✓)" : "";
-    input.appendSystem(
-      `Wrap-up apply: ${applied}/${hunksToApply.length} hunk(s) applied → committed${verifyTag} (${commitResult.sha.slice(0, 7)}).`,
-    );
-    return {
-      ok: true,
-      hunksAttempted: hunksToApply.length,
-      hunksApplied: applied,
-      commitSha: commitResult.sha,
-    };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    input.appendSystem(`Wrap-up apply: apply/commit failed — ${msg}`);
-    return {
-      ok: false,
-      reason: msg,
-      hunksAttempted: hunksToApply.length,
-      hunksApplied: 0,
-    };
-  }
+  });
 }
 
 // T2.2 orchestration helper. Each opt-in runner (council, MoA,

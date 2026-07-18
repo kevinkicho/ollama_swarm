@@ -215,6 +215,11 @@ export interface LifecycleContext {
   killAll(): Promise<KillAllResult>;
   flushStateWrite(): Promise<void>;
   stop(): Promise<void>;
+  /** Background planAndExecute handle — set at start, cleared when work ends. */
+  getPlanAndExecutePromise(): Promise<void> | null;
+  setPlanAndExecutePromise(p: Promise<void> | null): void;
+  /** Reset per-run stigmergy heatmap (isolation across sequential runs). */
+  clearPheromoneHeatmap(): void;
   stopQueueReaper(): void;
   stopCapWatchdog(): void;
   stopReplanWatcher(): void;
@@ -492,14 +497,24 @@ export async function start(ctx: LifecycleContext, cfg: RunConfig): Promise<void
   // finally block runs async ops (writeRunSummary, runAuditor) that can
   // throw on their own. Defense in depth: surface any leak as an error
   // event so the UI doesn't hang in "planning" forever.
-  planAndExecute(ctx, planner, workers, seed).catch((err) => {
-    const msg = err instanceof Error ? err.message : String(err);
-    ctx.emit({ type: "error", message: `Run aborted (unhandled): ${msg}` });
-    ctx.appendSystem(`Run aborted (unhandled): ${msg}`);
-    void ctx.stop().catch((err) => {
-      ctx.appendSystem(`⚠ lifecycle stopAfterAbort: ${err instanceof Error ? err.message : String(err)}`);
+  // Hold the promise so stop()/waitUntilSettled can join before resource release.
+  const work = planAndExecute(ctx, planner, workers, seed)
+    .catch((err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.emit({ type: "error", message: `Run aborted (unhandled): ${msg}` });
+      ctx.appendSystem(`Run aborted (unhandled): ${msg}`);
+      void ctx.stop().catch((stopErr) => {
+        ctx.appendSystem(
+          `⚠ lifecycle stopAfterAbort: ${stopErr instanceof Error ? stopErr.message : String(stopErr)}`,
+        );
+      });
+    })
+    .finally(() => {
+      if (ctx.getPlanAndExecutePromise() === work) {
+        ctx.setPlanAndExecutePromise(null);
+      }
     });
-  });
+  ctx.setPlanAndExecutePromise(work);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     ctx.setStartupCrashMessage(msg);

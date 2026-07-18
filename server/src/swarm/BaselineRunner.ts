@@ -36,6 +36,7 @@ import { formatChatReceipt } from "./chatReceipt.js";
 import { applyHunks, type Hunk } from "./blackboard/applyHunks.js";
 import { parseWorkerResponse } from "./blackboard/prompts/worker.js";
 import { realFilesystemAdapter, realGitAdapter } from "./blackboard/v2Adapters.js";
+import { withCloneApplyLock } from "./cloneApplyMutex.js";
 import simpleGit from "simple-git";
 // T192: import the self-critique helpers shipped in T179.
 // Note: forward-references (the helpers are defined below the class
@@ -344,36 +345,44 @@ export class BaselineRunner implements SwarmRunner {
     this.result.hunksAttempted = finalHunks.length;
     this.result.verifyPassed = winner.critiquePassed;
     try {
-      const result = await applyBaselineHunks({
-        hunks: finalHunks,
-        fs: fsAdapter,
-      });
-      if (result.applied === 0) {
-        this.appendSystem(
-          `Baseline produced ${finalHunks.length} hunk(s) but 0 applied: ${result.reasons.join("; ")}`,
+      // Serialize with other clone writers (same mutex as WorkerPipeline).
+      // applyBaselineHunks re-reads under the lock via fsAdapter.
+      await withCloneApplyLock(destPath, async (lockMeta) => {
+        const result = await applyBaselineHunks({
+          hunks: finalHunks,
+          fs: fsAdapter,
+        });
+        if (result.applied === 0) {
+          const lockDiag = lockMeta.contended
+            ? ` [clone-lock-contended waited=${lockMeta.waitedMs}ms]`
+            : "";
+          this.appendSystem(
+            `Baseline produced ${finalHunks.length} hunk(s) but 0 applied: ${result.reasons.join("; ")}${lockDiag}`,
+          );
+          this.setPhase("completed");
+          return;
+        }
+        const commitResult = await gitAdapter.commitAll(
+          `baseline: ${directive.slice(0, 60)}`,
+          "baseline-agent",
         );
-        this.setPhase("completed");
-        return;
-      }
-      const commitResult = await gitAdapter.commitAll(
-        `baseline: ${directive.slice(0, 60)}`,
-        "baseline-agent",
-      );
-      // T-Item-1: capture commit SHA for harness scoring.
-      this.result.hunksApplied = result.applied;
-      if (commitResult.ok) {
-        this.result.commitSha = commitResult.sha;
-      }
-      this.appendSystem(
-        `Baseline applied ${result.applied}/${finalHunks.length} hunk(s) and committed.`,
-      );
+        this.result.hunksApplied = result.applied;
+        if (commitResult.ok) {
+          this.result.commitSha = commitResult.sha;
+        }
+        this.appendSystem(
+          `Baseline applied ${result.applied}/${finalHunks.length} hunk(s) and committed.`,
+        );
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.appendSystem(`Baseline apply/commit failed: ${msg}`);
       this.setPhase("failed");
       return;
     }
-    this.setPhase("completed");
+    if (this.phase !== "failed") {
+      this.setPhase("completed");
+    }
   }
 
   private setPhase(p: SwarmPhase): void {

@@ -150,8 +150,10 @@ describe("openCodeModelRouting", () => {
 
   it("classifies all documented Go models per opencode.ai/docs/go", () => {
     const chatModels = [
+      "grok-4.5",
       "glm-5.2",
       "glm-5.1",
+      "kimi-k3",
       "kimi-k2.7-code",
       "kimi-k2.6",
       "deepseek-v4-pro",

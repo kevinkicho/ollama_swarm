@@ -78,6 +78,62 @@ function failWithMiss(
   };
 }
 
+/** Normalize a single line for fuzzy block matching. */
+function normLine(line: string): string {
+  return line.trimEnd().replace(/[ \t]+/g, " ");
+}
+
+/**
+ * Find a unique multi-line match under per-line whitespace normalization.
+ * Returns original-text offsets so replace preserves surrounding content.
+ */
+export function findUniqueLineBlockMatch(
+  text: string,
+  search: string,
+): { start: number; end: number } | null {
+  const searchLines = normalizeSearchWhitespace(search).split("\n").map(normLine);
+  // Drop trailing empty lines (search often ends with `\n` → ["content", ""]).
+  while (searchLines.length > 0 && searchLines[searchLines.length - 1] === "") {
+    searchLines.pop();
+  }
+  if (searchLines.length === 0 || searchLines.every((l) => l.length === 0)) {
+    return null;
+  }
+  // Single-line short needles are too ambiguous for fuzzy line matching.
+  if (searchLines.length === 1 && searchLines[0]!.length < 12) {
+    return null;
+  }
+
+  const fileLines = text.split("\n");
+  const starts: number[] = [];
+  let off = 0;
+  for (let i = 0; i < fileLines.length; i++) {
+    starts.push(off);
+    off += fileLines[i]!.length + (i < fileLines.length - 1 ? 1 : 0);
+  }
+
+  const hits: number[] = [];
+  const maxStart = fileLines.length - searchLines.length;
+  for (let i = 0; i <= maxStart; i++) {
+    let ok = true;
+    for (let j = 0; j < searchLines.length; j++) {
+      if (normLine(fileLines[i + j]!) !== searchLines[j]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) hits.push(i);
+    if (hits.length > 1) return null;
+  }
+  if (hits.length !== 1) return null;
+
+  const i = hits[0]!;
+  const last = i + searchLines.length - 1;
+  const start = starts[i]!;
+  const end = starts[last]! + fileLines[last]!.length;
+  return { start, end };
+}
+
 // Apply all hunks for a single file in sequence. Each hunk sees the output
 // of the previous one — so a second "replace" can target text produced by
 // the first. Callers that don't want this coupling should split into
@@ -253,6 +309,8 @@ export function applyFileHunks(
       case "replace": {
         let search = h.search;
         let count = countOccurrences(text, search);
+        let matchStart = count === 1 ? text.indexOf(search) : -1;
+        let matchEnd = matchStart >= 0 ? matchStart + search.length : -1;
 
         // Fuzzy fallback: trailing whitespace and line-ending drift are
         // the most common source of search mismatches. Try normalized
@@ -264,7 +322,21 @@ export function applyFileHunks(
             if (normCount === 1) {
               search = normalized;
               count = 1;
+              matchStart = text.indexOf(search);
+              matchEnd = matchStart + search.length;
             }
+          }
+        }
+
+        // Line-block fuzzy: per-line trimEnd + internal space collapse
+        // (83dc5910 HTML workers: indent / multi-space drift in tab markup).
+        if (count === 0) {
+          const block = findUniqueLineBlockMatch(text, search);
+          if (block) {
+            count = 1;
+            matchStart = block.start;
+            matchEnd = block.end;
+            search = text.slice(matchStart, matchEnd);
           }
         }
 
@@ -299,8 +371,9 @@ export function applyFileHunks(
             focusOffset: text.indexOf(search),
           });
         }
-        const idx = text.indexOf(search);
-        text = text.slice(0, idx) + h.replace + text.slice(idx + search.length);
+        const idx = matchStart >= 0 ? matchStart : text.indexOf(search);
+        const end = matchEnd >= 0 ? matchEnd : idx + search.length;
+        text = text.slice(0, idx) + h.replace + text.slice(end);
         break;
       }
       default: {

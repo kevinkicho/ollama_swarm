@@ -5,11 +5,12 @@
 //
 // 2026-05-03: extended to accept a `provider` arg. The server's
 // /api/models route dispatches:
-//   - default / "ollama":  /api/tags discovery
+//   - default / "ollama":  local Ollama /api/tags discovery
+//   - "ollama-cloud":      https://ollama.com/api/tags (API names → :cloud tags)
 //   - "anthropic":         /v1/models discovery (Anthropic key required)
 //   - "openai":            /v1/models discovery (OpenAI key required)
 //   - "opencode":          OpenCode Go /zen/go/v1/models + Zen /zen/v1/models
-// Each paid-provider response is server-side cached for 24h. On
+// Each paid/cloud response is server-side cached for 24h. On
 // missing key / network error the server falls back to the hardcoded
 // list in shared/providers.ts and reports `source: "fallback"`.
 //

@@ -4,7 +4,10 @@ import {
   type ThinkGuardSession,
 } from "@ollama-swarm/shared/streamThinkGuard";
 import { ThinkGuardAbortError } from "@ollama-swarm/shared/thinkGuardErrors";
-import { sniffJsonFormatStream } from "@ollama-swarm/shared/jsonFormatSniff";
+import {
+  sniffJsonFormatStream,
+  JSON_FORMAT_THINK_ONLY_EMIT_MAX_CHARS,
+} from "@ollama-swarm/shared/jsonFormatSniff";
 
 export type PromptGuardOpts = {
   /** Idle wall-clock: resets on each stream chunk (provider still talking). */
@@ -34,6 +37,13 @@ export type PromptGuardOpts = {
    * (run eee6718f: 12× primary failed on pure <think> with no JSON).
    */
   formatExpect?: "json" | "free";
+  /**
+   * Override think-only char cap for json format sniff (emit-biased prompts
+   * use a tighter default via JSON_FORMAT_THINK_ONLY_EMIT_MAX_CHARS).
+   */
+  jsonThinkOnlyMaxChars?: number;
+  /** explore | emit — only emit uses the tight think-only floor. */
+  activityMode?: "explore" | "emit";
 };
 
 /** Resolve absolute prompt ceiling (fail-closed hung/runaway stream). */
@@ -126,7 +136,19 @@ export function composePromptGuardSignals(
       }
       // Think-aware JSON format sniff (Ollama path — previously dead option).
       if (opts.formatExpect === "json" && !formatSniffDone) {
-        const sniff = sniffJsonFormatStream(text);
+        // Emit-only tight floor — NOT all kind:"contract" (shared explore is
+        // also kind contract + mode explore; run 6b17f137: 8k sniff aborted
+        // explore mid-think → Start failed / crash recovery).
+        const emitBiased =
+          opts.activityMode === "emit"
+          || opts.activityKind === "ambition"
+          || opts.activityKind === "planner-todos"
+          || opts.activityKind === "replan";
+        const sniff = sniffJsonFormatStream(text, {
+          thinkOnlyMax:
+            opts.jsonThinkOnlyMaxChars
+            ?? (emitBiased ? JSON_FORMAT_THINK_ONLY_EMIT_MAX_CHARS : undefined),
+        });
         if (!sniff.ok) {
           formatSniffDone = true;
           trip.abort(

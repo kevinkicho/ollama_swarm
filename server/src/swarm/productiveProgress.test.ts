@@ -9,6 +9,9 @@ import {
   formatNoProductiveProgressReason,
   DEFAULT_ZERO_PROGRESS_LIMIT,
   MAX_STRETCH_WAVES_PER_RUN,
+  MAX_CRITERION_PROGRESS_WAVES_PER_RUN,
+  mintProgressTodosFromUnmetCriteria,
+  todoProgressSignature,
 } from "./productiveProgress.js";
 
 describe("isDurableProgress / isProductiveCycle", () => {
@@ -112,7 +115,60 @@ describe("formatNoProductiveProgressReason", () => {
 });
 
 describe("MAX_STRETCH_WAVES_PER_RUN", () => {
-  it("is a small positive cap", () => {
-    assert.ok(MAX_STRETCH_WAVES_PER_RUN >= 1 && MAX_STRETCH_WAVES_PER_RUN <= 3);
+  it("allows multi-wave stretch for long autonomous runs", () => {
+    assert.ok(MAX_STRETCH_WAVES_PER_RUN >= 3 && MAX_STRETCH_WAVES_PER_RUN <= 6);
+  });
+});
+
+describe("mintProgressTodosFromUnmetCriteria", () => {
+  it("mints one todo per criterion with files", () => {
+    const todos = mintProgressTodosFromUnmetCriteria([
+      {
+        id: "c1",
+        description: "Expand modules to 10 tabs",
+        expectedFiles: ["01_complex_explorer.html", "02_penrose_tiling.html"],
+      },
+      {
+        id: "c2",
+        description: "Add tours",
+        expectedFiles: ["tour-data.js"],
+      },
+    ]);
+    assert.equal(todos.length, 2);
+    assert.equal(todos[0]!.createdBy, "criterion-progress");
+    assert.ok(todos[0]!.description.includes("c1"));
+    assert.deepEqual(todos[0]!.expectedFiles, [
+      "01_complex_explorer.html",
+      "02_penrose_tiling.html",
+    ]);
+    assert.equal(todos[1]!.criterionId, "c2");
+  });
+
+  it("skips file-less criteria and avoid signatures", () => {
+    const first = mintProgressTodosFromUnmetCriteria([
+      { id: "c1", description: "Expand tabs", expectedFiles: ["a.html"] },
+    ]);
+    const sig = todoProgressSignature(first[0]!.description, first[0]!.expectedFiles);
+    const second = mintProgressTodosFromUnmetCriteria(
+      [
+        { id: "c1", description: "Expand tabs", expectedFiles: ["a.html"] },
+        { id: "c2", description: "No files", expectedFiles: [] },
+      ],
+      { avoidSignatures: new Set([sig]) },
+    );
+    assert.equal(second.length, 0);
+  });
+
+  it("uses fallbackFiles when criterion lists none", () => {
+    const todos = mintProgressTodosFromUnmetCriteria(
+      [{ description: "Improve docs", expectedFiles: [] }],
+      { fallbackFiles: ["README.md"] },
+    );
+    assert.equal(todos.length, 1);
+    assert.deepEqual(todos[0]!.expectedFiles, ["README.md"]);
+  });
+
+  it("exposes a generous criterion-progress wave budget", () => {
+    assert.ok(MAX_CRITERION_PROGRESS_WAVES_PER_RUN >= 3);
   });
 });

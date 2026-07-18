@@ -9,61 +9,17 @@ import {
   type ResolvedThinking,
   type ResolvedToolTraceEntry,
 } from "./AgentThinking";
-import { extractFirstBalancedJson } from "../../../../shared/src/extractJson";
+// Task #74 (2026-04-25): readable diff renderer for worker_hunks.
+// Soft-parse + replace_between/write live in shared tryParseWorkerHunks
+// (2010479c: raw JSON bubbles when client parse only knew replace/create/append).
+import {
+  tryParseWorkerHunks as parseSharedWorkerHunks,
+  type ParsedHunk as SharedParsedHunk,
+} from "@ollama-swarm/shared/workerHunks";
 
-// Task #74 (2026-04-25): readable diff renderer for worker_hunks
-// envelopes. Parses the JSON, renders one block per hunk: op + file
-// header, then search/replace as stacked code blocks (red for what
-// the worker is removing, green for what it's adding). Create / append
-// ops only show the green "added" block. Falls back to AgentJsonBubble
-// when the JSON is malformed or doesn't contain a hunks array.
-interface ParsedHunk {
-  op: "replace" | "create" | "append";
-  file: string;
-  search?: string;
-  replace?: string;
-  content?: string;
-}
-function parseLooseJson(raw: string): unknown {
-  const s = raw.trim();
-  if (!s) return undefined;
-  // 1. Strict parse first.
-  try { return JSON.parse(s); } catch { /* fall through */ }
-  // 2. ```json ... ``` fence stripping.
-  const fence = /```(?:json)?\s*\n?([\s\S]*?)\n?```/m.exec(s);
-  if (fence) {
-    try { return JSON.parse(fence[1]!.trim()); } catch { /* fall through */ }
-  }
-  // 3. First-balanced extract — handles models that hallucinate
-  //    chat-template continuation after the real response (gemma4
-  //    observed in run b6d91d13 producing 17KB of fake "next prompt"
-  //    cycles after a valid hunks JSON). The depth-counting extractor
-  //    correctly stops at the first complete object.
-  const firstBalanced = extractFirstBalancedJson(s);
-  if (firstBalanced) {
-    try { return JSON.parse(firstBalanced); } catch { /* fall through */ }
-  }
-  return undefined;
-}
+export type ParsedHunk = SharedParsedHunk;
 export function tryParseWorkerHunks(rawJson: string): ParsedHunk[] | null {
-  const parsed = parseLooseJson(rawJson);
-  if (typeof parsed !== "object" || parsed === null) return null;
-  const hunks = (parsed as { hunks?: unknown }).hunks;
-  if (!Array.isArray(hunks)) return null;
-  const out: ParsedHunk[] = [];
-  for (const h of hunks) {
-    if (typeof h !== "object" || h === null) continue;
-    const ho = h as Record<string, unknown>;
-    const op = ho.op;
-    const file = ho.file;
-    if (typeof op !== "string" || typeof file !== "string") continue;
-    if (op === "replace" && typeof ho.search === "string" && typeof ho.replace === "string") {
-      out.push({ op, file, search: ho.search, replace: ho.replace });
-    } else if ((op === "create" || op === "append") && typeof ho.content === "string") {
-      out.push({ op, file, content: ho.content });
-    }
-  }
-  return out.length > 0 ? out : null;
+  return parseSharedWorkerHunks(rawJson);
 }
 export const WorkerHunksBubble = memo(function WorkerHunksBubble({
   summary,
@@ -175,7 +131,14 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
   );
 });
 const HunkBlock = memo(function HunkBlock({ hunk: h, index }: { hunk: ParsedHunk; index: number }) {
-  const opColor = h.op === "replace" ? "text-amber-300" : h.op === "create" ? "text-emerald-300" : "text-sky-300";
+  const opColor =
+    h.op === "replace" || h.op === "replace_between"
+      ? "text-amber-300"
+      : h.op === "create" || h.op === "write"
+        ? "text-emerald-300"
+        : h.op === "delete"
+          ? "text-rose-300"
+          : "text-sky-300";
   const counts = countHunkLines(h);
   return (
     <div className="rounded border border-ink-700 overflow-hidden">
@@ -183,8 +146,6 @@ const HunkBlock = memo(function HunkBlock({ hunk: h, index }: { hunk: ParsedHunk
         <span className="text-ink-500">#{index + 1}</span>
         <span className={`uppercase font-semibold ${opColor}`}>{h.op}</span>
         <span className="text-ink-300 break-all flex-1 min-w-0 truncate" title={h.file}>{h.file}</span>
-        {/* Line counters — right-aligned, hidden when 0 (per Kevin's
-            review: don't show "+0" or "-0" noise). */}
         {counts.added > 0 ? (
           <span className="text-emerald-300 tabular-nums shrink-0">+{counts.added}</span>
         ) : null}
@@ -197,9 +158,21 @@ const HunkBlock = memo(function HunkBlock({ hunk: h, index }: { hunk: ParsedHunk
           <DiffPane label="− search" text={h.search ?? ""} accent="bg-rose-950/40 border-rose-900/40 text-rose-200" />
           <DiffPane label="+ replace" text={h.replace ?? ""} accent="bg-emerald-950/40 border-emerald-900/40 text-emerald-200" />
         </>
+      ) : h.op === "replace_between" ? (
+        <>
+          <DiffPane label="start" text={h.start ?? ""} accent="bg-ink-900/60 border-ink-700 text-ink-300" />
+          {h.endExclusive ? (
+            <DiffPane label="endExclusive" text={h.endExclusive} accent="bg-ink-900/60 border-ink-700 text-ink-300" />
+          ) : (
+            <div className="border-t border-ink-700 px-2 py-0.5 text-[10px] text-ink-500">endExclusive: EOF</div>
+          )}
+          <DiffPane label="+ replace" text={h.replace ?? ""} accent="bg-emerald-950/40 border-emerald-900/40 text-emerald-200" />
+        </>
+      ) : h.op === "delete" ? (
+        <div className="border-t border-ink-700 px-2 py-1 text-[11px] text-rose-300">delete file</div>
       ) : (
         <DiffPane
-          label={h.op === "create" ? "+ new file" : "+ append"}
+          label={h.op === "create" ? "+ new file" : h.op === "write" ? "+ write" : "+ append"}
           text={h.content ?? ""}
           accent="bg-emerald-950/40 border-emerald-900/40 text-emerald-200"
         />
@@ -220,6 +193,12 @@ function countLines(s: string): number {
 function countHunkLines(h: ParsedHunk): { added: number; removed: number } {
   if (h.op === "replace") {
     return { added: countLines(h.replace ?? ""), removed: countLines(h.search ?? "") };
+  }
+  if (h.op === "replace_between") {
+    return { added: countLines(h.replace ?? ""), removed: 0 };
+  }
+  if (h.op === "delete") {
+    return { added: 0, removed: 0 };
   }
   return { added: countLines(h.content ?? ""), removed: 0 };
 }

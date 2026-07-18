@@ -54,6 +54,14 @@ export class OllamaProvider implements SessionProvider {
 
     let usagePrompt = 0;
     let usageResponse = 0;
+    // Merge Ollama-only extras (think / keep_alive / role options). Never set
+    // by OpenCode path — only this provider forwards them to OllamaClient.
+    const ollamaOpts = opts.ollama;
+    const mergedOptions = {
+      ...(opts.options ?? {}),
+      ...(ollamaOpts?.options ?? {}),
+      ...(extra.options ?? {}),
+    };
     const result = await ollamaChat({
       baseUrl: this.baseUrl,
       model: opts.model,
@@ -61,7 +69,7 @@ export class OllamaProvider implements SessionProvider {
       signal: opts.signal,
       idleTimeoutMs: opts.idleTimeoutMs,
       firstChunkTimeoutMs: opts.firstChunkTimeoutMs,
-      options: extra.options ?? opts.options,
+      options: Object.keys(mergedOptions).length > 0 ? mergedOptions : undefined,
       logDiag: opts.logDiag,
       agentId: opts.agentId,
       runId: opts.runId,
@@ -73,6 +81,8 @@ export class OllamaProvider implements SessionProvider {
       ...(extra.onChunk ? { onChunk: extra.onChunk } : opts.onChunk ? { onChunk: opts.onChunk } : {}),
       ...(extra.format !== undefined ? { format: extra.format } : opts.format !== undefined ? { format: opts.format } : {}),
       ...(extra.tools && extra.tools.length > 0 ? { tools: extra.tools } : {}),
+      ...(ollamaOpts?.think !== undefined ? { think: ollamaOpts.think } : {}),
+      ...(ollamaOpts?.keepAlive !== undefined ? { keep_alive: ollamaOpts.keepAlive } : {}),
     });
 
     return {

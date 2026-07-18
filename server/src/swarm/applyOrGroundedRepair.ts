@@ -2,8 +2,9 @@
  * Shared apply → grounded repair → re-apply core (RR-A / RR-B).
  * Callers supply model invoke; this module stays free of runner types.
  *
- * Optional SWARM_APPLY_DETERMINISTIC_CANDIDATE=1 tries uniqueCandidates[0]
- * before the LLM on *_not_found misses (default off).
+ * Deterministic uniqueCandidates[0] is tried before the LLM by default
+ * (83dc5910: 25/32 search_not_found with repairFailures=24 when opt-in only).
+ * Set SWARM_APPLY_DETERMINISTIC_CANDIDATE=0 to disable.
  */
 
 import {
@@ -35,9 +36,10 @@ export interface ApplyOrGroundedRepairInput {
   callModel: (repairPrompt: string) => Promise<string>;
   maxGroundedRepairs?: number;
   /**
-   * When true (or env SWARM_APPLY_DETERMINISTIC_CANDIDATE=1), try
+   * When true, or when unset and env is not explicitly off, try
    * uniqueCandidates[0] as search/start rewrite before calling the model.
    * Only for search_not_found / start_not_found when candidate is unique.
+   * Pass false to force-disable for a single call.
    */
   tryDeterministicCandidate?: boolean;
   /** Env bag for flag (defaults to process.env). */
@@ -57,13 +59,16 @@ export interface ApplyOrGroundedRepairResult {
   deterministicCandidate?: boolean;
 }
 
-/** Opt-in env flag for deterministic uniqueCandidates[0] try. */
+/**
+ * Deterministic uniqueCandidates[0] try — **default ON**.
+ * Disable with SWARM_APPLY_DETERMINISTIC_CANDIDATE=0|false|no|off.
+ */
 export function isDeterministicCandidateEnabled(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return /^(1|true|yes)$/i.test(
-    (env.SWARM_APPLY_DETERMINISTIC_CANDIDATE ?? "").trim(),
-  );
+  const v = (env.SWARM_APPLY_DETERMINISTIC_CANDIDATE ?? "1").trim();
+  if (v === "") return true;
+  return !/^(0|false|no|off)$/i.test(v);
 }
 
 /**

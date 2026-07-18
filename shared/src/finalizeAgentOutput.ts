@@ -158,7 +158,9 @@ export function formatFinalizeAnomalyLine(
       return `collapsed ~${a.count}×${a.phraseLen}c loop (−${a.removedChars.toLocaleString()} chars)`;
     }
     if (a.kind === "hard_truncated") {
-      return `hard-truncated ${a.field} from ${a.originalChars.toLocaleString()}`;
+      // Storage cap for transcript bubbles — does not cut the model mid-generation
+      // and does not replace the raw buffer used for JSON apply (see parse path).
+      return `hard-truncated ${a.field} from ${a.originalChars.toLocaleString()} (transcript storage cap)`;
     }
     return a.kind;
   });

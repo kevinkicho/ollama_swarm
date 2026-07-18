@@ -39,7 +39,7 @@ describe("resolveReplanPolicy", () => {
   it("emit-first for worker timeout", () => {
     const p = resolveReplanPolicy("prompt wall-clock exceeded 120000ms");
     assert.equal(p.emitFirst, true);
-    assert.equal(p.maxToolTurns, 8);
+    assert.equal(p.maxToolTurns, 6);
   });
 
   it("zero tools when batch breaker or cache", () => {

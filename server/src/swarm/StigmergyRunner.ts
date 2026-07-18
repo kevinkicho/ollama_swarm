@@ -44,7 +44,7 @@ import {
   formatAnnotations,
   describeSdkError,
 } from "./stigmergyPromptHelpers.js";
-import { pheromoneHeatmap } from "./pheromoneHeatmap.js";
+import { PheromoneHeatmap } from "./pheromoneHeatmap.js";
 
 // Stigmergy / pheromone trails — repo exploration mode.
 // No central planner, no role assignment. Agents post annotations on
@@ -67,6 +67,8 @@ export class StigmergyRunner extends DiscussionRunnerBase {
   // The annotation table — the shared "pheromone" state. File path →
   // aggregated annotation. Updated after each agent's turn.
   private annotations = new Map<string, AnnotationState>();
+  /** Per-run heatmap for UI / cross-preset bias — never process-global. */
+  private pheromoneHeatmap = new PheromoneHeatmap();
   // T197 (2026-05-04): import graph for cross-cluster discovery.
   // Built lazily on first applyAnnotation call when cfg.crossClusterDiscovery
   // is set. null = not yet built; empty Map = built but no edges
@@ -108,6 +110,7 @@ export class StigmergyRunner extends DiscussionRunnerBase {
     if (this.isRunning()) throw new Error("A swarm is already running. Stop it first.");
     this.resetState(cfg);
     this.annotations = new Map();
+    this.pheromoneHeatmap.clear();
     this.rankingHistory = [];
 
     const { destPath, ready } = await this.initCloneAndSpawn(cfg, {
@@ -152,6 +155,7 @@ export class StigmergyRunner extends DiscussionRunnerBase {
       logDiag: this.opts.logDiag,
       transcript: this.transcript,
       annotations: this.annotations,
+      pheromoneHeatmap: this.pheromoneHeatmap,
       territoryAssignments: this.territoryAssignments,
       round: this.round,
       active: this.active,

@@ -26,7 +26,7 @@ import {
   parseTerritoryPlan,
   describeSdkError,
 } from "./stigmergyPromptHelpers.js";
-import { pheromoneHeatmap } from "./pheromoneHeatmap.js";
+import type { PheromoneHeatmap } from "./pheromoneHeatmap.js";
 import {
   isSaturated,
   pickNextFileWithDecay,
@@ -39,6 +39,8 @@ export interface StigmergyTurnsHost {
   logDiag?: (entry: unknown) => void;
   transcript: TranscriptEntry[];
   annotations: Map<string, AnnotationState>;
+  /** Per-run heatmap (never process-global). */
+  pheromoneHeatmap: PheromoneHeatmap;
   territoryAssignments: Map<number, string>;
   round: number;
   active: RunConfig | undefined;
@@ -367,7 +369,7 @@ agent: Agent,
   if (parsedAnn) {
     const ann = parsedAnn as ParsedAnnotation;
     host.applyAnnotation(ann);
-    pheromoneHeatmap.updateFromAnnotations(host.annotations, host.round);
+    host.pheromoneHeatmap.updateFromAnnotations(host.annotations, host.round);
     host.appendSystem(
       `Annotation update — ${ann.file}: interest=${ann.interest}, confidence=${ann.confidence}, total visits=${host.annotations.get(ann.file)?.visits ?? 0}`,
     );

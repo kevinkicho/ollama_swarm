@@ -122,7 +122,14 @@ export function classifyError(input: {
   if (/\b(cap.*reached|wall.?clock|commits cap|todos cap)\b/i.test(lower)) {
     return makeRecord("cap", raw);
   }
-  if (/\b(empty response|malformed json|invalid json|parse|junk|model.*silence)\b/i.test(lower)) {
+  // Format/provider failures (think-only, JSON sniff) — swap to failover model when chain set.
+  // Run 961a885f: pure <think> / json format sniff crashed tier promotion with empty failover use.
+  if (
+    /\b(empty response|malformed json|invalid json|parse|junk|model.*silence)\b/i.test(lower)
+    || /\b(json format sniff|pure\s*<think>|format\/provider|no json (envelope|markers|object)|think-only stream)\b/i.test(
+      lower,
+    )
+  ) {
     return makeRecord("model-output", raw);
   }
   if (/\bgit\b/i.test(lower) && /(failed|fatal|reject|conflict)/i.test(lower)) {

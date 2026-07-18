@@ -16,6 +16,8 @@ import {
   buildPlannerUserPrompt,
   buildRepairPrompt,
   parsePlannerResponse,
+  salvagePlannerTodosFromDropped,
+  extractFileMentions,
 } from "./prompts/planner.js";
 import { PLANNER_TODOS_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { classifyPath } from "./prompts/pathValidation.js";
@@ -37,6 +39,94 @@ import {
 import { isSeedSufficientForDirectEmit } from "@ollama-swarm/shared/planningSeed";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
 import { applyPanelConventionToTodos } from "./plannerPanelGrounding.js";
+
+/**
+ * Last-resort micro-todos when the planner schema-dropped everything.
+ * Prefer unmet contract criteria with grounded expectedFiles; else sample
+ * top-level HTML/src files for a concrete edit-shaped task.
+ */
+export function buildEmergencyPlannerTodos(
+  seed: PlannerSeed,
+  contract?: ExitContract | null,
+): Array<{
+  description: string;
+  expectedFiles: string[];
+  expectedAnchors?: string[];
+  expectedSymbols?: string[];
+}> {
+  const out: Array<{
+    description: string;
+    expectedFiles: string[];
+    expectedAnchors?: string[];
+    expectedSymbols?: string[];
+  }> = [];
+  const seen = new Set<string>();
+
+  if (contract?.criteria?.length) {
+    for (const c of contract.criteria) {
+      if (c.status === "met" || c.status === "wont-do") continue;
+      const files = (c.expectedFiles ?? []).filter(Boolean).slice(0, 2);
+      if (files.length === 0) continue;
+      const { grounded } = groundExpectedFiles(files, seed.repoFiles);
+      if (grounded.length === 0) continue;
+      const key = grounded.join("|");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const desc =
+        (c.description || c.id || "Address unmet criterion")
+          .toString()
+          .trim()
+          .slice(0, 480);
+      out.push({
+        description: `Emergency board seed: ${desc}`,
+        expectedFiles: grounded,
+      });
+      if (out.length >= 3) return out;
+    }
+  }
+
+  // No useful criteria — pick a few real repo files (prefer modules/html/src).
+  const scored = seed.repoFiles
+    .filter((f) => !f.includes("node_modules") && !f.startsWith("."))
+    .map((f) => {
+      let score = 0;
+      if (/\.html?$/i.test(f)) score += 5;
+      if (/\.(tsx?|jsx?|mjs)$/i.test(f)) score += 3;
+      if (/^\d+_/.test(f.split("/").pop() ?? "")) score += 2;
+      if (f.split("/").length === 1) score += 1;
+      return { f, score };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  for (const { f } of scored) {
+    if (seen.has(f)) continue;
+    seen.add(f);
+    out.push({
+      description:
+        `Emergency board seed: improve or expand educational content in ${f} ` +
+        `(concrete file edit; no research-only work)`,
+      expectedFiles: [f],
+    });
+    if (out.length >= 3) break;
+  }
+
+  // Directive may name files even when contract is empty
+  if (out.length === 0 && seed.userDirective) {
+    const mentions = extractFileMentions(seed.userDirective);
+    for (const m of mentions.slice(0, 3)) {
+      const { grounded } = groundExpectedFiles([m], seed.repoFiles);
+      if (grounded.length === 0) continue;
+      out.push({
+        description: `Emergency board seed: address user directive in ${grounded[0]}`,
+        expectedFiles: grounded.slice(0, 2),
+      });
+      if (out.length >= 2) break;
+    }
+  }
+
+  return out;
+}
 
 export interface PlannerContext {
   getContract: () => ExitContract | undefined;
@@ -421,38 +511,78 @@ export async function runPlanner(
       );
       return;
     }
-    const retried = await withSiblingRetry(
-      {
-        agent,
-        modelAtEntry,
-        logPrefix: `[${agent.id}]`,
-        updateAgentModel: ctx.updateAgentModel,
-        emit: ctx.emit,
-        getFallbackModel: ctx.getPlannerFallbackModel,
-        reason: "sibling-retry: planner produced 0 valid todos",
-        isFallbackAttempt,
-      },
-      async () => {
-        await runPlanner(ctx, agent, seed, true);
-      },
-    );
-    if (retried) return;
-    const dropDetail =
-      parsed.dropped.length > 0 || todosDropped > 0
-        ? `Planner returned only invalid/unbindable todos (${parsed.dropped.length} schema-dropped, ${todosDropped} grounding-dropped).`
-        : "Planner returned an empty todo list — nothing actionable in the repo.";
-    const fallbackNote = isFallbackAttempt
-      ? " (sibling-model fallback also produced 0 todos)"
-      : "";
-    ctx.appendSystem(
-      `⚠ Planner failed to produce actionable todos${fallbackNote}. ${dropDetail} The run will exit with stopReason="no-progress" after fallback reflection — no commits will land.`,
-    );
-    ctx.findingsPost({
-      agentId: agent.id,
-      text: dropDetail,
-      createdAt: Date.now(),
-    });
-    return;
+
+    // Soft recovery (d279548d): schema-only drops → salvage with repo file list
+    // before sibling-retry / no-progress exit.
+    if (parsed.dropped.length > 0) {
+      const salvaged = salvagePlannerTodosFromDropped(parsed.dropped, seed.repoFiles);
+      if (salvaged.length > 0) {
+        let salvageKept = 0;
+        for (const t of salvaged) {
+          const { grounded } = groundExpectedFiles(t.expectedFiles, seed.repoFiles);
+          if (grounded.length === 0) continue;
+          groundedTodos.push({
+            description: t.description,
+            expectedFiles: grounded,
+            expectedAnchors: t.expectedAnchors,
+            expectedSymbols: t.expectedSymbols,
+          });
+          salvageKept += 1;
+        }
+        if (salvageKept > 0) {
+          ctx.appendSystem(
+            `Planner salvage: recovered ${salvageKept} todo(s) from ${parsed.dropped.length} schema-dropped item(s).`,
+          );
+        }
+      }
+    }
+
+    // Last soft recovery: emergency micro-todos from seed/contract/directive
+    // so a schema-storm does not immediately hard-stop with zero board work.
+    if (groundedTodos.length === 0) {
+      const emergency = buildEmergencyPlannerTodos(seed, ctx.getContract());
+      if (emergency.length > 0) {
+        groundedTodos.push(...emergency);
+        ctx.appendSystem(
+          `Planner emergency seed: posted ${emergency.length} grounded micro-todo(s) after schema/grounding wipe — avoiding empty-board no-progress.`,
+        );
+      }
+    }
+
+    if (groundedTodos.length === 0) {
+      const retried = await withSiblingRetry(
+        {
+          agent,
+          modelAtEntry,
+          logPrefix: `[${agent.id}]`,
+          updateAgentModel: ctx.updateAgentModel,
+          emit: ctx.emit,
+          getFallbackModel: ctx.getPlannerFallbackModel,
+          reason: "sibling-retry: planner produced 0 valid todos",
+          isFallbackAttempt,
+        },
+        async () => {
+          await runPlanner(ctx, agent, seed, true);
+        },
+      );
+      if (retried) return;
+      const dropDetail =
+        parsed.dropped.length > 0 || todosDropped > 0
+          ? `Planner returned only invalid/unbindable todos (${parsed.dropped.length} schema-dropped, ${todosDropped} grounding-dropped).`
+          : "Planner returned an empty todo list — nothing actionable in the repo.";
+      const fallbackNote = isFallbackAttempt
+        ? " (sibling-model fallback also produced 0 todos)"
+        : "";
+      ctx.appendSystem(
+        `⚠ Planner failed to produce actionable todos${fallbackNote}. ${dropDetail} The run will exit with stopReason="no-progress" after fallback reflection — no commits will land.`,
+      );
+      ctx.findingsPost({
+        agentId: agent.id,
+        text: dropDetail,
+        createdAt: Date.now(),
+      });
+      return;
+    }
   }
 
   const now = Date.now();

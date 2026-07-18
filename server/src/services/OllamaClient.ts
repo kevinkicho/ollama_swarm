@@ -103,6 +103,16 @@ export interface ChatOpts {
     type: "function";
     function: { name: string; description: string; parameters: Record<string, unknown> };
   }>;
+  /**
+   * Ollama-only `think` (api.md). boolean or low|medium|high|max.
+   * Never set for OpenCode — this client is Ollama HTTP only.
+   */
+  think?: boolean | "low" | "medium" | "high" | "max";
+  /**
+   * Ollama-only keep_alive (api.md). string duration ("30m") or seconds number.
+   * 0 unloads after the call. Default: server default (~5m) when omitted.
+   */
+  keep_alive?: string | number;
 }
 
 /** Cumulative display text for streaming + final result (thinking wrapped for stripAgentText). */
@@ -182,12 +192,14 @@ export async function chat(opts: any): Promise<ChatResult> {
     // for parser-strict prompts.
     ...(opts.format !== undefined ? { format: opts.format } : {}),
     // Phase 5a of #243: per-agent generation parameters from the
-    // topology row (temperature, top_p, etc.). Ollama applies them
-    // server-side; absent → model defaults.
+    // topology row (temperature, top_p, num_ctx, num_predict, etc.).
     ...(opts.options !== undefined && Object.keys(opts.options).length > 0
       ? { options: opts.options }
       : {}),
     ...(opts.tools && opts.tools.length > 0 ? { tools: opts.tools } : {}),
+    // api.md: think + keep_alive — Ollama native only (this module).
+    ...(opts.think !== undefined ? { think: opts.think } : {}),
+    ...(opts.keep_alive !== undefined ? { keep_alive: opts.keep_alive } : {}),
   });
 
   // Two-phase timeout: firstChunk for cold starts, idle after first byte.

@@ -8,14 +8,20 @@
 // This helper consolidates the strategies into one progressive
 // pipeline:
 //   1. raw JSON.parse (fast path)
-//   2. strip ``` / ```json fences then parse
+//   2. strip ``` / ```json fences then parse (incl. unclosed openers)
 //   3. extract first {...} or [...] balanced span and parse
-//   4. soft repairs: trailing-comma removal, smart-quote → ASCII quote,
-//      missing closing brace, single-quoted strings → double-quoted
+//   4. soft repairs: trailing-comma, smart quotes, bare keys, missing braces
+//
+// Soft repair primitives live in @ollama-swarm/shared/softJsonRepair so the
+// primary parseJsonEnvelope path shares the same fixes (83dc5910 fence/bare-key).
 //
 // Returns the parsed value on success or null. Pure: no I/O.
 
 import { stripForJsonParse } from "@ollama-swarm/shared/stripAgentText";
+import {
+  applySoftJsonRepairs,
+  stripJsonFences,
+} from "@ollama-swarm/shared/softJsonRepair";
 
 export interface RepairAttempt {
   /** Strategy that produced the parsed value, for diagnostics. */
@@ -65,6 +71,13 @@ export function repairAndParseJson(text: string): RepairAttempt | null {
       const r = tryParse(repaired);
       if (r !== UNPARSEABLE) return { strategy: name("soft-repairs"), value: r };
     }
+    // Soft-repair the balanced span even when applySoftRepairs is identity
+    // relative to candidate but tryParse failed earlier on bare keys that
+    // need the new shared rules (applySoftRepairs always re-runs now).
+    if (sliced) {
+      const r2 = tryParse(applySoftRepairs(sliced));
+      if (r2 !== UNPARSEABLE) return { strategy: name("soft-repairs"), value: r2 };
+    }
   }
   return null;
 }
@@ -78,13 +91,9 @@ function tryParse(s: string): unknown {
   }
 }
 
-/** Strip leading/trailing ``` or ```<lang> fences. */
+/** Strip leading/trailing ``` or ```<lang> fences (incl. unclosed openers). */
 export function stripFences(s: string): string {
-  let out = s.trim();
-  // Match ```lang\n ... ``` or ```\n ... ```
-  const fenced = out.match(/^```(?:[a-zA-Z0-9_-]+)?\s*\n?([\s\S]*?)\n?```\s*$/);
-  if (fenced) return fenced[1].trim();
-  return out;
+  return stripJsonFences(s);
 }
 
 /** Find the first balanced {...} or [...] in `s`. Naive — counts
@@ -130,56 +139,7 @@ function findFirstBraceOrBracket(s: string): number {
   return -1;
 }
 
-/** Apply best-effort textual repairs that don't require a real
- *  parser:
- *    - trailing commas in objects/arrays
- *    - smart quotes → ASCII
- *    - single-quoted JSON keys/values → double-quoted
- *    - missing closing brace at end
- */
+/** Apply best-effort textual repairs (delegates to shared softJsonRepair). */
 export function applySoftRepairs(s: string): string {
-  let out = s;
-  // Smart quotes.
-  out = out.replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
-  // Single-quoted keys: { 'foo': → { "foo":
-  out = out.replace(/([{,]\s*)'([^']+)'(\s*:)/g, '$1"$2"$3');
-  // Single-quoted string values: : 'foo' → : "foo"  (best-effort, no
-  // escapes inside)
-  out = out.replace(/:\s*'([^'\n]*)'/g, ': "$1"');
-  // Trailing commas before } or ].
-  out = out.replace(/,(\s*[}\]])/g, "$1");
-  // Missing trailing brace/bracket — count opens vs closes and append
-  // the missing tail.
-  out = balanceClosingBrackets(out);
-  return out;
-}
-
-function balanceClosingBrackets(s: string): string {
-  let curlyOpen = 0;
-  let squareOpen = 0;
-  let inString = false;
-  let escape = false;
-  for (const ch of s) {
-    if (escape) {
-      escape = false;
-      continue;
-    }
-    if (ch === "\\") {
-      escape = true;
-      continue;
-    }
-    if (ch === '"') {
-      inString = !inString;
-      continue;
-    }
-    if (inString) continue;
-    if (ch === "{") curlyOpen += 1;
-    else if (ch === "}") curlyOpen -= 1;
-    else if (ch === "[") squareOpen += 1;
-    else if (ch === "]") squareOpen -= 1;
-  }
-  let tail = "";
-  while (squareOpen-- > 0) tail += "]";
-  while (curlyOpen-- > 0) tail += "}";
-  return tail ? s + tail : s;
+  return applySoftJsonRepairs(s);
 }

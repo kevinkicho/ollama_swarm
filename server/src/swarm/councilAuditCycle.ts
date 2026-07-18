@@ -33,6 +33,9 @@ import {
   updateZeroProgressStreak,
   DEFAULT_ZERO_PROGRESS_LIMIT,
   MAX_STRETCH_WAVES_PER_RUN,
+  MAX_CRITERION_PROGRESS_WAVES_PER_RUN,
+  mintProgressTodosFromUnmetCriteria,
+  todoProgressSignature,
 } from "./productiveProgress.js";
 import { notifyGuardTrip } from "./guardNotify.js";
 import { filterAuditTodosAgainstPermanentSkips } from "./councilSkipReconcile.js";
@@ -72,6 +75,8 @@ export interface CouncilAuditHost {
   setTierPromotionRetries: (n: number) => void;
   getStretchWaves: () => number;
   setStretchWaves: (n: number) => void;
+  getCriterionProgressWaves: () => number;
+  setCriterionProgressWaves: (n: number) => void;
   getZeroProgressStreak: () => number;
   setZeroProgressStreak: (n: number) => void;
   setEarlyStopDetail: (s: string) => void;
@@ -80,8 +85,7 @@ export interface CouncilAuditHost {
 
 /**
  * Open-ended stretch work after all-met / empty planner.
- * Capped per run so stretch cannot infinite-spin autonomous mode.
- * Prefer grounded expectedFiles from commits so workers can settle.
+ * Prefer unmet-criterion files when present (progressive), else committed docs.
  */
 function enqueueStretchTodos(
   host: CouncilAuditHost,
@@ -96,25 +100,59 @@ function enqueueStretchTodos(
     return 0;
   }
   const directive = (cfg.userDirective ?? "").trim() || "the user directive";
+  const unmet = host.state.contract?.criteria.filter((c) => c.status === "unmet") ?? [];
+  const criterionFiles = unmet
+    .flatMap((c) => c.expectedFiles ?? [])
+    .map((f) => f.replace(/\\/g, "/"))
+    .filter(Boolean);
   const committedDocs = host.state.committedFiles
-    .filter((f) => /\.(md|txt|rst)$/i.test(f) || f.startsWith("docs/"))
-    .slice(0, 6);
-  const grounded = committedDocs.length > 0 ? committedDocs : ["README.md"];
-  const todos = [
-    {
-      description:
-        `Deepen research and documentation for: ${directive.slice(0, 200)}. `
-        + `Edit existing docs only; add citable findings and close remaining gaps.`,
-      expectedFiles: grounded.slice(0, 3),
-      createdBy: "stretch-research",
-    },
-    {
-      description:
-        `Consolidate, deduplicate, and improve structure of docs produced so far for: ${directive.slice(0, 160)}.`,
-      expectedFiles: grounded.slice(0, 3),
-      createdBy: "stretch-consolidate",
-    },
-  ];
+    .filter((f) => /\.(md|txt|rst|html?|js|ts|tsx)$/i.test(f) || f.startsWith("docs/"))
+    .slice(0, 8);
+  // Prefer live criterion targets over generic README stretch (120b2044).
+  const grounded =
+    criterionFiles.length > 0
+      ? [...new Set(criterionFiles)].slice(0, 6)
+      : committedDocs.length > 0
+        ? committedDocs
+        : ["README.md"];
+
+  const todos =
+    unmet.length > 0 && criterionFiles.length > 0
+      ? [
+          {
+            description:
+              `Advance remaining unmet criteria for: ${directive.slice(0, 180)}. ` +
+              `Focus on: ${unmet
+                .slice(0, 3)
+                .map((c) => c.description.slice(0, 80))
+                .join(" · ")}. ` +
+              `Make concrete file edits (expand tabs/content, fix gaps) in the listed targets.`,
+            expectedFiles: grounded.slice(0, 3),
+            createdBy: "stretch-unmet-criteria",
+          },
+          {
+            description:
+              `Close the next highest-value gap among unmet criteria (${unmet.length} still open). ` +
+              `Prefer files that already exist; land a verifiable improvement this turn.`,
+            expectedFiles: grounded.slice(0, 3),
+            createdBy: "stretch-unmet-next",
+          },
+        ]
+      : [
+          {
+            description:
+              `Deepen research and documentation for: ${directive.slice(0, 200)}. ` +
+              `Edit existing docs only; add citable findings and close remaining gaps.`,
+            expectedFiles: grounded.slice(0, 3),
+            createdBy: "stretch-research",
+          },
+          {
+            description:
+              `Consolidate, deduplicate, and improve structure of docs produced so far for: ${directive.slice(0, 160)}.`,
+            expectedFiles: grounded.slice(0, 3),
+            createdBy: "stretch-consolidate",
+          },
+        ];
   const n = postCouncilTodoBatch(
     (input) => host.postCouncilTodo(input),
     todos,
@@ -130,6 +168,64 @@ function enqueueStretchTodos(
     reason,
     enqueued: n,
     wave: host.getStretchWaves(),
+  });
+  return n;
+}
+
+/**
+ * Deterministic criterion-progress wave: mint grounded todos from unmet
+ * criteria when LLM audit/planner invent nothing. Progressive recovery for
+ * long autonomous runs (stopDetail "planner-fallback: no todos…" on 120b2044).
+ */
+function enqueueCriterionProgressTodos(
+  host: CouncilAuditHost,
+  cfg: RunConfig,
+  cycle: number,
+  unmetCriteria: ReadonlyArray<{ id?: string; description: string; expectedFiles: string[] }>,
+): number {
+  if (host.getCriterionProgressWaves() >= MAX_CRITERION_PROGRESS_WAVES_PER_RUN) {
+    host.appendSystem(
+      `[ambition] Criterion-progress wave cap reached (${MAX_CRITERION_PROGRESS_WAVES_PER_RUN}/run).`,
+    );
+    return 0;
+  }
+  // Avoid re-seeding any shape already on the board (any status).
+  const avoid = new Set<string>();
+  for (const t of host.state.todoQueue.list()) {
+    avoid.add(todoProgressSignature(t.description, t.expectedFiles ?? []));
+  }
+  const fallbackFiles = host.state.committedFiles
+    .filter((f) => /\.(html?|js|ts|md)$/i.test(f))
+    .slice(0, 4);
+  const minted = mintProgressTodosFromUnmetCriteria(unmetCriteria, {
+    maxTodos: 8,
+    avoidSignatures: avoid,
+    fallbackFiles,
+  });
+  if (minted.length === 0) return 0;
+  const n = postCouncilTodoBatch(
+    (input) => host.postCouncilTodo(input),
+    minted.map((t) => ({
+      description: t.description,
+      expectedFiles: t.expectedFiles,
+      createdBy: t.createdBy,
+      ...(t.criterionId ? { criterionId: t.criterionId } : {}),
+    })),
+    (msg) => host.appendSystem(msg),
+  );
+  if (n > 0) {
+    host.setCriterionProgressWaves(host.getCriterionProgressWaves() + 1);
+    host.appendSystem(
+      `[ambition] Criterion-progress wave ${host.getCriterionProgressWaves()}/${MAX_CRITERION_PROGRESS_WAVES_PER_RUN}: ` +
+        `seeded ${n} grounded todo(s) from unmet criteria — continuing autonomously.`,
+    );
+  }
+  host.logDiag?.({
+    type: "council_criterion_progress_todos",
+    runId: host.getActiveRunId() || cfg.runId,
+    cycle,
+    enqueued: n,
+    wave: host.getCriterionProgressWaves(),
   });
   return n;
 }
@@ -209,6 +305,7 @@ export async function runCouncilAuditCycle(
       emit: (e) => host.emit(e as SwarmEvent),
     },
     skipEvidence,
+    permanentSkipEvidence,
   );
 
   if (host.closingRequested()) return "stop";
@@ -220,11 +317,28 @@ export async function runCouncilAuditCycle(
   );
 
   const beforeById = new Map(criteriaBeforeAudit.map((c) => [c.id, c]));
-  const metFlips = updatedCriteria.filter(
-    (c) =>
-      c.status === "met"
-      && beforeById.get(c.id)?.status === "unmet"
-      && !ledgerPromoted.includes(c.id),
+  const metFlipIds = updatedCriteria
+    .filter(
+      (c) =>
+        c.status === "met"
+        && beforeById.get(c.id)?.status === "unmet"
+        && !ledgerPromoted.includes(c.id),
+    )
+    .map((c) => c.id);
+  const metFlips = metFlipIds.length;
+  // Met flips the auditor likely rubber-stamped from skip evidence alone
+  // are non-durable without a commit (disk may still be wrong).
+  const skipCoveredCriterionIds = new Set<string>();
+  for (const e of skipEvidence) {
+    if (e.criterionId) skipCoveredCriterionIds.add(e.criterionId);
+    if (Array.isArray(e.criteriaIds)) {
+      for (const id of e.criteriaIds) {
+        if (id) skipCoveredCriterionIds.add(id);
+      }
+    }
+  }
+  const skipOnlyMetFlips = metFlipIds.filter((id) =>
+    skipCoveredCriterionIds.has(id),
   ).length;
 
   const sameUnmet = [...currentUnmetIds].filter((id) => host.getPreviousUnmetIds().has(id)).length;
@@ -423,7 +537,18 @@ export async function runCouncilAuditCycle(
         kind: "ambition-tier-up-start",
         tier: host.state.currentTier + 1,
       });
-      const promoted = await runTierPromotion(host.state, planner, host.maxTiers);
+      // Belt-and-suspenders: never let tier promotion throw end the process
+      // (run 961a885f stopReason crash on think-only format sniff).
+      let promoted = false;
+      try {
+        promoted = await runTierPromotion(host.state, planner, host.maxTiers);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        host.appendSystem(
+          `[ambition] Tier promotion threw (${msg.slice(0, 160)}) — counting as failed attempt.`,
+        );
+        promoted = false;
+      }
       if (promoted) {
         host.setTierPromotionRetries(0);
         host.appendSystem(
@@ -572,7 +697,10 @@ export async function runCouncilAuditCycle(
           const { buildAuditorUnmetTodoFallbackPrompt } = await import(
             "./councilDecisions.js"
           );
-          const prompt = buildAuditorUnmetTodoFallbackPrompt(unmetCriteria);
+          const prompt = buildAuditorUnmetTodoFallbackPrompt(unmetCriteria, {
+            directive: cfg.userDirective,
+            committedFiles: host.state.committedFiles,
+          });
 
           try {
             const { controller, cleanup } = createTimeoutController();
@@ -632,24 +760,54 @@ export async function runCouncilAuditCycle(
             host.setConsecutiveEmptyCycles(0);
             return "retry";
           }
+          // Progressive: seed todos directly from unmet criteria (no LLM required).
+          if (unmetCriteria.length > 0) {
+            const progressN = enqueueCriterionProgressTodos(
+              host,
+              cfg,
+              cycle,
+              unmetCriteria.map((c) => ({
+                id: (c as { id?: string }).id,
+                description: c.description,
+                expectedFiles: c.expectedFiles ?? [],
+              })),
+            );
+            if (progressN > 0) {
+              host.setConsecutiveEmptyCycles(0);
+              return "retry";
+            }
+          }
         }
-        // Empty planner + empty stretch: count as zero productive progress.
+        // Empty planner + empty stretch + empty criterion-progress:
+        // only stop via durable-progress streak (do not hard-kill early while
+        // wall-clock autonomous work may still resume next cycle).
         const emptyStop = maybeStopNoProgress({
           metFlips,
           commitsThisCycle,
           newTodos: 0,
+          skipOnlyMetFlips,
         });
         if (emptyStop) return emptyStop;
-        const reason = "planner-fallback: no todos for unmet criteria";
-        host.appendSystem(`[planner] Fallback produced nothing — stopping.`);
-        host.setEarlyStopDetail(reason);
-        host.logDiag?.({
-          type: "council_stop_reason",
-          runId: host.getActiveRunId() || cfg.runId,
-          cycle,
-          reason,
-        });
-        return "stop";
+        // Soft continue: log and retry once more paths can invent work next cycle,
+        // unless empty streak is already high (5+) — then set early-stop.
+        if (empty >= 5) {
+          const reason = "planner-fallback: no todos for unmet criteria after progressive recovery";
+          host.appendSystem(
+            `[planner] Fallback + stretch + criterion-progress produced nothing after ${empty} empty cycles — stopping.`,
+          );
+          host.setEarlyStopDetail(reason);
+          host.logDiag?.({
+            type: "council_stop_reason",
+            runId: host.getActiveRunId() || cfg.runId,
+            cycle,
+            reason,
+          });
+          return "stop";
+        }
+        host.appendSystem(
+          `[planner] Fallback empty (empty-cycles=${empty}) — progressive recovery exhausted this cycle; retrying next cycle.`,
+        );
+        return "retry";
       }
     }
   } else {
@@ -662,6 +820,7 @@ export async function runCouncilAuditCycle(
       metFlips,
       commitsThisCycle,
       newTodos: auditEnqueued,
+      skipOnlyMetFlips,
     });
     if (todoOnlyStop) return todoOnlyStop;
     return "retry";
@@ -670,6 +829,7 @@ export async function runCouncilAuditCycle(
     metFlips,
     commitsThisCycle,
     newTodos: auditEnqueued,
+    skipOnlyMetFlips,
   });
   if (noWorkStop) return noWorkStop;
   return "retry";

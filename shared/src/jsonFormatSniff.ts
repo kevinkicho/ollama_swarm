@@ -13,8 +13,14 @@ import { extractThinkTags } from "./extractThinkTags.js";
 import { stripForJsonParse } from "./stripAgentText.js";
 
 export const JSON_FORMAT_SNIFF_MIN_CHARS = 8_192;
-/** If we are still think-only past this, treat as wrong-format / stuck. */
-export const JSON_FORMAT_THINK_ONLY_MAX_CHARS = 16_000;
+/**
+ * If we are still think-only past this, treat as wrong-format / stuck.
+ * Run 961a885f: 16k think-only on tier-6 emit crashed the run; lower floor so
+ * structured-emit paths fail closed sooner and can repair/failover.
+ */
+export const JSON_FORMAT_THINK_ONLY_MAX_CHARS = 12_000;
+/** Tighter cap for emit-only structured prompts (tier promotion, contract merge). */
+export const JSON_FORMAT_THINK_ONLY_EMIT_MAX_CHARS = 8_000;
 
 export type JsonFormatSniffResult =
   | { ok: true; phase: "thinking" | "has_json" | "too_short" }

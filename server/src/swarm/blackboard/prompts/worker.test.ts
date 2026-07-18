@@ -124,6 +124,35 @@ describe("parseWorkerResponse — happy paths (v2 hunks)", () => {
     assert.equal(r.hunks.length, 1);
   });
 
+  it("soft-repairs bare key after [ (83dc5910 op\": pattern)", () => {
+    const raw =
+      '{"hunks":[op":"replace","file":"a.ts","search":"o","replace":"n"]}';
+    const r = parseWorkerResponse(raw, ["a.ts"]);
+    expectOk(r);
+    assert.equal(r.hunks.length, 1);
+    assert.equal(r.hunks[0]!.op, "replace");
+  });
+
+  it("accepts replace_between with endExclusive null (2010479c)", () => {
+    const raw = JSON.stringify({
+      hunks: [
+        {
+          op: "replace_between",
+          file: "a.ts",
+          start: "function foo() {",
+          endExclusive: null,
+          replace: "function foo() {\n  return 1;\n}",
+        },
+      ],
+    });
+    const r = parseWorkerResponse(raw, ["a.ts"]);
+    expectOk(r);
+    assert.equal(r.hunks[0]!.op, "replace_between");
+    if (r.hunks[0]!.op === "replace_between") {
+      assert.equal(r.hunks[0]!.endExclusive, undefined);
+    }
+  });
+
   it("extracts object from surrounding prose", () => {
     const raw =
       'Here you go: {"hunks":[{"op":"replace","file":"a.ts","search":"o","replace":"n"}]} — let me know.';
@@ -177,10 +206,58 @@ describe("parseWorkerResponse — rejections (v2 hunks)", () => {
     }
   });
 
-  it("validateHunkPayload rejects oversized replace hunks", () => {
+  it("validateHunkPayload auto-demotes oversized replace on missing file → write", () => {
     const big = "x".repeat(HUNK_REPLACE_SOFT_MAX + 1);
     const r = validateHunkPayload([
       { op: "replace", file: "a.ts", search: "anchor", replace: big },
+    ]);
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.hunks[0]!.op, "write");
+      assert.ok(r.demotions && r.demotions.length === 1);
+      assert.equal(r.demotions![0]!.to, "write");
+    }
+  });
+
+  it("validateHunkPayload demotes multi-line oversized replace with first/last anchors", () => {
+    const search = "line one unique start\nline two middle\nline three unique end";
+    // File much larger than replace so full-file heuristic does not fire.
+    const file =
+      "HEADER\n".repeat(8000) + search + "\n" + "TRAILER\n".repeat(8000);
+    // Ensure search+replace exceeds soft max without looking like a full-file rewrite.
+    const replace = "NEWSECT\n".repeat(5000);
+    assert.ok(search.length + replace.length > HUNK_REPLACE_SOFT_MAX);
+    assert.ok(replace.length < file.length * 0.7);
+    const r = validateHunkPayload(
+      [{ op: "replace", file: "mod.html", search, replace }],
+      { "mod.html": file },
+    );
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.hunks[0]!.op, "replace_between");
+      if (r.hunks[0]!.op === "replace_between") {
+        assert.equal(r.hunks[0]!.start, "line one unique start");
+        assert.equal(r.hunks[0]!.endExclusive, "line three unique end");
+      }
+    }
+  });
+
+  it("validateHunkPayload demotes full-file-sized replace → write", () => {
+    const body = "abcdefghij".repeat(4000); // 40k
+    const r = validateHunkPayload(
+      [{ op: "replace", file: "a.ts", search: body.slice(0, 100), replace: body }],
+      { "a.ts": body },
+    );
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.hunks[0]!.op, "write");
+    }
+  });
+
+  it("validateHunkPayload still rejects oversized append", () => {
+    const big = "x".repeat(HUNK_REPLACE_SOFT_MAX + 1);
+    const r = validateHunkPayload([
+      { op: "append", file: "a.ts", content: big },
     ]);
     assert.equal(r.ok, false);
     if (!r.ok) assert.match(r.reason, /soft max/);
@@ -217,6 +294,21 @@ describe("parseWorkerResponse — rejections (v2 hunks)", () => {
     });
     const r = parseWorkerResponse(raw, ["allowed.ts"]);
     expectErr(r, /not in expectedFiles/);
+  });
+
+  it("empty expectedFiles allow-all (multi-writer collect phase)", () => {
+    const raw = JSON.stringify({
+      hunks: [
+        { op: "replace", file: "any/path.ts", search: "x", replace: "y" },
+        { op: "create", file: "new-file.md", content: "hi" },
+      ],
+    });
+    const r = parseWorkerResponse(raw, []);
+    assert(r.ok, `expected ok under allow-all, got ${JSON.stringify(r)}`);
+    if (r.ok) {
+      assert.equal(r.hunks.length, 2);
+      assert.equal(r.hunks[0]!.file, "any/path.ts");
+    }
   });
 
   it("rejects an unknown op", () => {

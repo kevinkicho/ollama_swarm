@@ -908,6 +908,33 @@ export class AgentManager {
 
   async killAll(): Promise<KillAllResult> {
     this.beginRunShutdown();
+    // Best-effort: unload Ollama models from VRAM (api.md keep_alive: 0).
+    // OpenCode / Anthropic / OpenAI agents are skipped inside ollamaUnloadModel.
+    try {
+      const { isOllamaFamilyModel, ollamaUnloadModel } = await import(
+        "../providers/ollamaApiExtras.js"
+      );
+      const { config: appConfig } = await import("../config.js");
+      const baseUrl = appConfig.OLLAMA_BASE_URL.replace(/\/v1\/?$/, "");
+      const seen = new Set<string>();
+      const unloads: Promise<boolean>[] = [];
+      for (const a of this.agents.values()) {
+        const m = a.model?.trim();
+        if (!m || seen.has(m) || !isOllamaFamilyModel(m)) continue;
+        seen.add(m);
+        unloads.push(
+          ollamaUnloadModel({ baseUrl, model: m }).catch(() => false),
+        );
+      }
+      if (unloads.length > 0) {
+        await Promise.race([
+          Promise.allSettled(unloads),
+          new Promise((r) => setTimeout(r, 8_000)),
+        ]);
+      }
+    } catch {
+      /* unload is best-effort; never block kill */
+    }
     // Broadcast "stopped" state for each agent BEFORE setting killed=true.
     // The killed guard in setAgentState discards events after killed is set,
     // so these intentional "stopped" transitions must fire first for the

@@ -74,7 +74,26 @@ export async function synthesizeStandup(
     .map((e) => `[Agent ${e.agentIndex}]:\n${e.text}`)
     .join("\n\n---\n\n");
 
-  if (!proposals) return;
+  if (!proposals) {
+    // No draft entries to merge — still advance empty-execution streak so
+    // silent/junk standups cannot soft-deadlock autonomous council.
+    const runId = host.active?.runId;
+    recordEmptyExecutionCycle(runId);
+    const prev = host.state.emptyExecutionStreak ?? 0;
+    const { streak, shouldAct } = updateEmptyExecutionStreak(prev, true);
+    host.state.emptyExecutionStreak = streak;
+    host.appendSystem(
+      `[cycle-integrity] empty_execution streak=${streak}` +
+        (shouldAct ? " — limit reached" : "") +
+        " (no standup proposals to synthesize)",
+    );
+    if (shouldAct) {
+      const reason = formatEmptyExecutionReason(streak);
+      host.appendSystem(`[empty-execution] ${reason}`);
+      host.onEmptyExecutionLimit?.(streak, reason);
+    }
+    return;
+  }
 
   const prompt = buildStandupSynthesisPrompt(proposals, host.state.progressContext);
 

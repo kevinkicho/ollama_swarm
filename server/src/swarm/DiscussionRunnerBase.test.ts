@@ -29,6 +29,7 @@ function makeMockOpts(): {
     },
     killAll: async () => ({ portsReleased: 0 }),
     killAgent: async () => {},
+    beginRunShutdown: () => {},
     toStates: () => [...agentStates.values()],
     getPartialStreams: () => ({}),
     recordAgentState: (s: any) => { agentStates.set(s.id, s); },
@@ -260,6 +261,49 @@ describe("DiscussionRunnerBase — lifecycle methods", () => {
 
       const transcriptEvents = events.filter((e) => e.type === "transcript_append");
       assert.ok(transcriptEvents.length >= 1, "should emit at least one transcript entry (kill result)");
+    });
+  });
+
+  describe("drain()", () => {
+    it("returns promptly without awaiting the loop (non-blocking HTTP contract)", async () => {
+      const { runner, events } = makeRunner();
+      runner.start(MINIMAL_CFG);
+      runner.setPhase("discussing");
+      // Disable escalate timer so the suite does not pin open handles.
+      (runner as any).discussionDrainTimeoutMs = 0;
+      // Unfinished loop would block a *synchronous* drain; we must still return fast.
+      (runner as any).loopPromise = new Promise<void>(() => {
+        /* never resolves */
+      });
+      events.length = 0;
+
+      const t0 = Date.now();
+      await runner.drain();
+      const elapsed = Date.now() - t0;
+      assert.ok(elapsed < 500, `drain must return promptly, took ${elapsed}ms`);
+      assert.equal(runner.getPhase(), "draining");
+      assert.equal((runner as any).drainRequested, true);
+      const sys = events
+        .filter((e) => e.type === "transcript_append")
+        .map((e: any) => e.entry?.text ?? "")
+        .join("\n");
+      assert.match(sys, /Soft stop requested/);
+      // Avoid stop()'s 45s join on the hung loopPromise.
+      (runner as any).loopPromise = null;
+      await runner.stop();
+    });
+
+    it("is idempotent while already draining", async () => {
+      const { runner, events } = makeRunner();
+      runner.start(MINIMAL_CFG);
+      runner.setPhase("discussing");
+      (runner as any).discussionDrainTimeoutMs = 0;
+      (runner as any).loopPromise = Promise.resolve();
+      await runner.drain();
+      events.length = 0;
+      await runner.drain();
+      assert.equal(events.length, 0, "second drain should be a no-op");
+      await runner.stop();
     });
   });
 

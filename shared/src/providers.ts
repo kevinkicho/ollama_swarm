@@ -101,34 +101,34 @@ export const OPENAI_MODELS = [
   "openai/gpt-5-nano",
 ] as const;
 
-// 2026-05-03: Ollama Cloud catalog from ollama.com/search?c=cloud.
-// All entries carry the ":cloud" suffix so detectProvider routes them
-// to the ollama-cloud branch. Reasoning-tier models (kimi, glm,
-// deepseek, nemotron-super, minimax, gemini-flash) at the top — they
-// dominate the actual usage on this app. Coding/utility tier
-// (gemma4, qwen-coder, devstral, ministral) below. Updated as new
-// models land in the cloud catalog.
+// Ollama Cloud fallback catalog for topology when live discovery fails.
+// API names come from GET https://ollama.com/api/tags (docs.ollama.com/cloud
+// + github.com/ollama/ollama/blob/main/docs/api.md). Those bare names are
+// mapped to local-proxy tags (:cloud / -cloud) for detectProvider routing;
+// OllamaCloudProvider strips the suffix before calling ollama.com.
+// Live list: server discoverOllamaCloudModels() → /api/models?provider=ollama-cloud
+// Last synced from ollama.com/api/tags: 2026-07-17.
 export const OLLAMA_CLOUD_MODELS = [
+  // Bare API → :cloud
+  "glm-5.2:cloud",
   "glm-5.1:cloud",
-  "deepseek-v4-pro:cloud",
-  "deepseek-v4-flash:cloud",
-  "nemotron-3-nano:cloud",
+  "kimi-k2.7-code:cloud",
   "kimi-k2.6:cloud",
   "kimi-k2.5:cloud",
+  "deepseek-v4-pro:cloud",
+  "deepseek-v4-flash:cloud",
+  "minimax-m3:cloud",
   "minimax-m2.7:cloud",
   "minimax-m2.5:cloud",
-  "glm-5:cloud",
-  "gemini-3-flash-preview:cloud",
-  "qwen3-next:cloud",
-  "qwen3.5:cloud",
-  "qwen3-coder-next:cloud",
+  "nemotron-3-ultra:cloud",
+  "nemotron-3-super:cloud",
+  // Size-tagged API → -cloud
+  "nemotron-3-nano:30b-cloud",
+  "qwen3.5:397b-cloud",
   "gemma4:31b-cloud",
-  "gemma4:26b-cloud",
-  "devstral-2:cloud",
-  "devstral-small-2:cloud",
-  "ministral-3:cloud",
-  "cogito-2.1:cloud",
-  "rnj-1:cloud",
+  "gpt-oss:120b-cloud",
+  "gpt-oss:20b-cloud",
+  "mistral-large-3:675b-cloud",
 ] as const;
 
 /** Topology row shape needed to resolve a routable model id. */
@@ -187,26 +187,32 @@ export function modelsForProvider(provider: Provider): readonly string[] {
   }
 }
 
-// OpenCode Go — curated open models (https://opencode.ai/docs/go/).
-// Server may replace with live list from GET /zen/go/v1/models when keyed.
+// OpenCode Go — fallback catalog when live discovery is unavailable.
+// Source of truth: https://opencode.ai/docs/go/ + GET /zen/go/v1/models.
+// Server may replace with the live list when OPENCODE_GO_API_KEY is set.
+// Last synced: 2026-07-17 (live /zen/go/v1/models + docs endpoint table).
 export const OPENCODE_GO_MODELS = [
+  // Docs “current list” order (primary picks for topology)
+  "opencode-go/grok-4.5",
   "opencode-go/glm-5.2",
   "opencode-go/glm-5.1",
-  "opencode-go/glm-5",
+  "opencode-go/kimi-k3",
   "opencode-go/kimi-k2.7-code",
   "opencode-go/kimi-k2.6",
-  "opencode-go/kimi-k2.5",
-  "opencode-go/deepseek-v4-pro",
-  "opencode-go/deepseek-v4-flash",
+  "opencode-go/mimo-v2.5",
+  "opencode-go/mimo-v2.5-pro",
   "opencode-go/minimax-m3",
   "opencode-go/minimax-m2.7",
-  "opencode-go/minimax-m2.5",
   "opencode-go/qwen3.7-max",
   "opencode-go/qwen3.7-plus",
   "opencode-go/qwen3.6-plus",
+  "opencode-go/deepseek-v4-pro",
+  "opencode-go/deepseek-v4-flash",
+  // Still on the live Go models API (kept for discovery parity)
+  "opencode-go/glm-5",
+  "opencode-go/kimi-k2.5",
+  "opencode-go/minimax-m2.5",
   "opencode-go/qwen3.5-plus",
-  "opencode-go/mimo-v2.5-pro",
-  "opencode-go/mimo-v2.5",
   "opencode-go/mimo-v2-pro",
   "opencode-go/mimo-v2-omni",
   "opencode-go/hy3-preview",

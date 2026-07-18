@@ -15,6 +15,7 @@
     "./toolLoopStuck": "./src/toolLoopStuck.ts",
     "./stripAgentText": "./src/stripAgentText.ts",
     "./parseAgentJson": "./src/parseAgentJson.ts",
+    "./softJsonRepair": "./src/softJsonRepair.ts",
     "./summarizeAgentJson": "./src/summarizeAgentJson.ts",
     "./topology": "./src/topology.ts",
     "./transcriptEntrySummary": "./src/transcriptEntrySummary.ts",

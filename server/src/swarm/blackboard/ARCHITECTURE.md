@@ -9,12 +9,19 @@ does, not *what* it does line-by-line.
 
 A **planner** (agent-1) inspects the cloned repo and posts small
 **todos** to a shared **board**. **Workers** (agents 2..N) claim
-todos, propose code edits as a JSON envelope of **hunks**, and commit
-if optimistic-CAS on file hashes still passes. An **auditor** judges
-the run against a per-run **exit contract** of criteria. The loop
-terminates when the auditor signals all-met (optionally climbing an
-**ambition tier**), or when a hard cap fires (wall-clock / commits /
-todos), or when the user stops it.
+todos, propose code edits as a JSON envelope of **hunks**, and apply
+via search/create anchors (apply fails closed on miss). Concurrent
+workers are deconflicted by (1) **expectedFiles overlap** scoring at
+dequeue and (2) a **per-clone apply/commit mutex** (`cloneApplyMutex`)
+around the full read→write→git commit critical section so `git add -A`
+cannot interleave. Disk is **re-read under the lock** after any wait;
+apply misses after contention are annotated
+`[clone-lock-contended waited=…ms]` so replanners know a peer likely
+landed first. Not classic optimistic CAS on content hashes (V1 CAS was
+removed). An **auditor** judges the run against a per-run
+**exit contract** of criteria. The loop terminates when the auditor
+signals all-met (optionally climbing an **ambition tier**), or when a
+hard cap fires (wall-clock / commits / todos), or when the user stops it.
 
 ## Agent topology
 
@@ -38,8 +45,8 @@ system prompt. Same model + same todo, different priors. Default off.
   expectedSymbols?, status, claim?, replanCount, ...}`. Lifecycle:
   `open → claimed → committed | stale → (replan) → ... → skipped`.
 - **Claim** — `{todoId, agentId, fileHashes, claimedAt, expiresAt}`.
-  `fileHashes` is the optimistic-CAS witness; the runner re-hashes
-  at commit time and rejects if anything drifted under the worker.
+  Wire `fileHashes` is legacy/empty in V2; concurrency relies on
+  expectedFiles overlap + unique search anchors at apply time.
 - **ExitContract** — `{missionStatement, criteria[]}`. Each criterion
   has `{id, description, expectedFiles[], status: "unmet"|"met"|"wont-do"}`.
   Set once by the planner at first-pass-contract; the auditor
@@ -61,16 +68,15 @@ system prompt. Same model + same todo, different priors. Default off.
    - **invalid refusal** (worker has sufficient tools) → todo released back to board
    - **insufficient-tools** → skipped with systemic finding exposed (no planner/auditor does the work)
 6. **Empty hunks** → markStale (`empty hunks no skip reason`).
-7. **Re-hash expectedFiles** → if any hash changed since `hashes`,
-   markStale (`CAS mismatch before write`). Lost the race.
-8. **applyHunks** — applies replace/create/append against pre-prompt
-   contents. Failure → markStale (`hunk apply failed: <error>`).
-9. **Validate** — zero-out check, BOM check.
-10. **Critic intercept (Unit 35, opt-in)** — peer-agent reviews the
+7. **applyHunks** — applies replace/create/append against pre-prompt
+   contents. First miss aborts the whole batch (fail-closed). Failure
+   → markStale (`hunk apply failed: <error>`).
+8. **Validate** — zero-out check, BOM check.
+9. **Critic intercept (Unit 35, opt-in)** — peer-agent reviews the
     diff. Reject → markStale. Critic ensemble (Unit 60, opt-in) is
     a 3-lane majority vote.
-11. **Atomic write** — tmp + rename per file.
-12. **Board.commitTodo** — record success.
+10. **Atomic write** — tmp + rename per file (not content-hash CAS).
+11. **Board.commitTodo** — record success.
 
 Every stale-attributable-to-agent path increments
 `rejectedAttemptsPerAgent` (Task #67) for the per-agent table.

@@ -39,8 +39,12 @@ export interface CouncilStopHost {
   stopCapWatchdog: () => void;
 }
 
+/**
+ * Signal hard stop (abort + stopping flags) without freezing the transcript.
+ * Terminal system lines (resume save, summary banner, timeout notes) must still
+ * land; freeze only immediately before killAll in closeOutStopped.
+ */
 export function enterImmediateShutdown(host: CouncilStopHost): void {
-  host.setTranscriptFrozen(true);
   host.setStopping(true);
   if (host.hasState()) host.setStateStopping(true);
   host.manager.beginRunShutdown();
@@ -49,6 +53,29 @@ export function enterImmediateShutdown(host: CouncilStopHost): void {
   } catch {
     // best-effort
   }
+}
+
+/** Install a single-flight promise synchronously so concurrent stop/drain join. */
+function installStopInFlight(
+  host: CouncilStopHost,
+  work: () => Promise<void>,
+): Promise<void> {
+  const existing = host.getStopInFlight();
+  if (existing) return existing;
+  let resolve!: () => void;
+  let reject!: (err: unknown) => void;
+  // Create + install *before* starting work so a concurrent caller joins.
+  const p = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  host.setStopInFlight(p);
+  void work().then(resolve, reject).finally(() => {
+    if (host.getStopInFlight() === p) {
+      host.setStopInFlight(null);
+    }
+  });
+  return p;
 }
 
 export async function waitForAgentsIdle(
@@ -63,12 +90,12 @@ export async function waitForAgentsIdle(
 
 export async function councilStop(host: CouncilStopHost): Promise<void> {
   // Single-flight: concurrent stop/drain share one close-out promise.
-  const inflight = host.getStopInFlight();
-  if (inflight) return inflight;
-  enterImmediateShutdown(host);
-  const p = awaitLoopThenCloseOut(host, { immediate: true });
-  host.setStopInFlight(p);
-  return p;
+  // Install the promise *before* any await so two concurrent stop() calls
+  // cannot both enter awaitLoopThenCloseOut (TOCTOU).
+  return installStopInFlight(host, async () => {
+    enterImmediateShutdown(host);
+    await awaitLoopThenCloseOut(host, { immediate: true });
+  });
 }
 
 /**
@@ -89,8 +116,10 @@ export async function councilDrain(host: CouncilStopHost): Promise<void> {
   const phase = host.getPhase();
   const discussionPhase = phase === "discussing" || phase === "seeding";
   const agentsThinking = host.anyAgentThinking();
-
-  if (inFlight === 0 && phase !== "executing") {
+  // Empty queue: hard-stop even if phase is still "executing" (workers finished,
+  // phase lag). Previously waited full soft-drain timeout for a drainResolve
+  // that never fires when drainTodos already exited.
+  if (inFlight === 0) {
     if (discussionPhase && agentsThinking) {
       host.setDrainRequested(true);
       host.setPhase("draining");
@@ -99,6 +128,28 @@ export async function councilDrain(host: CouncilStopHost): Promise<void> {
           "Press Stop to escalate immediately.",
       );
       void finishCouncilDrainInBackground(host, { mode: "discussion" });
+      return;
+    }
+    // Workers still draining this cycle — join their promise instead of 180s sleep.
+    const workerDrain = host.getWorkerDrainPromise();
+    if (workerDrain && phase === "executing") {
+      host.setDrainRequested(true);
+      host.setPhase("draining");
+      host.appendSystem(
+        "[drain] Soft stop — waiting for in-flight execution workers to finish (queue empty).",
+      );
+      void (async () => {
+        try {
+          await Promise.race([
+            workerDrain.catch(() => {}),
+            new Promise<void>((r) => setTimeout(r, 180_000)),
+          ]);
+        } finally {
+          if (!host.getStopInFlight()) {
+            await councilStop(host);
+          }
+        }
+      })();
       return;
     }
     host.appendSystem(
@@ -147,11 +198,11 @@ async function finishCouncilDrainInBackground(
   if (host.getPhase() === "stopped" || host.getPhase() === "completed") return;
   if (host.getStopping() && host.getPhase() === "stopping") return;
 
-  host.setStopping(true);
-  if (host.hasState()) host.setStateStopping(true);
-  const p = awaitLoopThenCloseOut(host, { immediate: true });
-  host.setStopInFlight(p);
-  await p.catch(() => {});
+  await installStopInFlight(host, async () => {
+    host.setStopping(true);
+    if (host.hasState()) host.setStateStopping(true);
+    await awaitLoopThenCloseOut(host, { immediate: true });
+  }).catch(() => {});
 }
 
 /** Hard-stop wait for in-flight execution workers before killAll. */
@@ -270,7 +321,7 @@ export async function ensureTerminalCloseOut(host: CouncilStopHost): Promise<voi
     await host.getStopInFlight()!.catch(() => {});
     return;
   }
-  const p = closeOutStopped(host, { immediate: true });
-  host.setStopInFlight(p);
-  await p.catch(() => {});
+  await installStopInFlight(host, () => closeOutStopped(host, { immediate: true })).catch(
+    () => {},
+  );
 }

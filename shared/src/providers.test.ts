@@ -10,6 +10,7 @@ import {
   ANTHROPIC_MODELS,
   OPENAI_MODELS,
   OLLAMA_CLOUD_MODELS,
+  OPENCODE_GO_MODELS,
 } from "./providers.js";
 
 test("detectProvider — bare local model defaults to ollama", () => {
@@ -97,6 +98,39 @@ test("OLLAMA_CLOUD_MODELS — every entry routes via ollama-cloud (matches :clou
   for (const m of OLLAMA_CLOUD_MODELS) {
     assert.ok(/(?::|-)cloud$/.test(m), `${m} must end with :cloud or -cloud`);
     assert.equal(detectProvider(m), "ollama-cloud");
+  }
+  // Fallback must match API-shaped names from ollama.com/api/tags
+  // (mapped to local :cloud / -cloud tags).
+  for (const must of [
+    "glm-5.2:cloud",
+    "kimi-k2.7-code:cloud",
+    "minimax-m3:cloud",
+    "deepseek-v4-flash:cloud",
+    "gpt-oss:120b-cloud",
+    "gemma4:31b-cloud",
+  ]) {
+    assert.ok(
+      (OLLAMA_CLOUD_MODELS as readonly string[]).includes(must),
+      `OLLAMA_CLOUD_MODELS missing ${must}`,
+    );
+  }
+});
+
+test("OPENCODE_GO_MODELS — every entry is opencode-go/ prefixed and includes Go docs leaders", () => {
+  for (const m of OPENCODE_GO_MODELS) {
+    assert.ok(m.startsWith("opencode-go/"), `${m} must start with opencode-go/`);
+    assert.equal(detectProvider(m), "opencode");
+  }
+  for (const must of [
+    "opencode-go/grok-4.5",
+    "opencode-go/kimi-k3",
+    "opencode-go/glm-5.2",
+    "opencode-go/deepseek-v4-flash",
+  ]) {
+    assert.ok(
+      (OPENCODE_GO_MODELS as readonly string[]).includes(must),
+      `OPENCODE_GO_MODELS missing ${must}`,
+    );
   }
 });
 

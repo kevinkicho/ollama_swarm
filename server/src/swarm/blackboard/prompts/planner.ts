@@ -175,6 +175,189 @@ function stripFences(raw: string): string | null {
   return null;
 }
 
+/**
+ * Coerce common planner shape mistakes so schema-dropped todos can still land
+ * (d279548d: 5 schema-dropped → no-progress with zero board work).
+ */
+export function coercePlannerTodoItem(item: unknown): unknown {
+  if (typeof item !== "object" || item === null || Array.isArray(item)) return item;
+  const o: Record<string, unknown> = { ...(item as Record<string, unknown>) };
+
+  // Aliases → description
+  if (typeof o.description !== "string" || !o.description.trim()) {
+    for (const k of ["task", "todo", "title", "summary", "goal", "action"] as const) {
+      if (typeof o[k] === "string" && (o[k] as string).trim()) {
+        o.description = (o[k] as string).trim();
+        break;
+      }
+    }
+  }
+
+  // expectedFiles aliases / string → array
+  if (!Array.isArray(o.expectedFiles)) {
+    if (typeof o.expectedFiles === "string" && o.expectedFiles.trim()) {
+      o.expectedFiles = [o.expectedFiles.trim()];
+    } else if (typeof o.file === "string" && o.file.trim()) {
+      o.expectedFiles = [o.file.trim()];
+    } else if (typeof o.path === "string" && o.path.trim()) {
+      o.expectedFiles = [o.path.trim()];
+    } else if (Array.isArray(o.files)) {
+      o.expectedFiles = o.files;
+    } else if (Array.isArray(o.paths)) {
+      o.expectedFiles = o.paths;
+    } else if (Array.isArray(o.targetFiles)) {
+      o.expectedFiles = o.targetFiles;
+    }
+  }
+
+  // Strip *accidental* trailing slashes on file paths ("src/app.ts/") only.
+  // Bare directories ("src/") stay invalid so Zod still drops them.
+  if (Array.isArray(o.expectedFiles)) {
+    o.expectedFiles = o.expectedFiles
+      .map((p) => {
+        if (typeof p !== "string") return p;
+        let s = p.trim();
+        if (/\.[A-Za-z0-9]{1,12}[/\\]+$/.test(s)) {
+          s = s.replace(/[/\\]+$/, "");
+        }
+        return s;
+      })
+      .filter((p) => typeof p === "string" && p.length > 0);
+  }
+
+  // build without command → hunks
+  if (o.kind === "build" && (typeof o.command !== "string" || !String(o.command).trim())) {
+    delete o.kind;
+    delete o.command;
+  }
+
+  // Infer files from description text when still missing
+  if (
+    (!Array.isArray(o.expectedFiles) || o.expectedFiles.length === 0)
+    && typeof o.description === "string"
+  ) {
+    const mentioned = extractFileMentions(o.description);
+    if (mentioned.length > 0) {
+      o.expectedFiles = mentioned.slice(0, 2);
+    }
+  }
+
+  return o;
+}
+
+/** Filename-like tokens from free text (HTML modules, src paths, etc.). */
+export function extractFileMentions(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  // Paths with extensions; allow digits_name.html module style
+  const re =
+    /(?:^|[\s`'"(])((?:[\w.-]+\/)*[\w.-]+\.(?:html?|tsx?|jsx?|mjs|cjs|json|md|css|py|go|rs|java|kt|swift|yml|yaml|toml|sh|bash|txt))\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const p = m[1]!.replace(/\\/g, "/");
+    if (!seen.has(p)) {
+      seen.add(p);
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+/**
+ * Second-chance salvage for schema-dropped raw items + free-text file tokens,
+ * optionally rebound against a known repo file list.
+ */
+export function salvagePlannerTodosFromDropped(
+  dropped: readonly PlannerDropped[],
+  repoFiles?: readonly string[],
+): PlannerTodoInput[] {
+  const todos: PlannerTodoInput[] = [];
+  const repoSet = new Set((repoFiles ?? []).map((f) => f.replace(/\\/g, "/")));
+  const hasRepo = repoSet.size > 0;
+
+  for (const d of dropped) {
+    const coerced = coercePlannerTodoItem(d.raw);
+    const pre = lenientPreprocess(coerced, {
+      maxDescription: 500,
+      maxExpectedFiles: 2,
+      maxExpectedAnchors: ANCHOR_MAX_PER_TODO,
+      maxExpectedSymbols: SYMBOLS_MAX_PER_TODO,
+      maxPreferredTag: 40,
+      maxCriteria: CRITERIA_PER_TODO_MAX,
+    });
+    const v = PlannerTodoSchema.safeParse(pre);
+    if (v.success) {
+      const isBuild = v.data.kind === "build";
+      todos.push({
+        kind: v.data.kind ?? "hunks",
+        description: v.data.description,
+        expectedFiles: v.data.expectedFiles,
+        ...(isBuild ? { command: v.data.command } : {}),
+        expectedAnchors: v.data.expectedAnchors,
+        expectedSymbols: v.data.expectedSymbols,
+        ...(v.data.preferredTag ? { preferredTag: v.data.preferredTag } : {}),
+        ...(v.data.criteria && v.data.criteria.length > 0 ? { criteria: v.data.criteria } : {}),
+      });
+      continue;
+    }
+
+    // Aggressive: pull description + any file token that exists in repoFiles
+    if (typeof d.raw === "object" && d.raw !== null && !Array.isArray(d.raw)) {
+      const raw = d.raw as Record<string, unknown>;
+      let desc =
+        typeof raw.description === "string"
+          ? raw.description
+          : typeof raw.task === "string"
+            ? raw.task
+            : typeof raw.title === "string"
+              ? raw.title
+              : "";
+      if (!desc.trim()) continue;
+      desc = desc.trim().slice(0, 500);
+      const candidates = [
+        ...extractFileMentions(desc),
+        ...extractFileMentions(JSON.stringify(raw).slice(0, 2000)),
+      ];
+      const files: string[] = [];
+      for (const c of candidates) {
+        const norm = c.replace(/\\/g, "/");
+        if (hasRepo) {
+          if (repoSet.has(norm) && !files.includes(norm)) files.push(norm);
+          else {
+            const base = norm.split("/").pop()!;
+            const hit = [...repoSet].find((f) => f === base || f.endsWith("/" + base));
+            if (hit && !files.includes(hit)) files.push(hit);
+          }
+        } else if (!files.includes(norm)) {
+          files.push(norm);
+        }
+        if (files.length >= 2) break;
+      }
+      if (files.length === 0) continue;
+      todos.push({
+        kind: "hunks",
+        description: desc,
+        expectedFiles: files.slice(0, 2),
+      });
+    }
+  }
+  return softCap(todos, MAX_TODOS_PER_BATCH);
+}
+
+function todoFromValidated(v: z.infer<typeof PlannerTodoSchema>): PlannerTodoInput {
+  const isBuild = v.kind === "build";
+  return {
+    kind: v.kind ?? "hunks",
+    description: v.description,
+    expectedFiles: v.expectedFiles,
+    ...(isBuild ? { command: v.command } : {}),
+    expectedAnchors: v.expectedAnchors,
+    expectedSymbols: v.expectedSymbols,
+    ...(v.preferredTag ? { preferredTag: v.preferredTag } : {}),
+    ...(v.criteria && v.criteria.length > 0 ? { criteria: v.criteria } : {}),
+  };
+}
+
 export function parsePlannerResponse(raw: string): PlannerParseResult {
   if (raw.trim().length === 0) {
     return { ok: false, reason: "empty response — model produced no output after stripping thinking tags" };
@@ -188,6 +371,19 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
   if (Array.isArray(parsed)) {
     items = parsed;
   } else if (
+    parsed &&
+    typeof parsed === "object" &&
+    Array.isArray((parsed as Record<string, unknown>).todos)
+  ) {
+    // {"todos":[...]} envelope — common model habit
+    items = (parsed as { todos: unknown[] }).todos;
+  } else if (
+    parsed &&
+    typeof parsed === "object" &&
+    Array.isArray((parsed as Record<string, unknown>).items)
+  ) {
+    items = (parsed as { items: unknown[] }).items;
+  } else if (
     // 2026-05-01 (#121): leniency — when the planner emits a single
     // todo-shaped object (has "description" field) instead of wrapping
     // it in [...], wrap it for them. The per-item walk below validates
@@ -200,7 +396,9 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
     // usable.
     parsed &&
     typeof parsed === "object" &&
-    "description" in (parsed as Record<string, unknown>)
+    ("description" in (parsed as Record<string, unknown>)
+      || "task" in (parsed as Record<string, unknown>)
+      || "title" in (parsed as Record<string, unknown>))
   ) {
     items = [parsed];
   } else {
@@ -209,7 +407,8 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
   const todos: PlannerTodoInput[] = [];
   const dropped: PlannerDropped[] = [];
   for (const item of items) {
-    let itemProcessed = lenientPreprocess(item, {
+    const coerced = coercePlannerTodoItem(item);
+    let itemProcessed = lenientPreprocess(coerced, {
       maxDescription: 500,
       maxExpectedFiles: 2,
       maxExpectedAnchors: ANCHOR_MAX_PER_TODO,
@@ -219,20 +418,7 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
     });
     const v = PlannerTodoSchema.safeParse(itemProcessed);
     if (v.success) {
-      // #237: discriminated union — only one branch sets `command`.
-      const isBuild = v.data.kind === "build";
-      todos.push({
-        kind: v.data.kind ?? "hunks",
-        description: v.data.description,
-        expectedFiles: v.data.expectedFiles,
-        ...(isBuild ? { command: v.data.command } : {}),
-        expectedAnchors: v.data.expectedAnchors,
-        expectedSymbols: v.data.expectedSymbols,
-        // Phase 5c of #243: forward optional planner tag hint.
-        ...(v.data.preferredTag ? { preferredTag: v.data.preferredTag } : {}),
-        // 2026-05-02 (auto-rollback decision #1): forward criterion attribution.
-        ...(v.data.criteria && v.data.criteria.length > 0 ? { criteria: v.data.criteria } : {}),
-      });
+      todos.push(todoFromValidated(v.data));
     } else {
       const reason = v.error.issues
         .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
@@ -240,6 +426,20 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
       dropped.push({ reason, raw: item });
     }
   }
+
+  // Second chance: salvage schema-dropped items with aggressive coerce.
+  if (dropped.length > 0 && todos.length < MAX_TODOS_PER_BATCH) {
+    const salvaged = salvagePlannerTodosFromDropped(dropped);
+    const seen = new Set(todos.map((t) => t.description + "|" + t.expectedFiles.join(",")));
+    for (const t of salvaged) {
+      const key = t.description + "|" + t.expectedFiles.join(",");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      todos.push(t);
+      if (todos.length >= MAX_TODOS_PER_BATCH) break;
+    }
+  }
+
   // Soft-cap: if more valid todos survived than the per-batch max, keep the
   // first N rather than rejecting the entire response.
   const cappedTodos = softCap(todos, MAX_TODOS_PER_BATCH);

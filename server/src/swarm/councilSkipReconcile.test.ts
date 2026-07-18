@@ -5,7 +5,9 @@ import {
   reconcileCriteriaFromSkips,
   skipCoversCriterionFiles,
   filterAuditTodosAgainstSkips,
+  filterAuditTodosAgainstPermanentSkips,
   promoteCriteriaFromSkipEvidence,
+  refuseMetFromExhaustedPermanentSkips,
   criterionGroundedForSkipPromote,
 } from "./councilSkipReconcile.js";
 import type { ExitCriterion } from "./blackboard/types.js";
@@ -220,4 +222,77 @@ test("promoteCriteriaFromSkipEvidence — refuses empty expectedFiles criteria",
     { criterionId: "c5", reason: "already done", expectedFiles: [] },
   ]);
   assert.equal(updated[0]!.status, "unmet");
+});
+
+test("refuseMetFromExhaustedPermanentSkips — demotes met without commit (961a885f)", () => {
+  const criteria: ExitCriterion[] = [
+    {
+      id: "c10",
+      description: "Every new panel must include DataFooter",
+      expectedFiles: ["src/markets/insurance/InsuranceDashboard.jsx"],
+      status: "met",
+      addedAt: 1,
+    },
+  ];
+  const { demotedIds, criteria: out } = refuseMetFromExhaustedPermanentSkips(
+    criteria,
+    [
+      {
+        description: "Create new panel components with DataFooter",
+        expectedFiles: ["src/markets/insurance/InsuranceDashboard.jsx"],
+        reason: "permanent:attempts-exhausted: pure think",
+        criterionId: "c10",
+      },
+    ],
+    [], // no commits
+  );
+  assert.deepEqual(demotedIds, ["c10"]);
+  assert.equal(out[0]!.status, "unmet");
+});
+
+test("refuseMetFromExhaustedPermanentSkips — keeps met when commit covers files", () => {
+  const criteria: ExitCriterion[] = [
+    {
+      id: "c10",
+      description: "footer",
+      expectedFiles: ["src/markets/insurance/InsuranceDashboard.jsx"],
+      status: "met",
+      addedAt: 1,
+    },
+  ];
+  const { demotedIds, criteria: out } = refuseMetFromExhaustedPermanentSkips(
+    criteria,
+    [
+      {
+        description: "Create panels",
+        expectedFiles: ["src/markets/insurance/InsuranceDashboard.jsx"],
+        reason: "permanent:attempts-exhausted",
+        criterionId: "c10",
+      },
+    ],
+    ["src/markets/insurance/InsuranceDashboard.jsx"],
+  );
+  assert.equal(demotedIds.length, 0);
+  assert.equal(out[0]!.status, "met");
+});
+
+test("filterAuditTodosAgainstPermanentSkips — drops create/wire panel remint", () => {
+  const { kept, dropped } = filterAuditTodosAgainstPermanentSkips(
+    [
+      {
+        description: "Create new panel components that use BentoCard DataFooter",
+        expectedFiles: ["src/markets/insurance/X.jsx"],
+      },
+    ],
+    [
+      {
+        description: "Create new panel components that use BentoCard DataFooter",
+        expectedFiles: ["src/markets/insurance/X.jsx"],
+        reason: "permanent:attempts-exhausted",
+      },
+    ],
+    { hadDurableProgress: false },
+  );
+  assert.equal(dropped.length, 1);
+  assert.equal(kept.length, 0);
 });

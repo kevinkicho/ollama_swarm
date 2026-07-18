@@ -34,6 +34,7 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   }
   ctx.setWasDrained(false);
   ctx.setUserStopRequested(false);
+  ctx.setPlanAndExecutePromise(null);
   ctx.setPlanningStartedAt(undefined);
   ctx.setPlanningSubphase(undefined);
   ctx.clearExplorationCache();
@@ -110,4 +111,7 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   ctx.getHypothesisGroupAborts().clear();
   ctx.getFileCommitCounts().clear();
   ctx.getHypothesisDeferralTimestamps().clear();
+  // Clear per-run pheromone bias so sequential blackboard runs do not inherit
+  // hot-file rankings from a prior run on the same process.
+  ctx.clearPheromoneHeatmap();
 }

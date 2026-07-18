@@ -26,7 +26,6 @@ import type { AdaptiveWatchdogContext } from "./adaptiveWorkerWatchdog.js";
 import type { RunnerUtilContext } from "./runnerUtil.js";
 import type { PlannerSeed } from "./prompts/planner.js";
 import { bumpAgentCounter } from "./runnerHelpers.js";
-import { pheromoneHeatmap } from "../pheromoneHeatmap.js";
 import type { LifecycleState } from "./lifecycleState.js";
 import { brainEnabled } from "./prompts/brainIntegration.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
@@ -212,6 +211,13 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     writeCrashSnapshot: (err: unknown) => r.writeCrashSnapshot(err),
     killAll: () => r.opts.manager.killAll(),
     flushStateWrite: () => r.flushStateWrite(),
+    getPlanAndExecutePromise: () => r.planAndExecutePromise,
+    setPlanAndExecutePromise: (p: Promise<void> | null) => {
+      r.planAndExecutePromise = p;
+    },
+    clearPheromoneHeatmap: () => {
+      r.pheromoneHeatmap?.clear?.();
+    },
     stopQueueReaper: () => r.stopQueueReaper(),
     stopCapWatchdog: () => r.stopCapWatchdog(),
     stopReplanWatcher: () => r.stopReplanWatcher(),
@@ -462,7 +468,7 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
     bumpJsonRepairs: (agentId: string) => bumpAgentCounter(r.jsonRepairsPerAgent, agentId),
     bumpPromptErrors: (agentId: string) => bumpAgentCounter(r.promptErrorsPerAgent, agentId),
     getSelfConsistencyK: () => Math.max(1, Math.min(5, r.active?.selfConsistencyK ?? 1)),
-    getPheromoneHeatmap: () => pheromoneHeatmap,
+    getPheromoneHeatmap: () => r.pheromoneHeatmap,
     brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
     updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
     getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
@@ -637,6 +643,7 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
       skipCommit: options?.skipCommit,
       gitCommitOptional,
       runId: r.active?.runId,
+      clonePath,
     });
     return { 
       ok: result.ok, 

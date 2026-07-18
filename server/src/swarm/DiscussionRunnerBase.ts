@@ -63,6 +63,13 @@ export abstract class DiscussionRunnerBase {
   protected stopping = false;
   /** Soft-drain: finish current round, then refuse further rounds. */
   protected drainRequested = false;
+  /** Soft-drain backstop timer — cleared on stop / settle. */
+  private discussionDrainTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Soft-drain escalate after this many ms if still running. Override in tests
+   * with 0 to disable the backstop timer (avoids open handles).
+   */
+  protected discussionDrainTimeoutMs = 3 * 60_000;
   protected active?: RunConfig;
   protected summaryWritten = false;
   protected earlyStopDetail?: string;
@@ -324,33 +331,97 @@ export abstract class DiscussionRunnerBase {
   async stop(): Promise<void> {
     this.stopping = true;
     this.drainRequested = false;
+    this.clearDiscussionDrainTimer();
     this.stopDiscussionWallClock();
     this.setPhase("stopping");
+    // Abort in-flight prompts so the loop can observe stopping and exit.
+    try {
+      this.opts.manager.beginRunShutdown();
+    } catch {
+      /* best-effort */
+    }
+    // Join the main loop (and its finally close-out) before releasing
+    // resources. Caps so a hung await cannot wedge Orchestrator teardown.
+    const JOIN_CAP_MS = 45_000;
+    if (this.loopPromise) {
+      await Promise.race([
+        this.loopPromise.catch(() => {}),
+        new Promise<void>((r) => {
+          const t = setTimeout(r, JOIN_CAP_MS);
+          // Do not pin process exit on the join cap alone.
+          if (typeof t.unref === "function") t.unref();
+        }),
+      ]);
+    }
+    // If close-out already wrote summary + killAll, avoid a second kill noise.
+    if (this.phase === "stopped" || this.phase === "completed") {
+      return;
+    }
     const killResult = await this.opts.manager.killAll();
     this.appendSystem(formatPortReleaseLine(killResult));
     this.setPhase("stopped");
   }
 
   /**
-   * Soft-stop: finish the current discussion round, then exit cleanly.
-   * Does not kill agents mid-turn. Escalates to hard stop after 3 min.
+   * Soft-stop: mark draining and return promptly (HTTP /drain must not block
+   * up to 3 min). Finish the current discussion round in the background, then
+   * close out. Escalates to hard stop after 3 min if the loop has not settled.
+   * Matches council drain's non-blocking contract.
    */
   async drain(): Promise<void> {
     if (!this.isRunning()) return;
     if (this.drainRequested || this.stopping) return;
+    if (this.phase === "stopped" || this.phase === "completed") return;
     this.drainRequested = true;
+    this.setPhase("draining");
     this.appendSystem(
-      "[drain] Soft stop requested — finishing the current round, then closing out (hard stop after 3 min if needed).",
+      "[drain] Soft stop requested — finishing the current round, then closing out " +
+        "(hard stop after 3 min if needed). Press Stop to escalate immediately.",
     );
-    const join = this.loopPromise ?? Promise.resolve();
-    const timed = new Promise<void>((resolve) => {
-      setTimeout(resolve, 3 * 60_000);
-    });
-    await Promise.race([join, timed]);
-    if (this.isRunning()) {
-      this.appendSystem("[drain] Soft-stop deadline exceeded — escalating to hard stop.");
-      await this.stop();
+    void this.finishDiscussionDrainInBackground();
+  }
+
+  private clearDiscussionDrainTimer(): void {
+    if (this.discussionDrainTimer) {
+      clearTimeout(this.discussionDrainTimer);
+      this.discussionDrainTimer = undefined;
     }
+  }
+
+  /**
+   * Soft-drain backstop only — do **not** await loopPromise (would block process
+   * exit / pin handles if the loop is stuck). Natural settle uses drainRequested
+   * + runDiscussionLoop finally. Hard-stop only if still running after timeout.
+   */
+  private finishDiscussionDrainInBackground(): void {
+    this.clearDiscussionDrainTimer();
+    const timeoutMs = this.discussionDrainTimeoutMs;
+    // 0 / negative: no escalate timer (tests / opt-out). Soft drain still sets
+    // drainRequested so the loop exits on its next round boundary.
+    if (!(timeoutMs > 0)) return;
+
+    // Clear escalate timer when the main loop settles (no await).
+    const join = this.loopPromise;
+    if (join) {
+      const onSettled = () => this.clearDiscussionDrainTimer();
+      void join.then(onSettled, onSettled);
+    }
+    const timer = setTimeout(() => {
+      if (this.discussionDrainTimer !== timer) return;
+      this.discussionDrainTimer = undefined;
+      if (this.stopping) return;
+      if (this.phase === "stopped" || this.phase === "completed") return;
+      if (!this.isRunning()) return;
+      this.appendSystem(
+        "[drain] Soft-stop deadline exceeded — escalating to hard stop.",
+      );
+      void this.stop().catch(() => {
+        /* best-effort */
+      });
+    }, timeoutMs);
+    this.discussionDrainTimer = timer;
+    // Prevent the backstop from keeping the process alive (tests / idle).
+    if (typeof timer.unref === "function") timer.unref();
   }
 
   /** Resolve when the main loop has finished (or immediately if none). */

@@ -51,4 +51,9 @@ export class PheromoneHeatmap {
   }
 }
 
+/**
+ * @deprecated Process-global heatmap — do not use for run coordination.
+ * Prefer a per-runner `new PheromoneHeatmap()` (StigmergyRunner / BlackboardRunner).
+ * Kept only for accidental external imports; always empty after clear in tests.
+ */
 export const pheromoneHeatmap = new PheromoneHeatmap();

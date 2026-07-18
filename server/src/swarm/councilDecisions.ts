@@ -80,7 +80,10 @@ export function buildCouncilTodoExtractPrompt(args: {
 /** Planner fallback when auditor stuck — unmet criteria → todos. */
 export function buildAuditorUnmetTodoFallbackPrompt(
   unmetCriteria: ReadonlyArray<{ description: string; expectedFiles: string[] }>,
+  opts?: { directive?: string; committedFiles?: readonly string[] },
 ): string {
+  const directive = (opts?.directive ?? "").trim();
+  const recent = (opts?.committedFiles ?? []).slice(0, 12);
   return [
     `You are the planner. The auditor found ${unmetCriteria.length} unmet criteria:`,
     "",
@@ -88,14 +91,24 @@ export function buildAuditorUnmetTodoFallbackPrompt(
       (c) => `- ${c.description} (files: ${c.expectedFiles.join(", ") || "none"})`,
     ),
     "",
+    directive
+      ? `USER DIRECTIVE (authoritative):\n${directive.slice(0, 800)}\n`
+      : "",
+    recent.length > 0
+      ? `Recently committed files (prefer editing these when relevant):\n${recent.map((f) => `- ${f}`).join("\n")}\n`
+      : "",
     "Your task: For EACH unmet criterion, produce 1-2 concrete, actionable todos that would satisfy it.",
     "Each todo must have a specific description and list the files it would modify.",
+    "Prefer progressive next steps (expand, implement, fix) — do not re-post work already permanent-skipped.",
+    "If a criterion lists expectedFiles, at least one todo MUST target those paths.",
     "",
     JSON_ARRAY_ONLY_LINE,
     '[{"description": "specific change", "expectedFiles": ["path/to/file.ts"]}]',
     "",
-    "Max 8 todos. Every file path MUST appear in the PROJECT FILES list.",
-  ].join("\n");
+    "Max 8 todos. Every file path MUST appear in the PROJECT FILES list (or the criterion's expectedFiles).",
+  ]
+    .filter((line, i, arr) => !(line === "" && arr[i - 1] === ""))
+    .join("\n");
 }
 
 /** Follow-up todos from incomplete audit findings (JSON-array contract). */

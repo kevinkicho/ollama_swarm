@@ -6,12 +6,42 @@
 
 import { extractJsonFromText } from "./extractJson.js";
 import { stripForJsonParse } from "./stripAgentText.js";
+import {
+  applySoftJsonRepairs,
+  stripJsonFences,
+} from "./softJsonRepair.js";
 
-export type JsonExtractTier = "direct" | "normalized" | "extracted";
+export type JsonExtractTier = "direct" | "normalized" | "extracted" | "soft-repaired";
 
 export interface JsonExtractResult {
   json: string;
   tier: JsonExtractTier;
+}
+
+/**
+ * Try fence-strip + soft textual repairs until JSON.parse succeeds.
+ * Used only after a direct parse of the same blob already failed.
+ */
+function tryParseOrSoft(s: string): JsonExtractResult | null {
+  const unfenced = stripJsonFences(s);
+  const candidates = unfenced === s ? [s] : [unfenced, s];
+  for (const c of candidates) {
+    try {
+      JSON.parse(c);
+      // Unfenced form parsed (e.g. leading ```json without closer).
+      return { json: c, tier: "soft-repaired" };
+    } catch {
+      /* continue */
+    }
+    const repaired = applySoftJsonRepairs(c);
+    try {
+      JSON.parse(repaired);
+      return { json: repaired, tier: "soft-repaired" };
+    } catch {
+      /* continue */
+    }
+  }
+  return null;
 }
 
 /** Best-effort JSON string candidate from an agentic response blob. */
@@ -36,13 +66,16 @@ export function extractJsonCandidate(raw: string): JsonExtractResult | null {
     } catch {
       // continue
     }
+    const softNorm = tryParseOrSoft(normalized);
+    if (softNorm) return softNorm;
     const fromNorm = extractJsonFromText(normalized);
     if (fromNorm) {
       try {
         JSON.parse(fromNorm);
         return { json: fromNorm, tier: "extracted" };
       } catch {
-        // continue
+        const softExt = tryParseOrSoft(fromNorm);
+        if (softExt) return softExt;
       }
     }
   }
@@ -53,9 +86,14 @@ export function extractJsonCandidate(raw: string): JsonExtractResult | null {
       JSON.parse(extracted);
       return { json: extracted, tier: "extracted" };
     } catch {
-      // continue
+      const softExt = tryParseOrSoft(extracted);
+      if (softExt) return softExt;
     }
   }
+
+  // Last chance: soft-repair the raw / stripped blob without balanced extract.
+  const softRaw = tryParseOrSoft(normalized || trimmed);
+  if (softRaw) return softRaw;
 
   return null;
 }
@@ -141,5 +179,7 @@ export function formatParseTier(tier: JsonExtractTier): string {
       return "strip";
     case "extracted":
       return "balanced-extract";
+    case "soft-repaired":
+      return "soft-repair";
   }
 }

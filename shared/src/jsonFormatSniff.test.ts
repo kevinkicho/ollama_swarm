@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { sniffJsonFormatStream } from "./jsonFormatSniff.js";
+import {
+  sniffJsonFormatStream,
+  JSON_FORMAT_THINK_ONLY_MAX_CHARS,
+  JSON_FORMAT_THINK_ONLY_EMIT_MAX_CHARS,
+} from "./jsonFormatSniff.js";
 
 describe("sniffJsonFormatStream", () => {
   it("allows short streams", () => {
@@ -26,5 +30,10 @@ describe("sniffJsonFormatStream", () => {
     const raw = "I will inspect the file and then write changes. ".repeat(400);
     const r = sniffJsonFormatStream(raw, { minChars: 2000 });
     assert.equal(r.ok, false);
+  });
+
+  it("default think-only max is under 16k (961a885f crash floor)", () => {
+    assert.ok(JSON_FORMAT_THINK_ONLY_MAX_CHARS < 16_000);
+    assert.ok(JSON_FORMAT_THINK_ONLY_EMIT_MAX_CHARS < JSON_FORMAT_THINK_ONLY_MAX_CHARS);
   });
 });

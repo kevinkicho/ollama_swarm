@@ -53,6 +53,50 @@ export function councilExecutionTier(
   return "impl";
 }
 
+/**
+ * Hot shared files that thrash under multi-writer apply (run 961a885f cycle 4):
+ * panelRegistry / marketPanels / DataProvider — merge + serialize writers.
+ */
+export const HOT_SHARED_FILE_BASENAMES = new Set([
+  "panelregistry.js",
+  "panelregistry.jsx",
+  "panelregistry.ts",
+  "panelregistry.tsx",
+  "marketpanels.js",
+  "marketpanels.jsx",
+  "marketpanels.ts",
+  "marketpanels.tsx",
+  "dataprovider.jsx",
+  "dataprovider.js",
+  "dataprovider.ts",
+  "dataprovider.tsx",
+  "datasources.js",
+  "datasources.ts",
+]);
+
+function fileBasenameLower(p: string): string {
+  const n = p.replace(/\\/g, "/");
+  const base = n.split("/").pop() ?? n;
+  return base.toLowerCase();
+}
+
+/** True when paths share a hot registry/provider basename (even if dirs differ). */
+export function hotSharedFilesOverlap(
+  a: readonly string[],
+  b: readonly string[],
+): boolean {
+  if (a.length === 0 || b.length === 0) return false;
+  const hotA = new Set(
+    a.map(fileBasenameLower).filter((bname) => HOT_SHARED_FILE_BASENAMES.has(bname)),
+  );
+  if (hotA.size === 0) return false;
+  for (const p of b) {
+    const bname = fileBasenameLower(p);
+    if (hotA.has(bname)) return true;
+  }
+  return false;
+}
+
 /** Merge todos that share any expectedFiles path (transitive via iterative merge). */
 export function mergeOverlappingCouncilTodos(
   todos: readonly CouncilTodoDraft[],
@@ -71,7 +115,9 @@ export function mergeOverlappingCouncilTodos(
         const a = working[i]!;
         const b = working[j]!;
         if (a.expectedFiles.length === 0 || b.expectedFiles.length === 0) continue;
-        if (!expectedFilesOverlap(a.expectedFiles, b.expectedFiles)) continue;
+        const pathOverlap = expectedFilesOverlap(a.expectedFiles, b.expectedFiles);
+        const hotOverlap = hotSharedFilesOverlap(a.expectedFiles, b.expectedFiles);
+        if (!pathOverlap && !hotOverlap) continue;
 
         const files = [...new Set([...a.expectedFiles, ...b.expectedFiles])];
         working[i] = {
@@ -111,7 +157,7 @@ export function prepareCouncilTodoBatch(
 
   if (mergeCount > 0) {
     appendSystem?.(
-      `[execution-plan] Merged ${mergeCount} overlapping todo(s) — one writer per shared expectedFiles.`,
+      `[execution-plan] Merged ${mergeCount} overlapping todo(s) — one writer per shared expectedFiles/hot registries.`,
     );
   }
 
@@ -172,10 +218,13 @@ export function scoreCouncilTodoForDequeue(
   }
 
   for (const active of inProgress) {
+    if (todo.expectedFiles.length === 0 || active.expectedFiles.length === 0) {
+      continue;
+    }
+    // Exact path overlap OR hot shared registries (panelRegistry, marketPanels, …)
     if (
-      todo.expectedFiles.length > 0 &&
-      active.expectedFiles.length > 0 &&
       expectedFilesOverlap(todo.expectedFiles, active.expectedFiles)
+      || hotSharedFilesOverlap(todo.expectedFiles, active.expectedFiles)
     ) {
       return Number.NEGATIVE_INFINITY;
     }

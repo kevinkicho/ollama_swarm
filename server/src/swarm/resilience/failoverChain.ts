@@ -45,6 +45,25 @@ export function decideFailover(input: FailoverInput): FailoverDecision {
     };
   }
 
+  // model-output already exhausted same-model retries inside promptWithRetry.
+  // Prefer swap (providerFailover) over "retry-same" which the loop would rethrow.
+  // Run 961a885f: think-only / json sniff on deepseek with empty chain → crash;
+  // with a configured chain, format failures must try the next model.
+  if (classified.category === "model-output") {
+    const next = pickNextUntried(currentModel, failoverChain, alreadyTried);
+    if (next) {
+      return {
+        action: "swap",
+        nextModel: next,
+        reason: `model-output on ${currentModel} → swap to ${next}`,
+      };
+    }
+    return {
+      action: "give-up",
+      reason: `model-output on ${currentModel} and no failover model in chain`,
+    };
+  }
+
   if (classified.retryable) {
     return {
       action: "retry-same",

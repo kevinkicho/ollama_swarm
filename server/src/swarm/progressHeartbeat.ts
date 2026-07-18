@@ -1,30 +1,42 @@
 /**
  * Run-level durable-progress heartbeat (RR-D).
- * lastProductiveAt advances on commits / durable apply success.
+ * lastProductiveAt advances on commits / durable apply success only —
+ * not at run start (avoids false "just progressed" at T0).
  */
 
 const lastProductiveAtByRun = new Map<string, number>();
 let lastRunId: string | null = null;
 
-function key(runId?: string | null): string {
-  return (runId ?? lastRunId ?? "").trim() || "_default";
+function writeKey(runId?: string | null): string | undefined {
+  const id = (runId ?? "").trim();
+  return id || undefined;
+}
+
+function readKey(runId?: string | null): string | undefined {
+  const id = (runId ?? "").trim();
+  if (id) return id;
+  return lastRunId ?? undefined;
 }
 
 export function startProgressHeartbeat(runId?: string | null): void {
-  const id = (runId ?? "").trim() || "_default";
-  lastRunId = id;
-  lastProductiveAtByRun.set(id, Date.now());
+  const id = (runId ?? "").trim();
+  if (id) lastRunId = id;
+  // Clear prior residue; do not stamp lastProductiveAt until real progress.
+  if (id) lastProductiveAtByRun.delete(id);
 }
 
 /** Call when durable progress happens (commit, met flip, tier, etc.). */
 export function noteProductiveProgress(runId?: string | null, atMs: number = Date.now()): void {
-  const id = key(runId);
+  const id = writeKey(runId);
+  if (!id) return; // fail-closed under multi-run without attribution
   lastRunId = id;
   lastProductiveAtByRun.set(id, atMs);
 }
 
 export function getLastProductiveAt(runId?: string | null): number | undefined {
-  return lastProductiveAtByRun.get(key(runId));
+  const id = readKey(runId);
+  if (!id) return undefined;
+  return lastProductiveAtByRun.get(id);
 }
 
 export function getProgressQuietMs(

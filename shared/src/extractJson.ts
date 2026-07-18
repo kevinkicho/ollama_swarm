@@ -18,6 +18,7 @@
 // Balanced-extract correctly stops at the first complete object.
 
 import { stripForJsonParse } from "./stripAgentText.js";
+import { stripJsonFences } from "./softJsonRepair.js";
 
 function extractJsonFromNormalized(normalized: string): string | null {
   const s = normalized.trim();
@@ -27,10 +28,15 @@ function extractJsonFromNormalized(normalized: string): string | null {
     .replace(/<(?:read|list|grep|glob|edit|bash|propose_hunks)\b[^>]*\/>/g, "")
     .replace(/<(?:read|list|grep|glob|edit|bash|propose_hunks)\b[^>]*>[\s\S]*?<\/(?:read|list|grep|glob|edit|bash|propose_hunks)>/g, "")
     .trim();
+  // Closed fences + unclosed ```json openers (83dc5910 agent-2: fence never closed).
+  const unfenced = stripJsonFences(stripped);
+  if (unfenced !== stripped) {
+    return extractFirstBalanced(unfenced) ?? unfenced;
+  }
   const fenceMatch = stripped.match(/^```(?:json)?\s*\n([\s\S]*?)\n```$/i);
-  if (fenceMatch) return extractFirstBalanced(fenceMatch[1].trim()) ?? fenceMatch[1].trim();
+  if (fenceMatch) return extractFirstBalanced(fenceMatch[1]!.trim()) ?? fenceMatch[1]!.trim();
   const innerFence = stripped.match(/```(?:json)?\s*\n([\s\S]*?)\n```/i);
-  if (innerFence) return extractFirstBalanced(innerFence[1].trim()) ?? innerFence[1].trim();
+  if (innerFence) return extractFirstBalanced(innerFence[1]!.trim()) ?? innerFence[1]!.trim();
   return extractFirstBalanced(stripped);
 }
 

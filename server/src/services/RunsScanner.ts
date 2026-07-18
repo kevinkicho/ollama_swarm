@@ -60,6 +60,40 @@ export async function scanForRunDigests(
   return result;
 }
 
+/**
+ * App-level mirrors: writeRunSummary also writes under cwd/logs/<runId>/ and
+ * cwd/server/logs/<runId>/. These were never scanned by parent-based discovery,
+ * so a run whose clone parent fell out of the knownParents LRU vanished from UI
+ * even though the summary still existed (live: completed council df1eab0b).
+ */
+export async function scanAppRunRegistry(
+  cwd: string = process.cwd(),
+): Promise<RunSummaryDigest[]> {
+  const out: RunSummaryDigest[] = [];
+  const seen = new Set<string>();
+  for (const rel of ["logs", path.join("server", "logs")]) {
+    const root = path.join(cwd, rel);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(root);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      // Skip crash-recovery placeholders with no useful identity
+      if (entry.startsWith("recover-me-")) continue;
+      const runDir = path.join(root, entry);
+      try {
+        if (!(await fs.stat(runDir)).isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      await readSummariesInDir(runDir, entry, seen, out);
+    }
+  }
+  return out;
+}
+
 async function scanForRunDigestsUncached(
   parentsToScan: Set<string>,
   opts: ScanOptions = {},
@@ -67,6 +101,27 @@ async function scanForRunDigestsUncached(
   const { activeClone = null, activeRunId = null } = opts;
   const collected: RunSummaryDigest[] = [];
   const parentsScanned: string[] = [];
+
+  // Always merge app registry (independent of parentPath / knownParents).
+  try {
+    const appRuns = await scanAppRunRegistry(process.cwd());
+    for (const d of appRuns) {
+      d.isActive =
+        activeClone !== null
+        && !!d.clonePath
+        && path.resolve(d.clonePath) === path.resolve(activeClone)
+        && d.runId !== undefined
+        && d.runId === activeRunId;
+      collected.push(d);
+    }
+    parentsScanned.push(path.join(process.cwd(), "logs"));
+    parentsScanned.push(path.join(process.cwd(), "server", "logs"));
+  } catch (err) {
+    console.warn(
+      "[swarm] scan-app-run-registry-failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
   for (const parent of parentsToScan) {
     let entries: string[];

@@ -45,8 +45,8 @@ export class MultiWriterState {
    * Called during the discussion loop when an agent returns hunks.
    */
   addProposal(agent: Agent, responseText: string): { hunks: Hunk[]; skipped: boolean; reason?: string } {
-    // Parse hunks from the agent response
-    const allowedFiles = new Set<string>(); // Will be populated later
+    // Empty expectedFiles = allow-all (multi-writer collects proposals for any path;
+    // reconcile + wrap-up apply enforce final safety). See parseWorkerResponse.
     const text = extractText(responseText) ?? responseText;
     const parsed = parseWorkerResponse(text, []);
 

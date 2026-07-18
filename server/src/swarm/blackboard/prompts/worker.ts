@@ -76,7 +76,12 @@ const ReplaceBetweenHunkSchema = z.object({
   op: z.literal("replace_between"),
   file: FILE_FIELD,
   start: z.string().min(1).max(SEARCH_MAX),
-  endExclusive: z.string().min(1).max(SEARCH_MAX).optional(),
+  // Models often emit "endExclusive": null for start→EOF; treat as omitted
+  // (2010479c: "Expected string, received null" → wasted repair turns).
+  endExclusive: z.preprocess(
+    (v) => (v === null || v === "" ? undefined : v),
+    z.string().min(1).max(SEARCH_MAX).optional(),
+  ),
   replace: z.string().max(CONTENT_MAX),
 });
 
@@ -105,30 +110,140 @@ export const WorkerResponseSchema = z.object({
 });
 
 export type WorkerParseResult =
-  | { ok: true; hunks: Hunk[]; skip?: string }
+  | { ok: true; hunks: Hunk[]; skip?: string; demotions?: HunkDemotion[] }
   | { ok: false; reason: string };
 
-/** Reject hunks whose replace payload is too large for reliable apply. */
-export function validateHunkPayload(hunks: readonly Hunk[]): WorkerParseResult {
+/** Record of an automatic op demotion for oversized payloads (83dc5910). */
+export interface HunkDemotion {
+  file: string;
+  from: "replace" | "create";
+  to: "write" | "replace_between";
+  size: number;
+  reason: string;
+}
+
+/**
+ * Auto-demote oversized replace/create hunks so workers don't thrash on
+ * soft-max rejections (live: tab-expansion replaces of 30k+ chars).
+ *
+ * Policy:
+ *   - replace → replace_between (first/last line of search as anchors), or
+ *     write when the edit looks like a full-file rewrite / missing file
+ *   - create → write (same content; create is wrong when body is huge)
+ *   - append stays fail-closed (no safe demotion)
+ */
+export function demoteOversizedHunks(
+  hunks: readonly Hunk[],
+  fileContents?: Record<string, string | null>,
+): { hunks: Hunk[]; demotions: HunkDemotion[] } {
+  const out: Hunk[] = [];
+  const demotions: HunkDemotion[] = [];
   for (const h of hunks) {
     if (h.op === "replace") {
       const size = h.search.length + h.replace.length;
-      if (size > HUNK_REPLACE_SOFT_MAX) {
-        return {
-          ok: false,
-          reason:
-            `replace hunk on "${h.file}" is ${size} chars (soft max ${HUNK_REPLACE_SOFT_MAX}) — use op "replace_between" or "write", or split into smaller section edits`,
-        };
+      if (size <= HUNK_REPLACE_SOFT_MAX) {
+        out.push(h);
+        continue;
       }
+      const fileText = fileContents?.[h.file] ?? fileContents?.[normalizeRepoPath(h.file)] ?? null;
+      const demoted = demoteReplaceHunk(h, fileText);
+      demotions.push({
+        file: h.file,
+        from: "replace",
+        to: demoted.to,
+        size,
+        reason: demoted.reason,
+      });
+      out.push(demoted.hunk);
+      continue;
     }
-    // write / replace_between are the intentional bulk path — only hard schema max applies.
     if (h.op === "create" && h.content.length > HUNK_REPLACE_SOFT_MAX) {
+      demotions.push({
+        file: h.file,
+        from: "create",
+        to: "write",
+        size: h.content.length,
+        reason: `oversized create (${h.content.length} chars) → write`,
+      });
+      out.push({ op: "write", file: h.file, content: h.content });
+      continue;
+    }
+    out.push(h);
+  }
+  return { hunks: out, demotions };
+}
+
+function demoteReplaceHunk(
+  h: Extract<Hunk, { op: "replace" }>,
+  fileText: string | null,
+): { hunk: Hunk; to: "write" | "replace_between"; reason: string } {
+  const { file, search, replace } = h;
+
+  // Missing file: write the replacement body as the new file.
+  if (fileText == null || fileText.length === 0) {
+    return {
+      hunk: { op: "write", file, content: replace },
+      to: "write",
+      reason: "oversized replace on missing/empty file → write",
+    };
+  }
+
+  // Full-file rewrite signals: replacement ≈ whole file, or search covers most of it.
+  const searchInFile = fileText.includes(search);
+  if (
+    replace.length >= fileText.length * 0.7
+    || (searchInFile && search.length >= fileText.length * 0.5)
+  ) {
+    return {
+      hunk: { op: "write", file, content: replace },
+      to: "write",
+      reason: "oversized replace looks like full-file rewrite → write",
+    };
+  }
+
+  // Multi-line search → section replace_between with first/last line anchors.
+  const lines = search.split("\n").map((l) => l.trimEnd());
+  const nonEmpty = lines.filter((l) => l.length > 0);
+  if (nonEmpty.length >= 2) {
+    let start = nonEmpty[0]!;
+    let endExclusive = nonEmpty[nonEmpty.length - 1]!;
+    // Keep anchors modest so apply isn't brittle on huge first lines.
+    if (start.length > 400) start = start.slice(0, 400);
+    if (endExclusive.length > 400) endExclusive = endExclusive.slice(0, 400);
+    if (start === endExclusive) {
       return {
-        ok: false,
-        reason:
-          `create hunk on "${h.file}" is ${h.content.length} chars (soft max ${HUNK_REPLACE_SOFT_MAX}) — use op "write" for large new files or split`,
+        hunk: { op: "replace_between", file, start, replace },
+        to: "replace_between",
+        reason: "oversized replace → replace_between (start→EOF)",
       };
     }
+    return {
+      hunk: { op: "replace_between", file, start, endExclusive, replace },
+      to: "replace_between",
+      reason: "oversized replace → replace_between (first/last line anchors)",
+    };
+  }
+
+  // Single-line search + huge replace: anchor → EOF section rewrite.
+  let start = search;
+  if (start.length > 400) start = start.slice(0, 400);
+  return {
+    hunk: { op: "replace_between", file, start, replace },
+    to: "replace_between",
+    reason: "oversized replace → replace_between (anchor→EOF)",
+  };
+}
+
+/**
+ * Normalize oversized payloads (auto-demote replace/create) then fail-closed
+ * only on ops we cannot safely demote (oversized append).
+ */
+export function validateHunkPayload(
+  hunks: readonly Hunk[],
+  fileContents?: Record<string, string | null>,
+): WorkerParseResult {
+  const { hunks: demoted, demotions } = demoteOversizedHunks(hunks, fileContents);
+  for (const h of demoted) {
     if (h.op === "append" && h.content.length > HUNK_REPLACE_SOFT_MAX) {
       return {
         ok: false,
@@ -137,7 +252,11 @@ export function validateHunkPayload(hunks: readonly Hunk[]): WorkerParseResult {
       };
     }
   }
-  return { ok: true, hunks: [...hunks] };
+  return {
+    ok: true,
+    hunks: demoted,
+    demotions: demotions.length > 0 ? demotions : undefined,
+  };
 }
 
 /** Normalize repo-relative paths for expectedFiles allow-list matching. */
@@ -154,7 +273,17 @@ function allowedFileSet(expectedFiles: readonly string[]): Set<string> {
   return new Set(expectedFiles.map(normalizeRepoPath).filter(Boolean));
 }
 
-function fileAllowed(file: string, allowed: Set<string>): boolean {
+/**
+ * When expectedFiles is empty, allow any path (multi-writer / open reconcile
+ * collect phase). Non-empty lists remain a hard allow-list so workers cannot
+ * edit outside their TODO.
+ */
+function fileAllowed(
+  file: string,
+  allowed: Set<string>,
+  allowAll: boolean,
+): boolean {
+  if (allowAll) return true;
   return allowed.has(normalizeRepoPath(file));
 }
 
@@ -176,9 +305,10 @@ export function parseWorkerResponse(
   const v = WorkerResponseSchema.safeParse(parsed);
   if (v.success) {
     const allowed = allowedFileSet(expectedFiles);
+    const allowAll = allowed.size === 0;
     const rejected: string[] = [];
     for (const h of v.data.hunks) {
-      if (!fileAllowed(h.file, allowed)) {
+      if (!fileAllowed(h.file, allowed, allowAll)) {
         rejected.push(h.file);
       }
     }
@@ -216,12 +346,13 @@ export function parseWorkerResponse(
   }
 
   const allowed = allowedFileSet(expectedFiles);
+  const allowAll = allowed.size === 0;
   const validHunks: Hunk[] = [];
   const dropped: string[] = [];
   for (const h of softCap(rawHunks, MAX_HUNKS)) {
     const hv = HunkSchema.safeParse(h);
     if (!hv.success) continue;
-    if (!fileAllowed(hv.data.file, allowed)) {
+    if (!fileAllowed(hv.data.file, allowed, allowAll)) {
       dropped.push(hv.data.file);
       continue;
     }

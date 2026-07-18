@@ -24,34 +24,15 @@ if (process.argv.includes('--use-prior')) {
   console.log('[brain-agent] Using prior run data for start params:', PRIOR_PARAMS);
 }
 const DO_REAL_START = process.argv.includes('--real-start'); // safety flag
-const SIMULATE = process.argv.includes('--simulate'); // for testing without server
 
 console.log(`[brain-agent] Goal: ${goal}\n`);
 if (DO_REAL_START) console.log('[brain-agent] WARNING: --real-start will actually start a swarm!\n');
+if (process.argv.includes('--simulate')) {
+  console.error('[brain-agent] --simulate mock mode was removed; start the server and run without --simulate.');
+  process.exit(1);
+}
 
 async function askBrain(extraBody = {}) {
-  if (SIMULATE) {
-    // Simulated Brain response — always produces clean, parseable blocks for perfect extraction.
-    const cleanConfig = JSON.stringify({
-      preset: "map-reduce",
-      webTools: true,
-      plannerTools: true,
-      agentCount: 5,
-      rounds: 2,
-      userDirective: goal
-    }, null, 2);
-
-    return `Based on your goal of broad literature-style analysis, the best preset is map-reduce.
-
-RECOMMENDATION: {
-  "preset": "map-reduce",
-  "confidence": 0.82,
-  "rationale": "Your request matches broad source scanning + synthesis. map-reduce excels here per the use-case tables (high coverage, reducer consolidation). Real stats: median ~8.2/10 on similar tasks."
-}
-CONFIG: ${cleanConfig}
-
-(When you send with structured:true the server will return machine-readable recommendation + config alongside this text.)`;
-  }
   const res = await fetch(`${SERVER}/api/swarm/brain/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

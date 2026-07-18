@@ -87,6 +87,7 @@ import { SwarmControlCenter } from "../control/SwarmControlCenter.js";
 import { buildSummary, computeLatencyStats, type PerAgentStat, type RunSummary } from "./summary.js";
 import { applyHunks } from "./applyHunks.js";
 import { findBomPrefixed, findZeroedFiles } from "./diffValidation.js";
+import { PheromoneHeatmap } from "../pheromoneHeatmap.js";
 import { buildPerRunSummaryFileName, buildRunFinishedSummary, findAndReadNewestPriorSummary, formatPortReleaseLine, formatRunFinishedBanner } from "../runSummary.js";
 import type { PriorRunSummary, PlannerSeed } from "./prompts/planner.js";
 
@@ -255,6 +256,13 @@ export class BlackboardRunner implements SwarmRunner {
   private _userStopRequested = false;
   /** Set when start() throws before planAndExecute; surfaced in stop() summary. */
   private _startupCrashMessage: string | undefined;
+  /**
+   * Background planAndExecute work. stop()/waitUntilSettled join this so
+   * Orchestrator does not release clone lock / hub while close-out still runs.
+   */
+  private planAndExecutePromise: Promise<void> | null = null;
+  /** Per-run pheromone bias for stigmergyOnBlackboard — never process-global. */
+  private pheromoneHeatmap = new PheromoneHeatmap();
   private isStopping(): boolean { return this.lifecycleState === "stopping"; }
   private isDraining(): boolean { return this.lifecycleState === "draining"; }
   private isWasDrained(): boolean { return this._wasDrained; }
@@ -540,9 +548,15 @@ export class BlackboardRunner implements SwarmRunner {
 
   async start(cfg: RunConfig): Promise<void> { await lifecycleStart(this.lifecycleContext(), cfg); }
 
-  /** start() blocks until the blackboard lifecycle finishes. */
+  /** Resolve when planAndExecute (and its finally close-out) has finished. */
   async waitUntilSettled(): Promise<void> {
-    /* no-op — lifecycleStart is fully awaited inside start() */
+    const p = this.planAndExecutePromise;
+    if (!p) return;
+    try {
+      await p;
+    } catch {
+      /* close-out handles crash */
+    }
   }
 
   private async planAndExecute(planner: Agent, workers: Agent[], seed: PlannerSeed): Promise<void> { await lifecyclePlanAndExecute(this.lifecycleContext(), planner, workers, seed); }
@@ -551,7 +565,19 @@ export class BlackboardRunner implements SwarmRunner {
 
   private async checkDrainComplete(): Promise<void> { await lifecycleCheckDrainComplete(this.lifecycleContext()); }
 
-  async stop(): Promise<void> { await lifecycleStop(this.lifecycleContext()); }
+  async stop(): Promise<void> {
+    await lifecycleStop(this.lifecycleContext());
+    // Join background planAndExecute so ActiveRun.teardown does not release
+    // clone lock / hub while deliverable/summary/finally still run.
+    const JOIN_CAP_MS = 60_000;
+    const p = this.planAndExecutePromise;
+    if (p) {
+      await Promise.race([
+        p.catch(() => {}),
+        new Promise<void>((r) => setTimeout(r, JOIN_CAP_MS)),
+      ]);
+    }
+  }
 
   private async buildSeed(clonePath: string, cfg: RunConfig): Promise<PlannerSeed> { return buildSeedExtracted(this.contractContext(), clonePath, cfg); }
 

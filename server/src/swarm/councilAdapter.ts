@@ -182,6 +182,7 @@ export async function promptPlannerSafely(
   toolProfileCfg?: unknown,
   ollamaFormat?: "json" | Record<string, unknown>,
   toolLoopNudge?: { atTurn: number; message: string },
+  thinkGuardHandler?: import("./blackboard/thinkGuardHandler.js").ThinkGuardHandler,
 ): Promise<{ response: string; agentUsed: Agent }> {
   const { contractExploreJsonNudge } = await import("@ollama-swarm/shared/toolProfiles");
   const nudge =
@@ -190,10 +191,21 @@ export async function promptPlannerSafely(
       ? contractExploreJsonNudge()
       : undefined);
 
+  // Explore tours produce free-form briefs; emit/merge need JSON.
+  // Run 6b17f137: formatExpect json + emit 8k sniff killed shared explore mid-think.
+  const formatExpect: "json" | "free" =
+    activity?.mode === "explore" ? "free" : "json";
+  const ollamaFmt =
+    ollamaFormat !== undefined
+      ? ollamaFormat
+      : formatExpect === "json"
+        ? ("json" as const)
+        : undefined;
+
   const raw = await promptWithFailoverAuto(agent, promptText, {
     manager: manager as any,
     agentName: agentName ?? resolveCouncilToolProfile(toolProfileCfg),
-    formatExpect: "json",
+    formatExpect,
     signal: signal ?? new AbortController().signal,
     ...(activity
       ? {
@@ -206,7 +218,8 @@ export async function promptPlannerSafely(
       : {}),
     ...(activity?.maxToolTurns !== undefined ? { maxToolTurns: activity.maxToolTurns } : {}),
     ...(nudge ? { toolLoopNudge: nudge } : {}),
-    ...(ollamaFormat !== undefined ? { ollamaFormat } : {}),
+    ...(ollamaFmt !== undefined ? { ollamaFormat: ollamaFmt } : {}),
+    ...(thinkGuardHandler ? { thinkGuardHandler } : {}),
     ...(pendingToolTraceByAgent
       ? { onTool: makeBufferedToolHandler(pendingToolTraceByAgent, agent.id) }
       : {}),
@@ -359,6 +372,13 @@ export async function runContractDerivation(
       draftAbort = exploreAbort.signal;
       try {
         sharedBrief = await runCouncilSharedExplore(draftDeps, mergePlanner, seed);
+      } catch (err) {
+        // Never fail Start on explore format/guard errors (6b17f137).
+        const msg = err instanceof Error ? err.message : String(err);
+        state.appendSystem(
+          `Council contract: shared explore failed (${msg.slice(0, 160)}) — falling back to seed-direct emit.`,
+        );
+        sharedBrief = buildSeedDirectEmitBrief(seed);
       } finally {
         exploreCleanup();
         draftAbort = undefined;
@@ -499,7 +519,8 @@ export async function runContractDerivation(
   } finally {
     mergeCleanup();
     state.manager.markStatus(mergeAgentPick.id, "ready");
-  }  if (state.stopping) return;
+  }
+  if (state.stopping) return;
   state.appendAgent(mergeAgent, mergeResponse);
 
   let mergeParsed = parseFirstPassContractResponse(mergeResponse);
@@ -591,7 +612,47 @@ export async function runTierPromotion(
     repoFiles: seed.repoFiles,
   });
 
-  const { response: raw, agentUsed } = await promptPlannerSafely(planner, prompt, "swarm", state.manager, state.cfg.providerFailover);
+  // Run 961a885f: think-only format sniff threw out of loop → stopReason crash.
+  // Catch format/guard failures and return false so ambition retries (3×) instead.
+  let raw = "";
+  let agentUsed: Agent = planner;
+  try {
+    const { createThinkGuardHandler } = await import("./blackboard/thinkGuardHandler.js");
+    const thinkGuardHandler = createThinkGuardHandler({
+      getActive: () => state.cfg,
+      isStopping: () => !!state.stopping,
+      isDraining: () => false,
+      appendSystem: (m) => state.appendSystem(m),
+      logDiag: state.logDiag
+        ? (record) => state.logDiag!(record as Record<string, unknown>)
+        : undefined,
+      runId: state.cfg.runId,
+      activity: { kind: "contract", mode: "emit", label: "tier promotion" },
+      formatExpect: "json",
+    });
+    const prompted = await promptPlannerSafely(
+      planner,
+      prompt,
+      "swarm",
+      state.manager,
+      state.cfg.providerFailover,
+      { kind: "contract", mode: "emit", label: "tier promotion", maxToolTurns: 0 },
+      undefined,
+      state.pendingToolTraceByAgent,
+      state.cfg,
+      "json",
+      undefined,
+      thinkGuardHandler,
+    );
+    raw = prompted.response;
+    agentUsed = prompted.agentUsed;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    state.appendSystem(
+      `[ambition] Tier promotion prompt failed (${msg.slice(0, 160)}) — will retry, not crash.`,
+    );
+    return false;
+  }
   if (state.stopping) return false;
   state.appendAgent(agentUsed, raw);
 

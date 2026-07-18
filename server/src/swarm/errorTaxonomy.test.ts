@@ -120,6 +120,22 @@ test("classifyError — message: malformed JSON → model-output", () => {
   assert.equal(got.category, "model-output");
 });
 
+test("classifyError — json format sniff think-only → model-output (961a885f)", () => {
+  const got = classifyError({
+    message:
+      "json format sniff: think-only stream 16,008 chars with no JSON markers (expected { or [ after thinking)",
+  });
+  assert.equal(got.category, "model-output");
+  assert.equal(got.retryable, true);
+});
+
+test("classifyError — pure <think> format/provider → model-output", () => {
+  const got = classifyError({
+    message: "format/provider: pure <think> response with no JSON envelope (failover candidate)",
+  });
+  assert.equal(got.category, "model-output");
+});
+
 test("classifyError — message: git fatal → git", () => {
   const got = classifyError({ message: "git fatal: refusing to merge" });
   assert.equal(got.category, "git");

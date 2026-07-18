@@ -27,6 +27,7 @@ import { scanForRunDigests } from "../services/RunsScanner.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
 import { normalizeWslPath } from "../services/pathNormalize.js";
 import { config } from "../config.js";
+import { filterKnownParentPaths } from "../services/knownParents.js";
 
 function guardClonePath(
   orch: Orchestrator,
@@ -100,19 +101,26 @@ export function registerHistoryRoutes(r: Router, orch: Orchestrator): void {
       } catch {}
     }
     if (includeOtherParents) {
-      for (const p of orch.getKnownParentPaths()) parentsToScan.add(p);
+      // Strip recover-me / per-run log dirs that used to flood knownParents.
+      for (const p of filterKnownParentPaths(orch.getKnownParentPaths())) {
+        parentsToScan.add(p);
+      }
     }
     if (parentsToScan.size === 0) {
       // Broader default when nothing is known (e.g. fresh start, no active run, no ?parentPath):
       // scan cwd + its logs/ + any known parents from the orchestrator.
       const cwd = process.cwd();
       parentsToScan.add(cwd);
-      const cwdLogs = path.join(cwd, 'logs');
+      const cwdLogs = path.join(cwd, "logs");
       parentsToScan.add(cwdLogs);
-      for (const p of orch.getKnownParentPaths()) parentsToScan.add(p);
+      for (const p of filterKnownParentPaths(orch.getKnownParentPaths())) {
+        parentsToScan.add(p);
+      }
       const last = orch.getLastParentPath();
       if (last) parentsToScan.add(last);
     }
+    // Always include app cwd so app-level log mirrors are parent-reachable too.
+    parentsToScan.add(process.cwd());
     const activeClone = status.localPath ? path.resolve(status.localPath) : null;
     const activeRunId = status.runConfig?.preset
       ? status.runId ?? null
