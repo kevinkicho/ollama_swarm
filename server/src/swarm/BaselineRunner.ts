@@ -226,10 +226,20 @@ export class BaselineRunner implements SwarmRunner {
     const candidates: Array<{
       attempt: number;
       hunks: readonly Hunk[];
+      /** Git-native: tools already wrote disk; commit without re-apply. */
+      workingTree?: { files: string[]; message: string };
       critiquePassed: boolean | null;
       score: number;
     }> = [];
     const abortController = new AbortController();
+    // Multi-attempt votes must stay emit-only (tools would dirty one shared tree).
+    // Single-attempt: bind write/edit tools for git-native workingTree finish.
+    const useTools = attempts === 1;
+    if (useTools) {
+      this.appendSystem(
+        "Baseline: git-native tools enabled (write/edit/git) — prefer workingTree finish over pure hunk emit.",
+      );
+    }
     for (let attempt = 1; attempt <= attempts; attempt++) {
       if (this.stopping) return;
       if (attempts > 1) {
@@ -239,31 +249,51 @@ export class BaselineRunner implements SwarmRunner {
       }
       let raw: string;
       try {
-        const { provider, modelId } = pickProvider(cfg.model);
-        const t0 = Date.now();
-        const result = await provider.chat({
-          model: modelId,
-          messages: [{ role: "user", content: prompt }],
-          signal: abortController.signal,
-          agentId: agent.id,
-        });
-        recordChatUsage({
-          promptTokens: result.usage?.promptTokens,
-          responseTokens: result.usage?.responseTokens,
-          promptText: prompt,
-          responseText: result.text,
-          durationMs: Date.now() - t0,
-          model: cfg.model,
-          path: `/sdk-direct (${provider.id})${attempts > 1 ? ` attempt-${attempt}` : ""}`,
-          runId: cfg.runId,
-        });
-        if (result.finishReason === "error") {
-          throw new Error(result.errorMessage ?? "session provider chat error");
+        if (useTools) {
+          const { runGitNativeApplyChat } = await import("./gitNativeApplyChat.js");
+          const result = await runGitNativeApplyChat({
+            model: cfg.model,
+            agentId: agent.id,
+            clonePath: destPath,
+            prompt,
+            signal: abortController.signal,
+            runId: cfg.runId,
+            pathLabel: `/baseline-git-native attempt-${attempt}`,
+          });
+          if (result.finishReason === "error") {
+            throw new Error(result.errorMessage ?? "baseline git-native chat error");
+          }
+          if (result.finishReason === "aborted") {
+            throw new Error("aborted");
+          }
+          raw = result.text;
+        } else {
+          const { provider, modelId } = pickProvider(cfg.model);
+          const t0 = Date.now();
+          const result = await provider.chat({
+            model: modelId,
+            messages: [{ role: "user", content: prompt }],
+            signal: abortController.signal,
+            agentId: agent.id,
+          });
+          recordChatUsage({
+            promptTokens: result.usage?.promptTokens,
+            responseTokens: result.usage?.responseTokens,
+            promptText: prompt,
+            responseText: result.text,
+            durationMs: Date.now() - t0,
+            model: cfg.model,
+            path: `/sdk-direct (${provider.id})${attempts > 1 ? ` attempt-${attempt}` : ""}`,
+            runId: cfg.runId,
+          });
+          if (result.finishReason === "error") {
+            throw new Error(result.errorMessage ?? "session provider chat error");
+          }
+          if (result.finishReason === "aborted") {
+            throw new Error("aborted");
+          }
+          raw = result.text;
         }
-        if (result.finishReason === "aborted") {
-          throw new Error("aborted");
-        }
-        raw = result.text;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         this.appendSystem(`[T199 attempt ${attempt}/${attempts}] prompt failed: ${msg}; skipping this attempt.`);
@@ -273,6 +303,29 @@ export class BaselineRunner implements SwarmRunner {
       const parsed = parseWorkerResponse(text, expectedFiles);
       if (!parsed.ok) {
         this.appendSystem(`[T199 attempt ${attempt}/${attempts}] parse failed: ${parsed.reason}; skipping.`);
+        continue;
+      }
+      // Git-native finish after tool writes.
+      if (
+        parsed.workingTree === true
+        || (parsed.hunks.length === 0 && (parsed.filesTouched?.length ?? 0) > 0 && !parsed.skip)
+      ) {
+        const files =
+          parsed.filesTouched && parsed.filesTouched.length > 0
+            ? parsed.filesTouched
+            : expectedFiles.slice(0, 8);
+        const message = parsed.gitMessage ?? directive.slice(0, 120);
+        const score = Math.max(1, files.length) + 3; // prefer real disk work over empty hunk emit
+        candidates.push({
+          attempt,
+          hunks: [],
+          workingTree: { files, message },
+          critiquePassed: null,
+          score,
+        });
+        this.appendSystem(
+          `[T199 attempt ${attempt}/${attempts}] candidate scored: workingTree files=${files.length}, score=${score}`,
+        );
         continue;
       }
       if (parsed.hunks.length === 0) {
@@ -327,23 +380,61 @@ export class BaselineRunner implements SwarmRunner {
     const winner = candidates[0]!;
     if (attempts > 1) {
       this.appendSystem(
-        `[T199 multi-attempt baseline] winner = attempt ${winner.attempt}/${attempts} (score=${winner.score}). Applying winner's hunks.`,
+        `[T199 multi-attempt baseline] winner = attempt ${winner.attempt}/${attempts} (score=${winner.score}). Applying winner's changes.`,
       );
     }
     const finalHunks: readonly Hunk[] = winner.hunks;
+    const fsAdapter = realFilesystemAdapter(destPath);
+    const gitAdapter = realGitAdapter(destPath);
+    this.result.verifyPassed = winner.critiquePassed;
+
+    // Git-native: tools already mutated disk — commit only.
+    if (winner.workingTree) {
+      try {
+        const { commitWorkingTreeFiles } = await import("./blackboard/workingTreeCommit.js");
+        const wtResult = await commitWorkingTreeFiles({
+          todoId: "baseline",
+          workerId: agent.id,
+          files: winner.workingTree.files,
+          message: winner.workingTree.message || `baseline: ${directive.slice(0, 60)}`,
+          fs: fsAdapter,
+          git: gitAdapter,
+          runId: cfg.runId,
+          clonePath: destPath,
+        });
+        if (wtResult.ok && wtResult.filesWritten.length > 0) {
+          this.result.hunksAttempted = wtResult.filesWritten.length;
+          this.result.hunksApplied = wtResult.filesWritten.length;
+          this.result.commitSha = wtResult.commitSha;
+          this.appendSystem(
+            `Baseline git-native working-tree commit — ${wtResult.commitSha?.slice(0, 7) ?? "ok"} ` +
+              `(${wtResult.filesWritten.length} file(s)).`,
+          );
+        } else {
+          this.appendSystem(
+            `Baseline working-tree commit failed: ${wtResult.ok ? "zero files written" : (wtResult.reason || "unknown")}`,
+          );
+        }
+        this.setPhase("completed");
+        return;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.appendSystem(`Baseline working-tree commit failed: ${msg}`);
+        this.setPhase("failed");
+        return;
+      }
+    }
+
     if (finalHunks.length === 0) {
       this.appendSystem(`Baseline winner returned 0 hunks — nothing to commit.`);
       this.setPhase("completed");
       return;
     }
 
-    const fsAdapter = realFilesystemAdapter(destPath);
-    const gitAdapter = realGitAdapter(destPath);
     // T-Item-1 (2026-05-04): track per-attempt result for the harness
     // composing K runners. winner.critiquePassed is populated above
     // when cfg.baselineSelfCritique is on; surface it here.
     this.result.hunksAttempted = finalHunks.length;
-    this.result.verifyPassed = winner.critiquePassed;
     try {
       // Serialize with other clone writers (same mutex as WorkerPipeline).
       // applyBaselineHunks re-reads under the lock via fsAdapter.
@@ -480,19 +571,19 @@ export interface BaselinePromptInput {
 export function buildBaselinePrompt(input: BaselinePromptInput): string {
   const parts: string[] = [];
   parts.push(
-    "You are a single coding agent working on a repository. Read the directive, inspect the file list, and produce a JSON object describing the file changes that satisfy the directive. Output ONLY the JSON — no prose, no markdown fences.",
+    "You are a single coding agent working on a repository. Read the directive, inspect the file list, and satisfy it with file changes.",
   );
-  parts.push("");
-  parts.push("Output schema:");
-  parts.push("Prefer git-native work: use write/edit tools on disk, then finish with:");
+  parts.push(
+    "PREFERRED (git-native): when tools are available, use write/edit (and git_status/git_diff/read/grep) on disk, then finish with ONLY this JSON (no prose, no markdown fences):",
+  );
   parts.push('  {"workingTree":true,"message":"short subject","files":["path/to/file.ts"]}');
-  parts.push("Or small anchor patches:");
+  parts.push("FALLBACK when tools are unavailable or for tiny anchor edits:");
   parts.push('  {"hunks": [ ...search/replace hunks ]}');
   parts.push(
-    'Each hunk: {"op": "replace"|"create"|"append", "file": "<path>", "search": "...", "replace": "..."} or {"op":"create"|"append", "file": "...", "content": "..."}.',
+    'Each hunk: {"op": "replace"|"create"|"append"|"write", "file": "<path>", "search": "...", "replace": "..."} or {"op":"create"|"append"|"write", "file": "...", "content": "..."}.',
   );
-  parts.push("If nothing to change: {\"hunks\": []}.");
-  parts.push("Maximum 8 hunks.");
+  parts.push('If nothing to change: {"hunks": []} or {"skip":"reason"}.');
+  parts.push("Maximum 8 hunks if using the hunks path. Prefer workingTree after real disk writes.");
   parts.push("");
   parts.push(`DIRECTIVE: ${input.directive}`);
   parts.push("");
@@ -512,7 +603,7 @@ export function buildBaselinePrompt(input: BaselinePromptInput): string {
     for (const c of input.recentCommits.slice(0, 10)) parts.push(`  - ${c}`);
   }
   parts.push("");
-  parts.push("Output your JSON now.");
+  parts.push("Output your JSON now (after any tool use).");
   return parts.join("\n");
 }
 

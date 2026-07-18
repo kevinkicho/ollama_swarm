@@ -36,8 +36,9 @@ test("buildBaselinePrompt — README truncated to 2000 chars", () => {
 
 test("buildBaselinePrompt — schema instructions present", () => {
   const out = buildBaselinePrompt({ directive: "x", repoFiles: [], readme: null });
+  assert.match(out, /workingTree/);
   assert.match(out, /\{"hunks": \[ \.\.\.search\/replace hunks \]\}/);
-  assert.match(out, /Output ONLY the JSON/);
+  assert.match(out, /write\/edit/i);
 });
 
 test("applyBaselineHunks — applies replace hunk to existing file", async () => {

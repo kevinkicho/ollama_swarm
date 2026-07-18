@@ -66,10 +66,10 @@ dispatch(tool):
 
 ## Implementation slices
 
-1. **Worker profiles → write/git tools**; design doc (this).
-2. Contestable ToolDispatcher denials + deliberation claim.
-3. Prompt alignment (wrap-up, baseline, discussion builders).
-4. UI: contest list on resilience panel; workingTree in worker bubbles.
+1. **Worker profiles → write/git tools**; design doc (this). ✅
+2. Contestable ToolDispatcher denials + deliberation claim. ✅
+3. Prompt alignment (wrap-up, baseline, discussion builders). ✅ (baseline single-attempt + wrap-up tool chat + workingTree commit)
+4. UI: contest list on resilience panel; workingTree in worker bubbles. ✅
 5. Optional: reintroduce OpenCode permission bridge if product requires that UI.
 
 ---

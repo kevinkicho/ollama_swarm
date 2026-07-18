@@ -45,7 +45,6 @@ import {
   buildBaselinePrompt,
   collectAllFiles,
 } from "./BaselineRunner.js";
-import { pickProvider } from "../providers/pickProvider.js";
 import {
   noteApplyAttempt,
   noteApplyMiss,
@@ -284,30 +283,24 @@ export async function runWrapUpApplyPhase(
     const prompt =
       buildBaselinePrompt({ directive, repoFiles, readme }) + failureBlock;
 
-    // Run the prompt
+    // Git-native: bind write/edit tools so wrap-up can mutate the tree then
+    // finish with workingTree (or classic hunks fallback).
     let raw: string;
     const abortController = new AbortController();
     try {
       input.manager.markStatus(input.agent.id, "thinking");
-      const { provider, modelId } = pickProvider(input.model);
-      const t0 = Date.now();
-      // Force JSON envelope like workers (live thrash: think-only wrap-up blobs).
-      const result = await provider.chat({
-        model: modelId,
-        messages: [{ role: "user", content: prompt }],
-        signal: abortController.signal,
-        agentId: input.agent.id,
-        format: "json",
-      });
-      const { recordChatUsage } = await import("../services/ollamaProxy.js");
-      recordChatUsage({
-        promptTokens: result.usage?.promptTokens,
-        responseTokens: result.usage?.responseTokens,
-        promptText: prompt,
-        responseText: result.text,
-        durationMs: Date.now() - t0,
+      input.appendSystem(
+        "Wrap-up apply: git-native tools enabled — prefer write/edit then {workingTree:true,...}.",
+      );
+      const { runGitNativeApplyChat } = await import("./gitNativeApplyChat.js");
+      const result = await runGitNativeApplyChat({
         model: input.model,
-        path: `/wrap-up-apply (${provider.id})`,
+        agentId: input.agent.id,
+        clonePath: input.clonePath,
+        prompt,
+        signal: abortController.signal,
+        runId: input.runId,
+        pathLabel: `/wrap-up-apply-git-native (${input.presetName})`,
       });
       if (result.finishReason === "error") {
         throw new Error(result.errorMessage ?? "wrap-up apply: provider error");
@@ -329,7 +322,7 @@ export async function runWrapUpApplyPhase(
       input.manager.markStatus(input.agent.id, "ready");
     }
 
-    // Parse hunks from the response. Use the same allow-set discipline
+    // Parse workingTree or hunks. Use the same allow-set discipline
     // BaselineRunner uses so a hallucinated /etc/passwd doesn't sneak
     // through.
     const text = extractText(raw) ?? raw;
@@ -343,6 +336,66 @@ export async function runWrapUpApplyPhase(
         hunksAttempted: 0,
         hunksApplied: 0,
       };
+    }
+    // Git-native: tools already wrote disk — commit without re-apply.
+    if (
+      parsed.workingTree === true
+      || (parsed.hunks.length === 0 && (parsed.filesTouched?.length ?? 0) > 0 && !parsed.skip)
+    ) {
+      const files =
+        parsed.filesTouched && parsed.filesTouched.length > 0
+          ? parsed.filesTouched
+          : expectedFiles.slice(0, 12);
+      const message =
+        parsed.gitMessage
+        ?? `${input.presetName} wrap-up: ${directive.slice(0, 60)}`;
+      try {
+        const { commitWorkingTreeFiles } = await import("./blackboard/workingTreeCommit.js");
+        const fsAdapter = realFilesystemAdapter(input.clonePath);
+        const gitAdapter = realGitAdapter(input.clonePath);
+        const wtResult = await commitWorkingTreeFiles({
+          todoId: `wrap-up-${input.presetName}`,
+          workerId: input.agent.id,
+          files,
+          message,
+          fs: fsAdapter,
+          git: gitAdapter,
+          runId: input.runId,
+          clonePath: input.clonePath,
+        });
+        if (wtResult.ok && wtResult.filesWritten.length > 0) {
+          noteApplyAttempt(input.runId);
+          noteApplySuccess(input.runId);
+          input.appendSystem(
+            `Wrap-up apply: git-native working-tree commit — ${wtResult.commitSha?.slice(0, 7) ?? "ok"} ` +
+              `(${wtResult.filesWritten.length} file(s)).`,
+          );
+          return {
+            ok: true,
+            hunksAttempted: wtResult.filesWritten.length,
+            hunksApplied: wtResult.filesWritten.length,
+            commitSha: wtResult.commitSha,
+          };
+        }
+        input.appendSystem(
+          `Wrap-up apply: working-tree commit failed — ${wtResult.ok ? "zero files" : (wtResult.reason || "unknown")}`,
+        );
+        return {
+          ok: false,
+          reason: wtResult.ok ? "working-tree-zero-files" : (wtResult.reason || "working-tree-failed"),
+          hunksAttempted: files.length,
+          hunksApplied: 0,
+        };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        input.appendSystem(`Wrap-up apply: working-tree commit error — ${msg}`);
+        return {
+          ok: false,
+          reason: msg,
+          hunksAttempted: files.length,
+          hunksApplied: 0,
+        };
+      }
     }
     if (parsed.hunks.length === 0) {
       const skipNote = parsed.skip ? ` — ${parsed.skip}` : "";
