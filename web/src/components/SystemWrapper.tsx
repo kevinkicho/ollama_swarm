@@ -265,15 +265,15 @@ export function SystemWrapper({
               title={`Success rate: ${completedRuns} completed ÷ ${terminalRuns} finished runs = ${successRate}%. Only terminal runs count (not still-active).`}
             />
 
-            {/* Phase 10: brain always shown. */}
+            {/* Brain: chat + optional run/system analytics — not system-layer patches/proposals. */}
             <TopbarStat
               icon="🧠"
-              value={brainHealth?.status ?? "idle"}
+              value={formatBrainTopbarStatus(brainHealth?.status)}
               color="text-violet-400"
               title={
                 brainHealth
-                  ? `Brain supervisor: ${brainHealth.status}. Background analysis / proposals for the workspace (see sidebar Brain Activity).`
-                  : "Brain supervisor: idle — not initialized or no recent analysis. Use the Brain floating button during a run to chat."
+                  ? `Brain is ${formatBrainTopbarStatus(brainHealth.status)}. Chat during a run (Brain button) and optional run/system analytics. It does not auto-patch the platform or queue workspace proposals.`
+                  : "Brain idle — use the Brain chat button during a run for help and analytics. No background proposal pipeline."
               }
             />
           </div>
@@ -379,6 +379,16 @@ export function SystemWrapper({
       )}
     </div>
   );
+}
+
+/** Map internal brain health strings to user-facing labels (no “proposals” framing). */
+function formatBrainTopbarStatus(status?: string): string {
+  if (!status || status === "idle") return "idle";
+  if (status === "monitoring") return "ready";
+  if (status === "analyzing") return "analytics";
+  if (status === "pressure") return "pressure";
+  if (status === "error") return "error";
+  return status;
 }
 
 function TopbarStat({

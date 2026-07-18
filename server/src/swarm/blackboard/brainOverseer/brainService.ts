@@ -102,22 +102,16 @@ export function createBrainService(opts: BrainServiceOpts): BrainService {
     if (activities.length > MAX_ACTIVITIES) activities.length = MAX_ACTIVITIES;
   };
 
-  // Iteration on Brain-OS as management layer: lightweight background ticker
-  // for real-time health aggregation across concurrent runs.
+  // Lightweight health ticker only (token pressure / active run count).
+  // Does NOT generate workspace proposals or system patches — Brain is chat +
+  // optional analytics. Avoid spamming the activity feed every tick.
   const _startBackgroundTicker = (intervalMs = 60000) => {
     if (monitoringInterval) clearInterval(monitoringInterval);
     monitoringInterval = setInterval(() => {
       const pressure = tokenTracker.pressure ? tokenTracker.pressure() : null;
-      brainHealth.status = pressure?.atLimit ? "pressure" : "monitoring";
+      brainHealth.status = pressure?.atLimit ? "pressure" : "ready";
 
-      logActivity({
-        type: "health",
-        title: "Background health tick",
-        detail: `active runs: ${opts.getActiveRunCount()}, pressure: ${pressure ? pressure.recordCount : 'n/a'}`,
-        status: "success",
-      });
-
-      // Emit for UI / listeners
+      // Emit for internal listeners; no per-minute "Background health tick" activity rows.
       eventSubscribers.forEach(fn => {
         try {
           fn({ type: "brain_health_tick", pressure, activeRuns: opts.getActiveRunCount() });

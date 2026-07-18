@@ -19,10 +19,19 @@ interface BrainActivityPanelProps {
 
 const typeConfig: Record<string, { color: string; icon: string; bg: string }> = {
   analysis: { color: "text-violet-400", icon: "🧠", bg: "bg-violet-900/30" },
-  proposal: { color: "text-blue-400", icon: "📝", bg: "bg-blue-900/30" },
+  /** Legacy activity type: run-level insight / analytics (not system patches). */
+  proposal: { color: "text-blue-400", icon: "📊", bg: "bg-blue-900/30" },
   health: { color: "text-emerald-400", icon: "💚", bg: "bg-emerald-900/30" },
   error: { color: "text-red-400", icon: "⚠", bg: "bg-red-900/30" },
   provision: { color: "text-cyan-400", icon: "🚀", bg: "bg-cyan-900/30" },
+};
+
+const TYPE_SECTION_LABEL: Record<string, string> = {
+  analysis: "analytics",
+  proposal: "insights",
+  health: "health",
+  error: "errors",
+  provision: "provision",
 };
 
 export const BrainActivityPanel = memo(function BrainActivityPanel({ activities = [], brainHealth }: BrainActivityPanelProps) {
@@ -43,7 +52,7 @@ export const BrainActivityPanel = memo(function BrainActivityPanel({ activities 
 
   return (
     <div className="rounded border border-violet-700/50 bg-violet-950/20 p-3 space-y-2">
-      {/* Brain Health Header */}
+      {/* Brain: chat + optional analytics (not system-layer proposals). */}
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-2">
           <span className="text-violet-400 font-semibold">🧠 Brain</span>
@@ -58,8 +67,10 @@ export const BrainActivityPanel = memo(function BrainActivityPanel({ activities 
           </button>
         )}
       </div>
+      <div className="text-[9px] text-ink-500 leading-snug">
+        Chat + optional run/system analytics. No auto platform patches.
+      </div>
 
-      {/* Brain Health Summary */}
       {brainHealth && (
         <div className="grid grid-cols-2 gap-1 text-[10px]">
           <div className="text-center">
@@ -69,7 +80,7 @@ export const BrainActivityPanel = memo(function BrainActivityPanel({ activities 
             </div>
           </div>
           <div className="text-center">
-            <div className="text-ink-400">Last Analysis</div>
+            <div className="text-ink-400">Last analytics</div>
             <div className="text-ink-300 font-mono">
               {brainHealth.lastAnalysis ? formatTime(brainHealth.lastAnalysis) : "—"}
             </div>
@@ -91,7 +102,9 @@ export const BrainActivityPanel = memo(function BrainActivityPanel({ activities 
               }, {} as Record<string, Array<{a: BrainActivity, i: number}>>)
             ).map(([type, items]) => (
               <div key={type} className="space-y-0.5">
-                <div className="text-[9px] uppercase tracking-wider text-ink-500 pl-1">{type}</div>
+                <div className="text-[9px] uppercase tracking-wider text-ink-500 pl-1">
+                  {TYPE_SECTION_LABEL[type] ?? type}
+                </div>
                 {items.map(({a, i}) => (
                   <ActivityRow
                     key={i}
@@ -123,7 +136,10 @@ export const BrainActivityPanel = memo(function BrainActivityPanel({ activities 
 function HealthBadge({ status }: { status: string }) {
   const config: Record<string, { color: string; label: string }> = {
     idle: { color: "bg-ink-600 text-ink-300", label: "Idle" },
-    analyzing: { color: "bg-violet-900/50 text-violet-300", label: "Analyzing" },
+    ready: { color: "bg-emerald-900/40 text-emerald-300", label: "Ready" },
+    monitoring: { color: "bg-emerald-900/40 text-emerald-300", label: "Ready" },
+    analyzing: { color: "bg-violet-900/50 text-violet-300", label: "Analytics" },
+    pressure: { color: "bg-amber-900/40 text-amber-300", label: "Pressure" },
     error: { color: "bg-red-900/50 text-red-300", label: "Error" },
   };
   const c = config[status] ?? config.idle;
