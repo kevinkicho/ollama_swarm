@@ -122,14 +122,16 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
     const s = summary;
     const agentsArr = Array.isArray(s?.agents) ? s!.agents : [];
     const topoLen = s?.topology?.agents?.length ?? digest.topology?.agents?.length;
+    // Prefer the largest credible count — cfg.agentCount often lags topology (2a3be7b1: 3 vs 4).
+    const countCandidates = [
+      agentsArr.length > 0 ? agentsArr.length : undefined,
+      topoLen,
+      s?.agentCount,
+      digest.agentCount,
+      (s as { startConfig?: { agentCount?: number } } | null)?.startConfig?.agentCount,
+    ].filter((n): n is number => typeof n === "number" && n > 0);
     const agentCount =
-      agentsArr.length > 0
-        ? agentsArr.length
-        : s?.agentCount != null
-          ? s.agentCount
-          : topoLen != null
-            ? topoLen
-            : undefined;
+      countCandidates.length > 0 ? Math.max(...countCandidates) : undefined;
 
     const board = (s as { board?: { committed?: number; skipped?: number; stale?: number; total?: number } } | null)
       ?.board;
@@ -170,16 +172,40 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
     };
   }, [summary, digest]);
 
-  const goToSetupWithParams = (autoStart: boolean) => {
-    const snap = snapshotFromRunSummary(digest, summary);
+  const goToSetupWithParams = async (autoStart: boolean) => {
+    // Never navigate with digest-only data if summary is still loading —
+    // that drops directive/topology/startConfig.
+    let full = summary;
+    if (!full && !loading) {
+      try {
+        const params = new URLSearchParams({
+          clonePath: digest.clonePath,
+          ...(digest.runId ? { runId: digest.runId } : {}),
+        });
+        const r = await apiFetch(`/api/swarm/run-summary?${params.toString()}`);
+        if (r.ok) full = (await r.json()) as RunSummary;
+      } catch {
+        /* best-effort */
+      }
+    }
+    if (!full && loading) {
+      setOpenDirMsg("Wait for full summary to load, then try again.");
+      return;
+    }
+    const snap = snapshotFromRunSummary(digest, full);
+    // Guard: refuse empty restore when we expected a full summary.
+    if (!snap.directive && !snap.topology?.agents?.length && full) {
+      // still proceed — some runs legitimately lack directive
+    }
     stashPendingSetupSnapshot(snap);
     const params = new URLSearchParams();
     if (snap.parentPath) params.set("parentPath", snap.parentPath);
     if (snap.repoUrl) params.set("repoUrl", snap.repoUrl);
     if (snap.presetId) params.set("preset", snap.presetId);
     if (snap.model) params.set("model", snap.model);
+    // Hint so setup skips URL-only preset synth even if localStorage is slow.
+    params.set("loadSetup", "1");
     if (autoStart) params.set("autoStart", "1");
-    // Full snapshot is in sessionStorage; query only helps cold hydrate.
     window.location.href = `/?${params.toString()}`;
     onClose();
   };
@@ -649,15 +675,19 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
             Open clone folder
           </button>
           <button
-            onClick={() => goToSetupWithParams(false)}
-            className="text-xs px-3 py-1.5 rounded bg-sky-800 hover:bg-sky-700 text-sky-100 border border-sky-600"
-            title="Open Start page and fill form from this run (topology, models, directive, MCP when recorded)"
+            type="button"
+            disabled={loading && !summary}
+            onClick={() => void goToSetupWithParams(false)}
+            className="text-xs px-3 py-1.5 rounded bg-sky-800 hover:bg-sky-700 text-sky-100 border border-sky-600 disabled:opacity-40 disabled:cursor-wait"
+            title="Open Start page and fill form from this run (topology, models, directive, MCP, flags when recorded)"
           >
-            Load params on Start page
+            {loading && !summary ? "Loading summary…" : "Load params on Start page"}
           </button>
           <button
-            onClick={() => goToSetupWithParams(true)}
-            className="text-xs px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-emerald-100 border border-emerald-600"
+            type="button"
+            disabled={loading && !summary}
+            onClick={() => void goToSetupWithParams(true)}
+            className="text-xs px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-emerald-100 border border-emerald-600 disabled:opacity-40 disabled:cursor-wait"
             title="Start a new swarm reusing this clone, with form params restored from the summary"
           >
             Start new swarm on this clone

@@ -382,7 +382,8 @@ export function SetupForm() {
           <p className="text-xs text-ink-500 mb-2">Per-agent role, provider, and model overrides</p>
 
           <TopologyGrid
-            key={form.preset.id}
+            // Do not key solely on preset id — remounting wiped history-restored
+            // topology (agents/models) when Load params set preset then topology.
             preset={{ id: form.preset.id, min: form.preset.min, max: form.preset.max, recommended: form.preset.recommended }}
             topology={form.topology}
             setTopology={form.onTopologyChange}

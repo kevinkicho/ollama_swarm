@@ -96,13 +96,19 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
   // Safety: if the passed topology doesn't match this preset's role structure
   // (e.g. after a preset switch the parent state was stale), re-synthesize
   // with correct roles for this preset (keeping current count if valid).
+  // Skip when the grid was just restored from history (parent holds restoring flag
+  // via a short window — we only re-synth on real role-structure mismatch).
   useEffect(() => {
     if (!topology.agents.length) return;
     const firstRole = topology.agents[0].role;
     const expectedFirst = defaultRoleForIndex(preset.id, 1, topology.agents.length);
     if (firstRole !== expectedFirst) {
       // mismatch (e.g. stale topo from previous preset) -> reset to recommended count + correct roles for this preset
-      const count = preset.recommended ?? (preset.min === preset.max ? preset.min : Math.max(preset.min, Math.min(topology.agents.length, preset.max)));
+      // Prefer keeping current agent count when valid for this preset.
+      const count = Math.max(
+        preset.min,
+        Math.min(topology.agents.length, preset.max),
+      );
       const fresh = synthesizeTopology(preset.id, count);
       // Preserve per-agent model overrides (the "AI provider") for agents whose role stayed the same.
       const old = topology.agents;
@@ -120,12 +126,18 @@ export function TopologyGrid({ preset, topology, setTopology, defaultModel, prov
     }
   }, [preset.id]);
 
-  // Blackboard needs planner + ≥1 worker + auditor. Repair stale saved
-  // shapes (e.g. planner+auditor only) that would spawn zero workers.
+  // Blackboard needs planner + ≥1 worker + auditor. Repair only truly broken
+  // shapes (zero workers / under min). Do NOT shrink a valid larger topology
+  // restored from history (e.g. 1P+2W+1A = 4 while agentCount field said 3).
   useEffect(() => {
     if (preset.id !== "blackboard") return;
     if (topology.agents.length >= preset.min && workerCount >= minWorkers) return;
-    const target = Math.max(preset.min, preset.recommended ?? preset.min);
+    // Keep requested size when repairing upward; never force "recommended" only.
+    const target = Math.max(
+      preset.min,
+      topology.agents.length,
+      preset.recommended ?? preset.min,
+    );
     const fresh = synthesizeTopology(preset.id, target);
     const old = topology.agents;
     setTopology({

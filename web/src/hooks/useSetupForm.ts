@@ -79,10 +79,13 @@ export function useSetupForm(navigate: (path: string) => void) {
     setTopology(newTopo);
   }, [plannerModel, workerModel, auditorModel, model]);
 
-  // Apply URL-driven prefill for preset from "start on clone" links — but NEVER
-  // when a full history snapshot is pending (that path restores topology itself).
+  // Apply URL-driven prefill for preset — NEVER when loadSetup=1 or pending snapshot
+  // (full history restore owns topology / directive / all flags).
   useEffect(() => {
-    if (peekPendingSetupSnapshot()) return;
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("loadSetup") === "1" || peekPendingSetupSnapshot()) return;
+    }
     if (initialFromUrl.preset) {
       setPresetId(initialFromUrl.preset);
     }
@@ -92,9 +95,16 @@ export function useSetupForm(navigate: (path: string) => void) {
   useEffect(() => {
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams(window.location.search);
-      if (sp.has("parentPath") || sp.has("preset") || sp.has("autoStart") || sp.has("repoUrl") || sp.has("model")) {
+      if (
+        sp.has("parentPath")
+        || sp.has("preset")
+        || sp.has("autoStart")
+        || sp.has("repoUrl")
+        || sp.has("model")
+        || sp.has("loadSetup")
+      ) {
         // remove only the setup-related ones we handled
-        ["parentPath", "repoUrl", "preset", "model"].forEach(k => sp.delete(k));
+        ["parentPath", "repoUrl", "preset", "model", "loadSetup"].forEach((k) => sp.delete(k));
         // leave autoStart for the auto-start effect to consume on this mount
         const clean = sp.toString();
         const newUrl = window.location.pathname + (clean ? "?" + clean : "") + window.location.hash;
@@ -235,12 +245,13 @@ export function useSetupForm(navigate: (path: string) => void) {
 
   /**
    * Full form rehydrate from a recent-run / history snapshot.
-   * Pipes every start field; never uses setPresetId when topology is present
-   * (that would synthesize a fresh topology and drop saved rows).
+   * Applies every start field; keeps restoringSnapshotRef true long enough
+   * that TopologyGrid / preset default effects cannot wipe topology.
    */
   const refillFromRecent = useCallback((r: RecentRun) => {
     restoringSnapshotRef.current = true;
-    try {
+
+    const applyAll = () => {
       setRepoUrl(r.repoUrl || "");
       setParentPath(r.parentPath || "");
       if (r.model) {
@@ -248,68 +259,60 @@ export function useSetupForm(navigate: (path: string) => void) {
         setProvider(detectProvider(r.model));
       }
       if (r.provider) setProvider(r.provider as Provider);
-      if (r.plannerModel != null) setPlannerModel(r.plannerModel);
-      if (r.workerModel != null) setWorkerModel(r.workerModel);
-      if (r.auditorModel != null) setAuditorModel(r.auditorModel);
+      setPlannerModel(r.plannerModel ?? "");
+      setWorkerModel(r.workerModel ?? "");
+      setAuditorModel(r.auditorModel ?? "");
 
-      if (r.presetId) {
-        _setPresetId(r.presetId);
-      }
+      if (r.presetId) _setPresetId(r.presetId);
+
+      const nAgents =
+        r.topology?.agents?.length
+        ?? r.agentCount
+        ?? undefined;
       if (r.topology?.agents?.length) {
-        setTopology(r.topology);
-        setAgentCount(r.agentCount ?? r.topology.agents.length);
-      } else if (r.agentCount != null) {
-        setAgentCount(r.agentCount);
-        if (r.presetId) {
-          setTopology(
-            topologyForPreset(r.presetId, r.agentCount, {
-              plannerModel: r.plannerModel || r.model,
-              workerModel: r.workerModel || r.model,
-              auditorModel: r.auditorModel || r.model,
-            }),
-          );
-        }
+        // Deep clone so TopologyGrid effects cannot mutate our snapshot object.
+        setTopology(JSON.parse(JSON.stringify(r.topology)) as Topology);
+        setAgentCount(nAgents ?? r.topology.agents.length);
+      } else if (nAgents != null && r.presetId) {
+        setAgentCount(nAgents);
+        setTopology(
+          topologyForPreset(r.presetId, nAgents, {
+            plannerModel: r.plannerModel || r.model,
+            workerModel: r.workerModel || r.model,
+            auditorModel: r.auditorModel || r.model,
+          }),
+        );
       }
 
-      // Always set directive (including empty) when restoring from history snapshot
-      // so a prior form value doesn't linger.
       setUserDirective(r.directive ?? r.directiveSnippet ?? "");
-      if (r.wallClockCapMin != null) setWallClockCapMin(String(r.wallClockCapMin));
-      if (r.ambitionTiers != null) setAmbitionTiers(String(r.ambitionTiers));
+      setWallClockCapMin(r.wallClockCapMin != null ? String(r.wallClockCapMin) : "0");
+      setAmbitionTiers(r.ambitionTiers != null ? String(r.ambitionTiers) : "");
       if (r.rounds != null) setRoundsInput(r.rounds);
       if (r.webTools != null) setWebTools(!!r.webTools);
       if (r.autoApprove != null) setAutoApprove(!!r.autoApprove);
-      if (r.mcpServers != null) setMcpServers(r.mcpServers);
+      setMcpServers(r.mcpServers ?? "");
       if (r.writeMode != null) setWriteMode(r.writeMode);
       if (r.conflictPolicy != null) setConflictPolicy(r.conflictPolicy);
       if (r.councilSharedExplore != null) setCouncilSharedExplore(!!r.councilSharedExplore);
       if (r.councilSharedResearch != null) setCouncilSharedResearch(!!r.councilSharedResearch);
       if (r.councilReconcile != null) setCouncilReconcile(r.councilReconcile);
-      if (r.verifyCommand != null) setVerifyCommand(r.verifyCommand);
+      setVerifyCommand(r.verifyCommand ?? "");
       if (r.preflightDryRun != null) setPreflightDryRun(!!r.preflightDryRun);
       if (r.hunkRag != null) setHunkRag(!!r.hunkRag);
       if (r.dynamicRolePicker != null) setDynamicRolePicker(!!r.dynamicRolePicker);
       if (r.mentionContracts != null) setMentionContracts(!!r.mentionContracts);
       if (r.bestOfNTurn != null) setBestOfNTurn(r.bestOfNTurn);
+    };
 
-      // Re-apply topology + directive after React processes preset defaults.
-      if (r.topology?.agents?.length || r.directive || r.directiveSnippet) {
-        const topo = r.topology;
-        const dir = r.directive ?? r.directiveSnippet ?? "";
-        requestAnimationFrame(() => {
-          if (topo?.agents?.length) setTopology(topo);
-          setUserDirective(dir);
-          if (r.mcpServers != null) setMcpServers(r.mcpServers);
-          if (r.webTools != null) setWebTools(!!r.webTools);
-          if (r.autoApprove != null) setAutoApprove(!!r.autoApprove);
-        });
-      }
-    } finally {
-      // Allow preset-default effects again after paint.
+    applyAll();
+    // Second pass after TopologyGrid mount effects (preset.key remount).
+    requestAnimationFrame(() => {
+      applyAll();
       setTimeout(() => {
+        applyAll();
         restoringSnapshotRef.current = false;
-      }, 100);
-    }
+      }, 250);
+    });
   }, []);
 
   const removeFromRecent = (r: RecentRun) => {
@@ -317,7 +320,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     setRecentRuns(next);
   };
 
-  // History modal "Load params" — apply full startConfig snapshot before paint.
+  // History modal "Load params" — StrictMode-safe full restore.
   useLayoutEffect(() => {
     const pending = consumePendingSetupSnapshot();
     if (!pending) return;

@@ -4,6 +4,7 @@ import {
   captureStartConfigFromRunConfig,
   extractStartConfigFromSummary,
   modelsFromTopology,
+  resolveAgentCount,
 } from "./startConfigSnapshot.js";
 
 describe("startConfigSnapshot", () => {
@@ -67,4 +68,26 @@ describe("startConfigSnapshot", () => {
     } as any);
     assert.deepEqual(m, { plannerModel: "P", workerModel: "W", auditorModel: "A" });
   });
+
+  it("resolveAgentCount prefers topology over stale agentCount (2a3be7b1 shape)", () => {
+    const topo = {
+      agents: [
+        { index: 1, role: "planner", removable: false },
+        { index: 2, role: "worker", removable: true },
+        { index: 3, role: "worker", removable: true },
+        { index: 4, role: "auditor", removable: false },
+      ],
+    } as any;
+    assert.equal(resolveAgentCount(topo, 3, 4), 4);
+    const snap = captureStartConfigFromRunConfig({
+      localPath: "/x",
+      preset: "blackboard",
+      model: "m",
+      agentCount: 3,
+      topology: topo,
+    });
+    assert.equal(snap.agentCount, 4);
+    assert.equal(snap.topology?.agents?.length, 4);
+  });
 });
+

@@ -119,6 +119,20 @@ export function modelsFromTopology(topology?: Topology | null): {
 /**
  * Capture every start-relevant field from a live RunConfig for summary.json.
  */
+/** Prefer live topology length over stale agentCount (cfg often lags grid). */
+export function resolveAgentCount(
+  topology?: Topology | null,
+  agentCount?: number,
+  agentsLen?: number,
+): number | undefined {
+  const topoN = topology?.agents?.length;
+  const candidates = [topoN, agentsLen, agentCount].filter(
+    (n): n is number => typeof n === "number" && n > 0,
+  );
+  if (candidates.length === 0) return undefined;
+  return Math.max(...candidates);
+}
+
 export function captureStartConfigFromRunConfig(cfg: RunConfigLike): StartConfigSnapshot {
   const topo = cfg.topology;
   const fromTopo = modelsFromTopology(topo);
@@ -129,6 +143,7 @@ export function captureStartConfigFromRunConfig(cfg: RunConfigLike): StartConfig
       : wallMs === 0
         ? "0"
         : undefined;
+  const agentCount = resolveAgentCount(topo, cfg.agentCount);
 
   const snap: StartConfigSnapshot = {
     repoUrl: cfg.repoUrl?.trim() || undefined,
@@ -140,7 +155,7 @@ export function captureStartConfigFromRunConfig(cfg: RunConfigLike): StartConfig
     plannerModel: cfg.plannerModel?.trim() || fromTopo.plannerModel,
     workerModel: cfg.workerModel?.trim() || fromTopo.workerModel,
     auditorModel: cfg.auditorModel?.trim() || fromTopo.auditorModel,
-    agentCount: cfg.agentCount,
+    agentCount,
     rounds: cfg.rounds,
     topology: topo,
     userDirective: cfg.userDirective?.trim() || undefined,
@@ -214,10 +229,12 @@ export function extractStartConfigFromSummary(summary: Record<string, unknown> |
       nested.auditorModel?.trim()
       || fromTopo.auditorModel
       || (typeof summary.auditorModel === "string" ? summary.auditorModel : undefined),
-    agentCount:
+    agentCount: resolveAgentCount(
+      topo,
       nested.agentCount
-      ?? (typeof summary.agentCount === "number" ? summary.agentCount : undefined)
-      ?? topo?.agents?.length,
+        ?? (typeof summary.agentCount === "number" ? summary.agentCount : undefined),
+      Array.isArray(summary.agents) ? summary.agents.length : undefined,
+    ),
     rounds:
       nested.rounds
       ?? (typeof summary.rounds === "number" ? summary.rounds : undefined),

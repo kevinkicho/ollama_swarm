@@ -1,10 +1,14 @@
 /**
  * Bridge: Run history modal → Setup form with full parameter restore.
- * sessionStorage holds one pending snapshot consumed on Setup mount.
+ *
+ * Uses localStorage (not sessionStorage) and StrictMode-safe consume:
+ * React 18 StrictMode double-mounts effects in dev — a one-shot
+ * removeItem on first mount loses the snapshot on the second.
  */
 
 import {
   extractStartConfigFromSummary,
+  resolveAgentCount,
   type StartConfigSnapshot,
 } from "@ollama-swarm/shared/startConfigSnapshot";
 import type { RecentRun, RecentRunSnapshotInput } from "../components/setup/RecentRuns";
@@ -12,13 +16,24 @@ import type { RunSummary, RunSummaryDigest } from "../types";
 
 export const PENDING_SETUP_SNAPSHOT_KEY = "ollama-swarm:pending-setup-snapshot";
 
+type StoredPending = RecentRunSnapshotInput & {
+  _stashedAt?: number;
+  /** Set after first successful apply; remounts within TTL may re-apply. */
+  _appliedAt?: number;
+};
+
+const APPLY_TTL_MS = 8_000;
+
 /** Write snapshot then navigate to `/?` (setup). */
 export function stashPendingSetupSnapshot(input: RecentRunSnapshotInput): void {
   try {
-    sessionStorage.setItem(
-      PENDING_SETUP_SNAPSHOT_KEY,
-      JSON.stringify({ ...input, _stashedAt: Date.now() }),
-    );
+    const payload: StoredPending = {
+      ...input,
+      _stashedAt: Date.now(),
+      // clear any prior apply mark
+    };
+    delete (payload as { _appliedAt?: number })._appliedAt;
+    localStorage.setItem(PENDING_SETUP_SNAPSHOT_KEY, JSON.stringify(payload));
   } catch {
     /* quota / private mode */
   }
@@ -27,21 +42,65 @@ export function stashPendingSetupSnapshot(input: RecentRunSnapshotInput): void {
 /** Peek without clearing — used to skip URL preset clobber. */
 export function peekPendingSetupSnapshot(): boolean {
   try {
-    return !!sessionStorage.getItem(PENDING_SETUP_SNAPSHOT_KEY);
+    const raw = localStorage.getItem(PENDING_SETUP_SNAPSHOT_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as StoredPending;
+    if (!parsed || typeof parsed !== "object") return false;
+    const at = parsed._stashedAt ?? 0;
+    // Expire stale snapshots (overnight leftover).
+    if (at && Date.now() - at > 30 * 60_000) {
+      localStorage.removeItem(PENDING_SETUP_SNAPSHOT_KEY);
+      return false;
+    }
+    return true;
   } catch {
     return false;
   }
 }
 
-/** Read + clear pending snapshot (one-shot). */
+/**
+ * Read pending snapshot for Setup restore.
+ * Does NOT remove immediately — marks applied and clears after TTL so
+ * React StrictMode remounts still see the data.
+ */
 export function consumePendingSetupSnapshot(): RecentRunSnapshotInput | null {
   try {
-    const raw = sessionStorage.getItem(PENDING_SETUP_SNAPSHOT_KEY);
+    const raw = localStorage.getItem(PENDING_SETUP_SNAPSHOT_KEY);
     if (!raw) return null;
-    sessionStorage.removeItem(PENDING_SETUP_SNAPSHOT_KEY);
-    const parsed = JSON.parse(raw) as RecentRunSnapshotInput & { _stashedAt?: number };
+    const parsed = JSON.parse(raw) as StoredPending;
     if (!parsed || typeof parsed !== "object") return null;
-    return parsed;
+
+    const now = Date.now();
+    if (parsed._appliedAt && now - parsed._appliedAt > APPLY_TTL_MS) {
+      localStorage.removeItem(PENDING_SETUP_SNAPSHOT_KEY);
+      return null;
+    }
+
+    // First apply this navigation
+    if (!parsed._appliedAt) {
+      parsed._appliedAt = now;
+      localStorage.setItem(PENDING_SETUP_SNAPSHOT_KEY, JSON.stringify(parsed));
+      // Hard clear after TTL
+      window.setTimeout(() => {
+        try {
+          const cur = localStorage.getItem(PENDING_SETUP_SNAPSHOT_KEY);
+          if (!cur) return;
+          const p = JSON.parse(cur) as StoredPending;
+          if (p._appliedAt && Date.now() - p._appliedAt >= APPLY_TTL_MS - 50) {
+            localStorage.removeItem(PENDING_SETUP_SNAPSHOT_KEY);
+          }
+        } catch {
+          localStorage.removeItem(PENDING_SETUP_SNAPSHOT_KEY);
+        }
+      }, APPLY_TTL_MS);
+    }
+
+    const {
+      _stashedAt: _s,
+      _appliedAt: _a,
+      ...rest
+    } = parsed;
+    return rest as RecentRunSnapshotInput;
   } catch {
     return null;
   }
@@ -57,8 +116,8 @@ export function parentOfClonePath(clonePath: string): string {
 
 function startConfigToRecentInput(sc: StartConfigSnapshot): RecentRunSnapshotInput {
   const directive = (sc.userDirective || sc.directive || "").trim();
-  const workspace =
-    (sc.parentPath || sc.localPath || "").trim();
+  const workspace = (sc.parentPath || sc.localPath || "").trim();
+  const agentCount = resolveAgentCount(sc.topology, sc.agentCount);
   return {
     repoUrl: sc.repoUrl || "",
     parentPath: workspace,
@@ -69,18 +128,18 @@ function startConfigToRecentInput(sc: StartConfigSnapshot): RecentRunSnapshotInp
     plannerModel: sc.plannerModel,
     workerModel: sc.workerModel,
     auditorModel: sc.auditorModel,
-    agentCount: sc.agentCount,
+    agentCount,
     rounds: sc.rounds,
     topology: sc.topology,
     webTools: sc.webTools,
     autoApprove: sc.autoApprove,
-    mcpServers: sc.mcpServers,
+    mcpServers: sc.mcpServers ?? "",
     writeMode: sc.writeMode,
     conflictPolicy: sc.conflictPolicy,
     councilSharedExplore: sc.councilSharedExplore,
     councilSharedResearch: sc.councilSharedResearch,
     councilReconcile: sc.councilReconcile,
-    verifyCommand: sc.verifyCommand,
+    verifyCommand: sc.verifyCommand ?? "",
     preflightDryRun: sc.preflightDryRun,
     hunkRag: sc.hunkRag,
     dynamicRolePicker: sc.dynamicRolePicker,
@@ -106,21 +165,23 @@ export function snapshotFromRunSummary(
   digest: RunSummaryDigest,
   summary: RunSummary | null | undefined,
 ): RecentRunSnapshotInput {
-  const sc = extractStartConfigFromSummary(
-    (summary ?? {
-      localPath: digest.clonePath,
-      preset: digest.preset,
-      model: digest.model,
-      runId: digest.runId,
-      topology: digest.topology,
-      agentCount: digest.agentCount,
-    }) as unknown as Record<string, unknown>,
-  );
-  // Ensure workspace is the clone path used for this run (form "Project folder").
-  if (!sc.parentPath && !sc.localPath) {
-    sc.parentPath = digest.clonePath;
-    sc.localPath = digest.clonePath;
-  }
+  const base: Record<string, unknown> = summary
+    ? (summary as unknown as Record<string, unknown>)
+    : {
+        localPath: digest.clonePath,
+        preset: digest.preset,
+        model: digest.model,
+        runId: digest.runId,
+        topology: digest.topology,
+        agentCount: digest.agentCount,
+      };
+  const sc = extractStartConfigFromSummary(base);
+
+  // Workspace = clone path for this run
+  const clone = String(sc.localPath || sc.parentPath || digest.clonePath || "").trim();
+  sc.parentPath = clone;
+  sc.localPath = clone;
+
   if (!sc.topology && digest.topology) sc.topology = digest.topology;
   if (!sc.presetId && !sc.preset) {
     sc.presetId = digest.preset;
@@ -128,7 +189,11 @@ export function snapshotFromRunSummary(
   }
   if (!sc.model && digest.model) sc.model = digest.model;
   if (!sc.runId && digest.runId) sc.runId = digest.runId;
-  if (sc.agentCount == null && digest.agentCount != null) sc.agentCount = digest.agentCount;
+  sc.agentCount = resolveAgentCount(
+    sc.topology,
+    sc.agentCount ?? digest.agentCount,
+    Array.isArray(summary?.agents) ? summary!.agents.length : undefined,
+  );
 
   return startConfigToRecentInput(sc);
 }
@@ -136,6 +201,7 @@ export function snapshotFromRunSummary(
 /** Convert stash input into RecentRun shape for refillFromRecent. */
 export function snapshotInputToRecentRun(input: RecentRunSnapshotInput): RecentRun {
   const directive = (input.directive || "").trim();
+  const agentCount = resolveAgentCount(input.topology, input.agentCount);
   return {
     id: input.runId || String(Date.now()),
     repoUrl: input.repoUrl || "",
@@ -152,7 +218,7 @@ export function snapshotInputToRecentRun(input: RecentRunSnapshotInput): RecentR
     plannerModel: input.plannerModel,
     workerModel: input.workerModel,
     auditorModel: input.auditorModel,
-    agentCount: input.agentCount,
+    agentCount,
     rounds: input.rounds,
     topology: input.topology,
     webTools: input.webTools,

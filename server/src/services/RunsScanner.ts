@@ -305,10 +305,19 @@ function parseSummaryToDigest(
   // and guard checks is the real clone dir (so per-run /runs/:id views hydrate).
   const effectiveClone = (obj as any).localPath || (obj as any).clonePath || readDir;
   const agents = Array.isArray((obj as any).agents) ? (obj as any).agents : undefined;
-  const agentCount =
-    typeof (obj as any).agentCount === "number"
-      ? (obj as any).agentCount
-      : topology?.agents?.length ?? agents?.length;
+  // Prefer topology / agents[] length over stale agentCount (often lags the grid).
+  const countCandidates = [
+    topology?.agents?.length,
+    agents?.length,
+    typeof (obj as any).agentCount === "number" ? (obj as any).agentCount : undefined,
+    typeof (obj as any).startConfig?.agentCount === "number"
+      ? (obj as any).startConfig.agentCount
+      : undefined,
+    typeof (obj as any).startConfig?.topology?.agents?.length === "number"
+      ? (obj as any).startConfig.topology.agents.length
+      : undefined,
+  ].filter((n): n is number => typeof n === "number" && n > 0);
+  const agentCount = countCandidates.length > 0 ? Math.max(...countCandidates) : undefined;
   return {
     name,
     clonePath: effectiveClone,
