@@ -491,6 +491,12 @@ export const ReconfigBody = z.object({
 // never arbitrary filesystem locations.
 export const OpenBody = z.object({ path: z.string().min(1).max(4096) });
 
+/** Open the on-disk folder where a run's summary.json files live (for flush/delete). */
+export const OpenSummaryDirBody = z.object({
+  clonePath: z.string().min(1).max(4096),
+  runId: z.string().min(1).max(128).optional(),
+});
+
 
 export function validate<T>(schema: z.ZodSchema<T>, source: "body" | "query" | "params") {
   return (req: Request, res: Response, next: NextFunction): void => {

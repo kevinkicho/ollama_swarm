@@ -28,6 +28,7 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
   // Task #111: track whether the loaded summary came from localStorage
   // (server unreachable) so the modal can show a "[cached]" badge.
   const [fromCache, setFromCache] = useState(false);
+  const [openDirMsg, setOpenDirMsg] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -183,6 +184,57 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
     onClose();
   };
 
+  const openSummaryFolder = async () => {
+    setOpenDirMsg(null);
+    try {
+      const r = await apiFetch("/api/swarm/open-summary-dir", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          clonePath: digest.clonePath,
+          ...(digest.runId ? { runId: digest.runId } : {}),
+        }),
+      });
+      const body = (await r.json().catch(() => ({}))) as {
+        ok?: boolean;
+        path?: string;
+        error?: string;
+        hint?: string;
+        candidates?: string[];
+      };
+      if (!r.ok) {
+        setOpenDirMsg(body.error || `Could not open folder (HTTP ${r.status})`);
+        return;
+      }
+      setOpenDirMsg(
+        body.path
+          ? `Opened: ${body.path}${body.hint ? ` — ${body.hint}` : ""}`
+          : "Opened summary folder in file manager.",
+      );
+    } catch (err) {
+      setOpenDirMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const openCloneFolder = async () => {
+    setOpenDirMsg(null);
+    try {
+      const r = await apiFetch("/api/swarm/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: digest.clonePath }),
+      });
+      if (!r.ok) {
+        const body = (await r.json().catch(() => ({}))) as { error?: string };
+        setOpenDirMsg(body.error || `Open folder failed (HTTP ${r.status})`);
+        return;
+      }
+      setOpenDirMsg(`Opened clone folder: ${digest.clonePath}`);
+    } catch (err) {
+      setOpenDirMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-30 bg-black/70 flex items-center justify-center p-4"
@@ -245,6 +297,22 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
               ) : null}
               <DataLabel>Clone path</DataLabel>
               <DataValue><span className="break-all text-ink-300">{head.localPath}</span></DataValue>
+              <DataLabel>Summary storage</DataLabel>
+              <DataValue>
+                <span className="break-all text-ink-400 text-[10px]">
+                  Prefer{" "}
+                  <span className="font-mono text-ink-300">
+                    {digest.clonePath.replace(/[/\\]+$/, "")}
+                    /logs
+                    {digest.runId ? `/${digest.runId.slice(0, 8)}` : ""}
+                  </span>
+                  {" "}and app{" "}
+                  <span className="font-mono text-ink-300">
+                    &lt;swarm&gt;/logs/{digest.runId || "<runId>"}/
+                  </span>
+                  . Use “Open summary folder” to jump there and delete files to flush history.
+                </span>
+              </DataValue>
               <DataLabel>Started</DataLabel>
               <DataValue>{new Date(head.startedAt).toLocaleString()}</DataValue>
               {head.endedAt > 0 ? (
@@ -529,6 +597,11 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
               No matching summary on disk. Showing digest only.
             </div>
           ) : null}
+          {openDirMsg ? (
+            <div className="text-[11px] text-amber-200/90 bg-amber-950/30 border border-amber-800/40 rounded px-2 py-1.5">
+              {openDirMsg}
+            </div>
+          ) : null}
         </div>
 
         {/* Footer */}
@@ -560,16 +633,20 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
             Open summary JSON ↗
           </a>
           <button
-            onClick={() => {
-              void apiFetch("/api/swarm/open", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ path: digest.clonePath }),
-              }).catch(() => {});
-            }}
-            className="text-xs px-3 py-1.5 rounded bg-ink-700 hover:bg-ink-600 text-ink-100 border border-ink-600"
+            type="button"
+            onClick={() => void openSummaryFolder()}
+            className="text-xs px-3 py-1.5 rounded bg-amber-900/50 hover:bg-amber-800/60 text-amber-100 border border-amber-700/60"
+            title="Open the folder containing summary.json / summary-*.json so you can delete them to flush this run from history"
           >
-            Open folder
+            Open summary folder
+          </button>
+          <button
+            type="button"
+            onClick={() => void openCloneFolder()}
+            className="text-xs px-3 py-1.5 rounded bg-ink-700 hover:bg-ink-600 text-ink-100 border border-ink-600"
+            title="Open the project clone directory"
+          >
+            Open clone folder
           </button>
           <button
             onClick={() => goToSetupWithParams(false)}
