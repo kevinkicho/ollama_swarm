@@ -100,6 +100,16 @@ export interface SwarmStatus {
   drainIneligibleReason?: string;
   /** Early-stop detail if the run is winding down for a guard (dead-loop, budget, etc.). */
   earlyStopDetail?: string;
+  /** Live Brain OS helpers (ephemeral recruits — agent sidebar). */
+  brainOsHelpers?: Array<{
+    helperId: string;
+    kind: string;
+    privilege: string;
+    depth: number;
+    model?: string;
+    startedAt: number;
+    phase?: string;
+  }>;
   /** Remaining resource budgets when configured (discussion + blackboard). */
   capsRemaining?: {
     wallClockMsRemaining?: number;

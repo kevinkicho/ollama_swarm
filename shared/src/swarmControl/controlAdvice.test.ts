@@ -85,4 +85,20 @@ describe("controlAdvice hydrate helpers", () => {
     assert.ok(fragile.score < healthy.score);
     assert.equal(fragile.label === "fragile" || fragile.label === "stressed", true);
   });
+
+  it("zeroProgressLimitForResilience and shouldEarlyBrainOsUnstick", async () => {
+    const {
+      zeroProgressLimitForResilience,
+      shouldEarlyBrainOsUnstick,
+    } = await import("./controlAdvice.js");
+    const fragile = { label: "fragile", score: 20 };
+    const stressed = { label: "stressed", score: 40 };
+    const durable = { label: "durable", score: 85 };
+    assert.equal(zeroProgressLimitForResilience(3, fragile), 1);
+    assert.equal(zeroProgressLimitForResilience(3, stressed), 2);
+    assert.equal(zeroProgressLimitForResilience(3, durable), 3);
+    assert.equal(shouldEarlyBrainOsUnstick(1, 1, fragile), true);
+    assert.equal(shouldEarlyBrainOsUnstick(1, 2, stressed), true);
+    assert.equal(shouldEarlyBrainOsUnstick(1, 3, durable), false);
+  });
 });

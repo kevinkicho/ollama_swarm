@@ -530,6 +530,22 @@ export type SwarmEvent =
       status?: string;
     }
   | {
+      type: "brain_os_helpers";
+      runId: string;
+      ts: number;
+      helpers: Array<{
+        helperId: string;
+        kind: string;
+        privilege: string;
+        depth: number;
+        model?: string;
+        startedAt: number;
+        phase?: string;
+      }>;
+      action: "start" | "end";
+      helperId: string;
+    }
+  | {
       type: "deliberation_transaction";
       transaction: {
         id: string;

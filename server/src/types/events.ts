@@ -211,6 +211,23 @@ export type SwarmEventBody =
       conflictKind?: string;
       status?: string;
     }
+  /** Live Brain OS helper roster for the agent sidebar (recruit/release). */
+  | {
+      type: "brain_os_helpers";
+      runId: string;
+      ts: number;
+      helpers: Array<{
+        helperId: string;
+        kind: string;
+        privilege: string;
+        depth: number;
+        model?: string;
+        startedAt: number;
+        phase?: string;
+      }>;
+      action: "start" | "end";
+      helperId: string;
+    }
   /** Peer/hierarchy reason validation (approve|deny|…) for audit dissemination. */
   | {
       type: "deliberation_transaction";

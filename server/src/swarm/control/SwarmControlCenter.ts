@@ -24,6 +24,7 @@ import {
   buildDeliberationSeed,
   formatDeliberationForControlPrompt,
 } from "../deliberation/deliberationSeed.js";
+import { pushResilienceAdvice } from "../resilienceAdviceRegistry.js";
 
 export const STALL_ARBITRATOR_MAX_CALLS = 6;
 
@@ -75,9 +76,11 @@ export class SwarmControlCenter {
     return this.adviceHistory;
   }
 
-  private recordAdvice(advice: SwarmControlAdviceRecord): void {
+  private recordAdvice(advice: SwarmControlAdviceRecord, runId?: string): void {
     this.adviceHistory.push(advice);
     if (this.adviceHistory.length > 40) this.adviceHistory.shift();
+    // Feed mid-run resilience gates (zero-progress limit / early Brain OS).
+    pushResilienceAdvice(runId, advice);
   }
 
   /** Load recurring patterns from prior runs (.swarm-improvements/pattern-cache.json). */
@@ -227,7 +230,7 @@ export class SwarmControlCenter {
       rationale: verdict.rationale,
       plannerHint: verdict.plannerHint,
     };
-    this.recordAdvice(advice);
+    this.recordAdvice(advice, input.runId);
     input.emit?.({
       type: "swarm_control_advice",
       ...advice,
@@ -292,7 +295,7 @@ export class SwarmControlCenter {
         tool,
         rationale: hint,
       };
-      this.recordAdvice(advice);
+      this.recordAdvice(advice, deps.runId);
       deps.emit?.({
         type: "swarm_control_advice",
         ...advice,

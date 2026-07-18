@@ -549,6 +549,14 @@ export async function runAuditedExecution(
     const openAfter = ctx.boardCounts().open;
     const newTodosApprox = Math.max(0, openAfter - openBefore);
     if (isAutonomousRun) {
+      // Resilience-aware limit: fragile runs hard-stop sooner + early Brain OS.
+      const activeForRes = ctx.getActive();
+      const { effectiveZeroProgressLimit, tryBrainOsProgressUnstick, wantEarlyUnstick } =
+        await import("../progressBrainOs.js");
+      const { limit: zpLimit, rollup } = effectiveZeroProgressLimit(
+        activeForRes?.runId,
+        DEFAULT_ZERO_PROGRESS_LIMIT,
+      );
       // Durable only: commits / met flips. openΔ (new todos) alone does not
       // reset the streak — prevents thrash with permanent re-posts.
       const { streak, shouldStop } = updateZeroProgressStreak(
@@ -558,74 +566,98 @@ export async function runAuditedExecution(
           commitsThisCycle: commitsDelta,
           newTodos: 0,
         }),
-        DEFAULT_ZERO_PROGRESS_LIMIT,
+        zpLimit,
       );
       ctx.setZeroProgressStreak(streak);
-      if (shouldStop) {
-        const reason = formatNoProductiveProgressReason(streak);
-        // Brain OS: one agentic chance to unstick (drain pending, re-scope) before hard stop.
+      const bc = ctx.boardCounts();
+      const openWork = (bc.open ?? 0) + (bc.claimed ?? 0) + (bc.stale ?? 0) > 0;
+      const boardSnap = {
+        pending: bc.open ?? 0,
+        inProgress: bc.claimed ?? 0,
+        pendingCommit: 0,
+        completed: bc.committed ?? 0,
+        skipped: bc.skipped ?? 0,
+      };
+
+      // Early Brain OS when resilience is weak (before full zero-progress stop).
+      if (
+        !shouldStop
+        && openWork
+        && wantEarlyUnstick(streak, zpLimit, rollup)
+      ) {
         try {
           const active = ctx.getActive();
-          const { createRunBrainOs, dispatchBrainOsConflict, resolveBrainOsConfig } = await import(
-            "../brainOs/adapter.js"
+          const earlyReason =
+            `resilience=${rollup.label} (${rollup.score}) zero-progress streak ${streak}/${zpLimit} — early Brain OS`;
+          ctx.appendSystem(`[progress] ${earlyReason}`);
+          const ok = await tryBrainOsProgressUnstick(
+            {
+              runId: active?.runId,
+              localPath: active?.localPath,
+              autoApprove: active?.autoApprove,
+              brainOs: (active as { brainOs?: boolean | object } | undefined)?.brainOs,
+              auditorModel: active?.auditorModel,
+              model: active?.model,
+            },
+            {
+              reason: earlyReason,
+              board: boardSnap,
+              openWork,
+              phase: "progress_early_resilience",
+            },
+            {
+              appendSystem: (t) => ctx.appendSystem(t),
+              emit: (e) => {
+                try {
+                  ctx.emit(e);
+                } catch { /* */ }
+              },
+              setZeroProgressStreak: (n) => ctx.setZeroProgressStreak(n),
+            },
           );
-          const bcfg = resolveBrainOsConfig({
-            autoApprove: active?.autoApprove,
-            brainOs: (active as { brainOs?: boolean | object } | undefined)?.brainOs as
-              | boolean
-              | undefined,
-          });
-          const bc = ctx.boardCounts();
-          // boardCounts: open ≈ pending, claimed ≈ inProgress; pending-commit may be in open or separate
-          const openWork = (bc.open ?? 0) + (bc.claimed ?? 0) + (bc.stale ?? 0) > 0;
-          if (bcfg.enabled && openWork && active?.localPath && active?.runId) {
-            ctx.appendSystem(
-              `[progress] ${reason} — recruiting Brain OS before stop (open board still has work).`,
-            );
-            const bos = createRunBrainOs(
-              {
-                autoApprove: active.autoApprove,
-                brainOs: bcfg,
-                auditorModel: active.auditorModel,
-                model: active.model,
+          if (ok) return;
+        } catch (err) {
+          ctx.appendSystem(
+            `[progress] early Brain OS failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
+
+      if (shouldStop) {
+        const reason =
+          formatNoProductiveProgressReason(streak) +
+          (zpLimit !== DEFAULT_ZERO_PROGRESS_LIMIT
+            ? ` (limit ${zpLimit} via resilience=${rollup.label})`
+            : "");
+        // Brain OS: one agentic chance to unstick before hard stop.
+        try {
+          const active = ctx.getActive();
+          const ok = await tryBrainOsProgressUnstick(
+            {
+              runId: active?.runId,
+              localPath: active?.localPath,
+              autoApprove: active?.autoApprove,
+              brainOs: (active as { brainOs?: boolean | object } | undefined)?.brainOs,
+              auditorModel: active?.auditorModel,
+              model: active?.model,
+            },
+            {
+              reason,
+              board: boardSnap,
+              openWork,
+              phase: "progress_stuck",
+            },
+            {
+              appendSystem: (t) => ctx.appendSystem(t),
+              emit: (e) => {
+                try {
+                  ctx.emit(e);
+                } catch { /* */ }
               },
-              { appendSystem: (t) => ctx.appendSystem(t) },
-            );
-            const r = await dispatchBrainOsConflict(
-              bos,
-              {
-                runId: active.runId,
-                kind: "progress_stuck",
-                clonePath: active.localPath,
-                privileges: "arbiter",
-                boardSnapshot: {
-                  pending: bc.open ?? 0,
-                  inProgress: bc.claimed ?? 0,
-                  pendingCommit: 0,
-                  completed: bc.committed ?? 0,
-                  skipped: bc.skipped ?? 0,
-                },
-                autoApprove: active.autoApprove,
-                lastErrors: [reason],
-                helperModel: active.auditorModel ?? active.model,
-              },
-              {
-                appendSystem: (t) => ctx.appendSystem(t),
-                emit: (e) => {
-                  try {
-                    ctx.emit(e);
-                  } catch { /* */ }
-                },
-              },
-            );
-            if (r.status === "resolved" || r.status === "partial") {
-              ctx.setZeroProgressStreak(0);
-              ctx.appendSystem(
-                `[progress] Brain OS unstuck (${r.status}): ${r.summary.slice(0, 200)} — continuing`,
-              );
-              return;
-            }
-          }
+              setZeroProgressStreak: (n) => ctx.setZeroProgressStreak(n),
+            },
+          );
+          if (ok) return;
         } catch (err) {
           ctx.appendSystem(
             `[progress] Brain OS unstick failed: ${err instanceof Error ? err.message : String(err)}`,

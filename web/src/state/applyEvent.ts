@@ -129,6 +129,29 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         ...(ev.status ? { status: String(ev.status) } : {}),
       });
       break;
+    case "brain_os_helpers":
+      if (Array.isArray(ev.helpers)) {
+        s.setBrainOsHelpers(
+          ev.helpers.map((h: {
+            helperId: string;
+            kind: string;
+            privilege: string;
+            depth: number;
+            model?: string;
+            startedAt: number;
+            phase?: string;
+          }) => ({
+            helperId: h.helperId,
+            kind: h.kind,
+            privilege: h.privilege,
+            depth: h.depth,
+            model: h.model,
+            startedAt: h.startedAt,
+            phase: h.phase,
+          })),
+        );
+      }
+      break;
     case "deliberation_transaction": {
       const tx = ev.transaction;
       if (tx && typeof tx === "object") {

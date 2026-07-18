@@ -9,6 +9,7 @@ import { resolveDisplayPhase } from "@ollama-swarm/shared/mapRunPhase";
 import type { RunPhase } from "@ollama-swarm/shared/runStateMachine";
 import { config } from "../../config.js";
 import { snapshotProgressHeartbeat } from "../progressHeartbeat.js";
+import { listActiveHelpers } from "../brainOs/helperActivity.js";
 
 export interface StatusContext {
   phase: string;
@@ -171,5 +172,22 @@ export function status(ctx: StatusContext): SwarmStatus {
       return reason ? { earlyStopDetail: reason } : {};
     })(),
     ...(thinkGuardReferee ? { thinkGuardReferee } : {}),
+    ...((): { brainOsHelpers?: SwarmStatus["brainOsHelpers"] } => {
+      const runId = ctx.active?.runId;
+      if (!runId) return {};
+      const helpers = listActiveHelpers(runId);
+      if (helpers.length === 0) return {};
+      return {
+        brainOsHelpers: helpers.map((h) => ({
+          helperId: h.helperId,
+          kind: h.kind,
+          privilege: h.privilege,
+          depth: h.depth,
+          model: h.model,
+          startedAt: h.startedAt,
+          phase: h.phase,
+        })),
+      };
+    })(),
   };
 }

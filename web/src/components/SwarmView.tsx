@@ -56,6 +56,7 @@ type Tab =
 
 export const SwarmView = memo(function SwarmView() {
   const agents = useSwarm((s) => s.agents);
+  const brainOsHelpers = useSwarm((s) => s.brainOsHelpers);
   const phase = useSwarm((s) => s.phase);
   const planningSubphase = useSwarm((s) => s.planningSubphase);
   const setError = useSwarm((s) => s.setError);
@@ -631,6 +632,40 @@ export const SwarmView = memo(function SwarmView() {
               />
             ))
           : null}
+        {!hasTerminalSummary && brainOsHelpers.length > 0 ? (
+          <div className="mt-2 px-1">
+            <div className="text-[10px] uppercase tracking-wider font-semibold text-violet-300/90 mb-1.5 px-1">
+              Brain OS helpers ({brainOsHelpers.length})
+            </div>
+            <ul className="space-y-1.5">
+              {brainOsHelpers.map((h) => {
+                const ageSec = Math.max(0, Math.floor((Date.now() - h.startedAt) / 1000));
+                const age =
+                  ageSec >= 60 ? `${Math.floor(ageSec / 60)}m${ageSec % 60}s` : `${ageSec}s`;
+                return (
+                  <li
+                    key={h.helperId}
+                    className="rounded border border-violet-800/50 bg-violet-950/40 px-2 py-1.5 text-[11px]"
+                    title={h.helperId}
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+                      <span className="text-violet-200 font-semibold truncate">
+                        {h.kind}
+                      </span>
+                      <span className="text-ink-500 tabular-nums ml-auto">{age}</span>
+                    </div>
+                    <div className="text-[10px] text-ink-400 mt-0.5 font-mono truncate">
+                      {h.privilege}
+                      {h.depth > 0 ? ` · d${h.depth}` : ""}
+                      {h.model ? ` · ${h.model}` : ""}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ) : null}
         {hasTerminalSummary ? <SidebarSummaryAgents /> : null}
       </aside>
       <section className="flex-1 flex flex-col min-h-0 overflow-hidden">

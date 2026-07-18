@@ -94,6 +94,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   thinkGuardReferee: undefined,
   controlAdvice: [],
   deliberation: [],
+  brainOsHelpers: [],
   wallClockCapMin: undefined,
   ambitionTiers: undefined,
   runId: undefined,
@@ -538,6 +539,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
     set({
       deliberation: rows.slice(-DELIBERATION_WINDOW),
     }),
+  setBrainOsHelpers: (helpers) => set({ brainOsHelpers: helpers }),
   // Unit 47: clone_state arrives once per run. Setting it ALSO clears
   // the dismissed flag so a fresh run shows its banner even if a
   // prior banner was dismissed mid-session (each run has its own
@@ -593,6 +595,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       thinkGuardReferee: undefined,
       controlAdvice: [],
       deliberation: [],
+      brainOsHelpers: [],
       wallClockCapMin: undefined,
       ambitionTiers: undefined,
       runId: undefined,
@@ -640,7 +643,8 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         brainChatHistory: [],
         useCaseFilters: [],
         controlAdvice: [],
-      deliberation: [],
+        deliberation: [],
+        brainOsHelpers: [],
       };
       const text = info
         ? [

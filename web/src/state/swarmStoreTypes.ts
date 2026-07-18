@@ -158,6 +158,16 @@ export interface SwarmStore {
   controlAdvice: SwarmControlAdvice[];
   /** Rolling window of deliberation_transaction WS events. */
   deliberation: DeliberationAdvice[];
+  /** Live Brain OS helpers (sidebar). */
+  brainOsHelpers: Array<{
+    helperId: string;
+    kind: string;
+    privilege: string;
+    depth: number;
+    model?: string;
+    startedAt: number;
+    phase?: string;
+  }>;
   // Caps from setup (wall clock, ambition tiers for blackboard) synced to
   // global store so other panels / review / bar can see them live.
   wallClockCapMin?: string;
@@ -210,6 +220,9 @@ export interface SwarmStore {
   ) => void;
   latchTranscriptPlainList: () => void;
   /** Status-snapshot fields for drain tooltip + remaining caps. */
+  setBrainOsHelpers: (
+    helpers: SwarmStore["brainOsHelpers"],
+  ) => void;
   setRunHealthFromStatus: (patch: {
     drainEligible?: boolean;
     drainIneligibleReason?: string;

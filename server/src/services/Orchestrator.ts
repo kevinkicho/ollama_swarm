@@ -36,7 +36,10 @@ import {
 } from "./knownParents.js";
 import { statusForRun as statusForRunExtracted } from "./statusForRun.js";
 import { buildSwarmStatusRunConfig } from "./orchestratorRunConfig.js";
-import { activeHelperCount } from "../swarm/brainOs/helperActivity.js";
+import {
+  activeHelperCount,
+  onHelperActivityChange,
+} from "../swarm/brainOs/helperActivity.js";
 import {
   buildRunner as buildRunnerExtracted,
   type BuildRunnerContext,
@@ -185,6 +188,30 @@ export class Orchestrator {
     if (this.knownParentPaths.length > 0) {
       writePersistedKnownParents(this.knownParentPaths);
     }
+
+    // Live Brain OS helpers → agent sidebar + Active Runs (multi-tenant via runId).
+    onHelperActivityChange((runId, helpers, change) => {
+      try {
+        this.opts.emit({
+          type: "brain_os_helpers",
+          runId,
+          ts: Date.now(),
+          helpers: helpers.map((h) => ({
+            helperId: h.helperId,
+            kind: h.kind,
+            privilege: h.privilege,
+            depth: h.depth,
+            model: h.model,
+            startedAt: h.startedAt,
+            phase: h.phase,
+          })),
+          action: change.action,
+          helperId: change.helper.helperId,
+        } as SwarmEvent);
+      } catch {
+        /* ignore */
+      }
+    });
 
     // Deeper slice: instantiate extracted BrainIntegration (replaces inline brain fields/methods).
     this.brain = new BrainIntegration({

@@ -88,6 +88,11 @@ export function formatNoProductiveProgressReason(streak: number): string {
   );
 }
 
+export {
+  zeroProgressLimitForResilience,
+  shouldEarlyBrainOsUnstick,
+} from "@ollama-swarm/shared/swarmControl/controlAdvice";
+
 /**
  * Max open-ended stretch waves per autonomous council run.
  * Raised from 1 → 3 so long directive runs (e.g. 120b2044: 2h+ of real

@@ -244,6 +244,11 @@ export function applyStatusSnapshotToStore(
     });
   }
 
+  const helpersSnap = (snap as { brainOsHelpers?: SwarmStore["brainOsHelpers"] }).brainOsHelpers;
+  if (Array.isArray(helpersSnap)) {
+    s.setBrainOsHelpers(helpersSnap);
+  }
+
   if (upsertLiveAgents) {
     const roster = inferAgentsFromSnapshot({ ...snap, agents: [] });
     const agentsForSidebar = mergeAgentsForSnapshot(snap.agents ?? [], roster);

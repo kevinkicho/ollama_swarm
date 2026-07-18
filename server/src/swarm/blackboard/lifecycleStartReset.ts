@@ -12,6 +12,7 @@ import { startBrainOsMetrics } from "../brainOs/metricsRegistry.js";
 import { resetToolBlockDispatchFires } from "../brainOs/toolBlockDispatch.js";
 import { resetHelperActivity } from "../brainOs/helperActivity.js";
 import { resetToolContests } from "../../tools/toolContest.js";
+import { resetResilienceAdvice } from "../resilienceAdviceRegistry.js";
 
 /**
  * Clear all prior-run mutable fields so start() begins from a clean slate.
@@ -73,6 +74,7 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   resetToolBlockDispatchFires();
   resetHelperActivity(cfg.runId);
   resetToolContests(cfg.runId);
+  resetResilienceAdvice(cfg.runId);
   {
     const plannerModel = cfg.plannerModel ?? cfg.model;
     const workerModel = cfg.workerModel ?? cfg.model;

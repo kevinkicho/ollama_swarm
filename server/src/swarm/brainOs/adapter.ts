@@ -154,16 +154,21 @@ export async function dispatchBrainOsConflict(
     },
   );
 
-  // Surface on the resilience control plane (chip + history hydrate).
+  // Surface on the resilience control plane (chip + mid-run gates + history).
   try {
-    hooks.emit?.({
-      type: "swarm_control_advice",
+    const advice = {
       ts: Date.now(),
-      kind: "brain_os",
-      source: "brain_os",
+      kind: "brain_os" as const,
+      source: "brain_os" as const,
       conflictKind: opts.kind,
       status: result.status,
       rationale: result.summary.slice(0, 500),
+    };
+    const { pushResilienceAdvice } = await import("../resilienceAdviceRegistry.js");
+    pushResilienceAdvice(opts.runId, advice);
+    hooks.emit?.({
+      type: "swarm_control_advice",
+      ...advice,
     });
   } catch {
     /* optional */

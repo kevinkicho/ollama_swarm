@@ -209,3 +209,36 @@ export function computeResilienceRollup(
     label,
   };
 }
+
+/**
+ * Lower zero-progress hard-stop limit when the run is already stressed/fragile
+ * so we stop thrashing earlier (and trigger Brain OS sooner).
+ */
+export function zeroProgressLimitForResilience(
+  baseLimit: number,
+  rollup: Pick<ResilienceRollup, "label" | "score">,
+): number {
+  const base = Math.max(1, baseLimit);
+  if (rollup.label === "fragile" || rollup.score < 35) return Math.max(1, base - 2);
+  if (rollup.label === "stressed" || rollup.score < 55) return Math.max(1, base - 1);
+  return base;
+}
+
+/**
+ * Fire Brain OS one cycle before hard-stop when resilience is weak.
+ * Avoids waiting until the full zero-progress limit on fragile runs.
+ */
+export function shouldEarlyBrainOsUnstick(
+  streak: number,
+  effectiveLimit: number,
+  rollup: Pick<ResilienceRollup, "label" | "score">,
+): boolean {
+  if (streak <= 0) return false;
+  if (rollup.label === "fragile" || rollup.score < 35) {
+    return streak >= 1;
+  }
+  if (rollup.label === "stressed" || rollup.score < 55) {
+    return streak >= Math.max(1, effectiveLimit - 1);
+  }
+  return false;
+}
