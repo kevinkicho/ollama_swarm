@@ -41,6 +41,12 @@ This is the structured index of all relevant, tracked documentation for the olla
 - **docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md**  
   How external agents and Brain loops can interact with and drive the system.
 
+- **docs/design/brain-os-agentic-dispatch.md**  
+  **Inner** Brain OS (partial): run-layer conflict dispatch, recruit/release helpers
+  with agency (not strategy enums), structured effects, budgets, plus git-native
+  working-tree collaboration. Companion:
+  [`brain-os-dispatch-api-sketch.md`](./design/brain-os-dispatch-api-sketch.md).
+
 ## Operational & Historical
 
 - **docs/decisions.md**  

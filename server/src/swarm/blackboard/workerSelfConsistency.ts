@@ -109,6 +109,63 @@ export async function finalizeWorkerHunks(
   let parsed = parsedIn;
   let commitTier = commitTierIn;
 
+  // Git-native path: worker already mutated the working tree via write/edit tools.
+  // Propose a working_tree marker (not full-file write hunks — re-apply would no-op).
+  // Auditor reviews git reality and commits the dirty tree.
+  if (parsed.workingTree === true || (parsed.hunks.length === 0 && parsed.filesTouched?.length)) {
+    const cfgWt = ctx.getActive();
+    const clonePath = cfgWt?.localPath?.trim() ?? "";
+    if (!clonePath) {
+      ctx.getWrappers().failTodoQ(todo.id, "working-tree mode: no clone path", "hunk-empty");
+      return { outcome: "stale" };
+    }
+    const { makeWorkingTreeProposal } = await import("./workingTreeCommit.js");
+    const fsWt = realFilesystemAdapter(clonePath);
+    const files =
+      parsed.filesTouched && parsed.filesTouched.length > 0
+        ? parsed.filesTouched
+        : [...todo.expectedFiles];
+    const readable: string[] = [];
+    for (const file of files) {
+      try {
+        const text = await fsWt.read(file);
+        if (text != null) readable.push(file);
+      } catch {
+        /* skip missing */
+      }
+    }
+    if (readable.length === 0) {
+      ctx.getWrappers().failTodoQ(
+        todo.id,
+        "working-tree mode: no files readable to commit — use write/edit tools then {workingTree:true,files:[...]}",
+        "hunk-empty",
+      );
+      ctx.bumpRejectedAttempts(agent.id);
+      return { outcome: "stale" };
+    }
+    const proposal = makeWorkingTreeProposal(
+      readable,
+      parsed.gitMessage ?? todo.description.slice(0, 120),
+    );
+    try {
+      ctx.getWrappers().proposeCommitQ(
+        todo.id,
+        proposal.hunks as readonly unknown[],
+        proposal.files,
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.getWrappers().failTodoQ(todo.id, `proposeCommit working-tree failed: ${msg}`, "hunk-fail");
+      return { outcome: "stale" };
+    }
+    ctx.appendSystem(
+      `[${agent.id}] ✓ git-native working-tree propose ${proposal.files.length} file(s) for todo ${todo.id.slice(0, 8)}` +
+        (parsed.gitMessage ? ` — ${parsed.gitMessage.slice(0, 80)}` : "") +
+        " — awaiting auditor (git commit, no re-apply)",
+    );
+    return { outcome: "pending-commit" };
+  }
+
   if (parsed.hunks.length === 0) {
     ctx.getWrappers().failTodoQ(
       todo.id,
@@ -427,6 +484,76 @@ export async function finalizeWorkerHunks(
       ctx.appendSystem(
         `[${agent.id}] [apply-miss] unrepaired dry-run fail — failing todo (not proposing)`,
       );
+      // Brain OS: recruit a helper before giving up (trusted / enabled runs).
+      try {
+        const { createRunBrainOs, dispatchBrainOsConflict, resolveBrainOsConfig } = await import(
+          "../brainOs/adapter.js"
+        );
+        const active = ctx.getActive();
+        const bcfg = resolveBrainOsConfig({
+          autoApprove: active?.autoApprove,
+          brainOs: (active as { brainOs?: boolean | object })?.brainOs as boolean | undefined,
+        });
+        if (bcfg.enabled && active?.localPath && active?.runId) {
+          const bos = createRunBrainOs(
+            {
+              autoApprove: active.autoApprove,
+              brainOs: bcfg,
+              auditorModel: active.auditorModel,
+              model: active.model,
+            },
+            {
+              appendSystem: (t) => ctx.appendSystem(t),
+              skipTodo: (id, reason) => {
+                try {
+                  ctx.getWrappers().skipTodoQ(id, reason);
+                } catch { /* */ }
+              },
+              proposeHunks: (id, hunks, files) => {
+                try {
+                  ctx.getWrappers().proposeCommitQ(id, hunks, files);
+                } catch { /* */ }
+              },
+            },
+          );
+          const r = await dispatchBrainOsConflict(
+            bos,
+            {
+              runId: active.runId,
+              kind: "apply_miss",
+              clonePath: active.localPath,
+              privileges: active.autoApprove ? "runner" : "repairer",
+              todoId: todo.id,
+              lastErrors: [failMsg],
+              relevantFiles: [...todo.expectedFiles],
+              autoApprove: active.autoApprove,
+              helperModel: active.auditorModel ?? active.model,
+            },
+            {
+              appendSystem: (t) => ctx.appendSystem(t),
+              skipTodo: (id, reason) => {
+                try {
+                  ctx.getWrappers().skipTodoQ(id, reason);
+                } catch { /* */ }
+              },
+              proposeHunks: (id, hunks, files) => {
+                try {
+                  ctx.getWrappers().proposeCommitQ(id, hunks, files);
+                } catch { /* */ }
+              },
+            },
+          );
+          if (r.status === "resolved" || r.status === "partial") {
+            ctx.appendSystem(`[${agent.id}] [brain-os] apply_miss handled: ${r.summary.slice(0, 200)}`);
+            // If helper proposed, leave as pending-commit; else replan via fail.
+            return { outcome: "pending-commit" };
+          }
+        }
+      } catch (err) {
+        ctx.appendSystem(
+          `[${agent.id}] [brain-os] apply_miss dispatch error: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
       ctx.getWrappers().failTodoQ(todo.id, failMsg, "hunk-fail");
       recordCycleFail(failMsg, runIdForStats);
       ctx.bumpRejectedAttempts(agent.id);

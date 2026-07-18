@@ -616,3 +616,118 @@ export async function bashTool(
     return { ok: false, error: `bash exited non-zero: ${detail.slice(-700)}` };
   }
 }
+
+const WRITE_MAX_CHARS = 800_000;
+
+/**
+ * Write full file contents to the working tree (git-native collaboration).
+ * Prefer this over inventing search/replace hunks when rewriting large regions.
+ */
+export async function writeTool(
+  clonePath: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const file = String(args.path ?? args.file ?? "").trim();
+  if (!file) return { ok: false, error: "write: missing path/file" };
+  const content = args.content ?? args.contents;
+  if (typeof content !== "string") {
+    return { ok: false, error: "write: missing string content/contents" };
+  }
+  if (content.length > WRITE_MAX_CHARS) {
+    return {
+      ok: false,
+      error: `write: content too large (${content.length} > ${WRITE_MAX_CHARS})`,
+    };
+  }
+  try {
+    const abs = await resolveSafe(clonePath, file);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content, "utf8");
+    return {
+      ok: true,
+      output: `wrote ${file} (${content.length} chars). Working tree dirty — use git status / final git envelope to commit.`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `write failed: ${msg}` };
+  }
+}
+
+/**
+ * Search/replace once in a file on disk (git-native mid-turn edit).
+ */
+export async function editTool(
+  clonePath: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const file = String(args.path ?? args.file ?? "").trim();
+  const search = args.search ?? args.old_string;
+  const replace = args.replace ?? args.new_string;
+  if (!file) return { ok: false, error: "edit: missing path/file" };
+  if (typeof search !== "string" || search.length === 0) {
+    return { ok: false, error: "edit: missing search/old_string" };
+  }
+  if (typeof replace !== "string") {
+    return { ok: false, error: "edit: missing replace/new_string" };
+  }
+  try {
+    const abs = await resolveSafe(clonePath, file);
+    const before = await fs.readFile(abs, "utf8");
+    const count = before.split(search).length - 1;
+    if (count === 0) {
+      return {
+        ok: false,
+        error: `edit: search not found in ${file} (0 matches). Read the file and re-anchor.`,
+      };
+    }
+    if (count > 1 && args.allowMultiple !== true) {
+      return {
+        ok: false,
+        error: `edit: search matches ${count} times in ${file} — pass allowMultiple:true or use a unique search.`,
+      };
+    }
+    const after =
+      args.allowMultiple === true
+        ? before.split(search).join(replace)
+        : before.replace(search, replace);
+    await fs.writeFile(abs, after, "utf8");
+    return {
+      ok: true,
+      output: `edited ${file} (${count} replacement(s)). Working tree dirty.`,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: `edit failed: ${msg}` };
+  }
+}
+
+/** git status --porcelain under the clone (native git collaboration). */
+export async function gitStatusTool(clonePath: string): Promise<ToolResult> {
+  return bashTool(clonePath, { command: "git status --porcelain" }, { timeoutMs: 30_000 });
+}
+
+/** git diff (optionally -- path). */
+export async function gitDiffTool(
+  clonePath: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const pathArg = String(args.path ?? args.file ?? "").trim();
+  const staged = args.staged === true;
+  const cmd = staged
+    ? pathArg
+      ? `git diff --cached -- ${JSON.stringify(pathArg).slice(1, -1)}`
+      : "git diff --cached"
+    : pathArg
+      ? `git diff -- ${pathArg}`
+      : "git diff";
+  // Avoid broken quoting — use simple form
+  const simple = staged
+    ? pathArg
+      ? `git diff --cached -- "${pathArg.replace(/"/g, "")}"`
+      : "git diff --cached"
+    : pathArg
+      ? `git diff -- "${pathArg.replace(/"/g, "")}"`
+      : "git diff";
+  void cmd;
+  return bashTool(clonePath, { command: simple }, { timeoutMs: 60_000 });
+}

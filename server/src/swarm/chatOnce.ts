@@ -79,7 +79,18 @@ export interface ChatOnceOpts {
   maxToolTurns?: number;
   /** Restrict advertised tools for this call (e.g. literature web-only). */
   toolsOverride?: ReadonlyArray<
-    "read" | "grep" | "glob" | "list" | "bash" | "web_search" | "web_fetch"
+    | "read"
+    | "grep"
+    | "glob"
+    | "list"
+    | "bash"
+    | "write"
+    | "edit"
+    | "propose_hunks"
+    | "git_status"
+    | "git_diff"
+    | "web_search"
+    | "web_fetch"
   >;
   /** Inject a user nudge before the Nth tool-loop turn (1-based). */
   toolLoopNudge?: { atTurn: number; message: string };

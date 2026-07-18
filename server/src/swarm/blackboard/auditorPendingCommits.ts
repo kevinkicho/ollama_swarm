@@ -105,12 +105,39 @@ export async function drainPendingCommitsOnStop(ctx: {
       continue;
     }
     try {
-      const res = await applyFn(
-        hunks,
-        files,
-        `[stop-drain] ${todo.description.slice(0, 80)}`,
-        { skipCommit: false },
-      );
+      const {
+        isWorkingTreeProposal,
+        commitWorkingTreeFiles,
+        workingTreeFilesFromHunks,
+        workingTreeMessageFromHunks,
+      } = await import("./workingTreeCommit.js");
+      let res: { ok: boolean; reason?: string };
+      if (isWorkingTreeProposal(hunks)) {
+        const clonePath = ctx.getActive()?.localPath ?? "";
+        const { realFilesystemAdapter, realGitAdapter } = await import("./v2Adapters.js");
+        const wt = await commitWorkingTreeFiles({
+          todoId: todo.id,
+          workerId: "stop-drain",
+          files: workingTreeFilesFromHunks(hunks, files),
+          message: workingTreeMessageFromHunks(
+            hunks,
+            `[stop-drain] ${todo.description.slice(0, 80)}`,
+          ),
+          fs: realFilesystemAdapter(clonePath),
+          git: realGitAdapter(clonePath),
+          clonePath,
+          runId: ctx.getActive()?.runId,
+          skipCommit: false,
+        });
+        res = { ok: wt.ok, reason: wt.ok ? undefined : wt.reason };
+      } else {
+        res = await applyFn(
+          hunks,
+          files,
+          `[stop-drain] ${todo.description.slice(0, 80)}`,
+          { skipCommit: false },
+        );
+      }
       if (res.ok) {
         try {
           ctx.wrappers.approveCommitQ(todo.id);
@@ -268,6 +295,7 @@ export async function reviewPendingCommits(
 
     // Use wrapper for each (supports skipCommit) - this routes through WorkerPipeline for consistency
     // (handles delete, anchors, verify per item if needed, but we batch the final commit).
+    // Git-native working_tree proposals: files already on disk — commit only, no re-apply.
     let batchOk = true;
     const filesWritten: string[] = [];
     const applyFn = ctx.applyHunksAndCommit;
@@ -280,9 +308,47 @@ export async function reviewPendingCommits(
         continue;
       }
       try {
-        let res = await applyFn(item.hunks, item.files, item.message, { skipCommit: true });
+        const {
+          isWorkingTreeProposal,
+          commitWorkingTreeFiles,
+          workingTreeFilesFromHunks,
+          workingTreeMessageFromHunks,
+        } = await import("./workingTreeCommit.js");
+        let res: { ok: boolean; reason?: string; filesWritten?: string[] };
+        if (isWorkingTreeProposal(item.hunks)) {
+          const clonePath = ctx.getActive()?.localPath ?? "";
+          const { realFilesystemAdapter, realGitAdapter } = await import("./v2Adapters.js");
+          const wtFiles = workingTreeFilesFromHunks(item.hunks, item.files);
+          const wtMsg = workingTreeMessageFromHunks(item.hunks, item.message);
+          const wt = await commitWorkingTreeFiles({
+            todoId: item.todo.id,
+            workerId: "auditor",
+            files: wtFiles,
+            message: wtMsg,
+            fs: realFilesystemAdapter(clonePath),
+            git: realGitAdapter(clonePath),
+            clonePath,
+            runId: ctx.getActive()?.runId,
+            // Batch path: one finalizeAuditorBatchCommit after all todos.
+            skipCommit: true,
+          });
+          res = {
+            ok: wt.ok,
+            reason: wt.ok ? undefined : wt.reason,
+            filesWritten: wt.ok ? wt.filesWritten : undefined,
+          };
+          if (wt.ok) {
+            ctx.appendSystem(
+              `[auditor-gate] git-native working-tree accept ${item.todo.id.slice(0, 8)} ` +
+                `(${wt.filesWritten.length} file(s) already on disk)`,
+            );
+          }
+        } else {
+          res = await applyFn(item.hunks, item.files, item.message, { skipCommit: true });
+        }
         // RR-A: one grounded repair attempt via shared core when apply fails.
-        if (!res.ok && item.hunks?.length > 0) {
+        // Skip for working_tree — there are no search/replace hunks to repair.
+        if (!res.ok && item.hunks?.length > 0 && !isWorkingTreeProposal(item.hunks)) {
           try {
             const { applyOrGroundedRepair } = await import("../applyOrGroundedRepair.js");
             const { realFilesystemAdapter } = await import("./v2Adapters.js");
@@ -462,18 +528,56 @@ export async function reviewProposedHunks(
     files.some(f => (c as any).expectedFiles?.includes?.(f) || (c as any).description?.includes(todo.description))
   );
 
+  const { isWorkingTreeProposal, workingTreeFilesFromHunks, workingTreeMessageFromHunks } =
+    await import("./workingTreeCommit.js");
+  const gitNative = isWorkingTreeProposal(hunks as unknown[]);
+  let gitContext = "";
+  if (gitNative) {
+    const clonePath = ctx.getActive()?.localPath?.trim() ?? "";
+    const wtFiles = workingTreeFilesFromHunks(hunks as unknown[], files);
+    const wtMsg = workingTreeMessageFromHunks(
+      hunks as unknown[],
+      todo.description.slice(0, 120),
+    );
+    if (clonePath) {
+      try {
+        const { gitStatusTool, gitDiffTool } = await import("../../tools/nativeToolHandlers.js");
+        const st = await gitStatusTool(clonePath);
+        const df = await gitDiffTool(clonePath, {});
+        const stText = st.ok ? st.output.slice(0, 4_000) : `error: ${st.error}`;
+        const dfText = df.ok ? df.output.slice(0, 12_000) : `error: ${df.error}`;
+        gitContext = [
+          `Mode: git-native working tree (worker already wrote files via tools).`,
+          `Proposed commit message: ${wtMsg}`,
+          `Files claimed: ${wtFiles.join(", ")}`,
+          `git status:`,
+          stText || "(clean)",
+          `git diff (excerpt):`,
+          dfText || "(empty)",
+        ].join("\n");
+      } catch (err) {
+        gitContext = `Mode: git-native working tree. (Could not read git: ${err instanceof Error ? err.message : String(err)})`;
+      }
+    } else {
+      gitContext = `Mode: git-native working tree. Files: ${wtFiles.join(", ")}. Message: ${wtMsg}`;
+    }
+  }
+
   const reviewPrompt = [
     `You are the auditor reviewing a worker's proposed code change.`,
     `Todo ID: ${todo.id}`,
     `Description: ${todo.description}`,
     `Target files: ${files.join(", ")}`,
     ``,
-    `Proposed hunks:`,
-    JSON.stringify(hunks, null, 2),
+    gitNative
+      ? gitContext
+      : `Proposed hunks:\n${JSON.stringify(hunks, null, 2)}`,
     ``,
     criterion ? `Related criterion: ${criterion.description}` : "",
     ``,
-    `Decide whether to allow these exact changes to be committed.`,
+    gitNative
+      ? `Decide whether to allow a git commit of the dirty working tree for this todo.`
+      : `Decide whether to allow these exact changes to be committed.`,
     `Respond with EXACT JSON only:`,
     `{ "approve": true | false, "reason": "<concise 1-2 sentence justification>" }`,
   ].join("\n");

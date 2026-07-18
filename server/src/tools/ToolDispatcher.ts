@@ -30,6 +30,10 @@ import {
   grepTool,
   bashTool,
   proposeHunksTool,
+  writeTool,
+  editTool,
+  gitStatusTool,
+  gitDiffTool,
 } from "./nativeToolHandlers.js";
 
 // Re-exports for existing importers.
@@ -231,8 +235,16 @@ export class ToolDispatcher {
         result = await proposeHunksTool(this.clonePath, call.args);
         break;
       case "write":
+        result = await writeTool(this.clonePath, call.args);
+        break;
       case "edit":
-        result = { ok: false, error: `${call.tool} dispatch not yet implemented` };
+        result = await editTool(this.clonePath, call.args);
+        break;
+      case "git_status":
+        result = await gitStatusTool(this.clonePath);
+        break;
+      case "git_diff":
+        result = await gitDiffTool(this.clonePath, call.args);
         break;
       case "web_fetch": {
         const { preflightResearchTool } = await import("./researchPolicy.js");

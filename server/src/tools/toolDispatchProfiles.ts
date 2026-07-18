@@ -32,7 +32,19 @@ export function tokenizeAllowlistedCommand(command: string): string[] {
   return tokens;
 }
 
-export type ToolName = "read" | "grep" | "glob" | "list" | "bash" | "write" | "edit" | "propose_hunks" | "web_fetch" | "web_search";
+export type ToolName =
+  | "read"
+  | "grep"
+  | "glob"
+  | "list"
+  | "bash"
+  | "write"
+  | "edit"
+  | "propose_hunks"
+  | "git_status"
+  | "git_diff"
+  | "web_fetch"
+  | "web_search";
 export type ProfileName =
   | "swarm"
   | "swarm-read"
@@ -58,24 +70,63 @@ export function unrestrictedReadTools(profile: ProfileName): boolean {
 // without each caller having to spell out the per-profile list.
 export function defaultToolsForProfile(
   profile: ProfileName,
-): ReadonlyArray<"read" | "grep" | "glob" | "list" | "bash" | "propose_hunks" | "web_fetch" | "web_search"> {
+): ReadonlyArray<
+  | "read"
+  | "grep"
+  | "glob"
+  | "list"
+  | "bash"
+  | "write"
+  | "edit"
+  | "propose_hunks"
+  | "git_status"
+  | "git_diff"
+  | "web_fetch"
+  | "web_search"
+> {
   switch (profile) {
     case "swarm":
       return [];
     case "swarm-read":
-      return ["read", "grep", "glob", "list"];
+      return ["read", "grep", "glob", "list", "git_status", "git_diff"];
     case "swarm-planner":
-      return ["read", "grep", "glob", "list", "bash", "web_fetch", "web_search"];
+      return ["read", "grep", "glob", "list", "bash", "git_status", "git_diff", "web_fetch", "web_search"];
     case "swarm-builder":
-      return ["read", "grep", "glob", "list", "bash", "propose_hunks"];
+      return ["read", "grep", "glob", "list", "bash", "write", "edit", "propose_hunks", "git_status", "git_diff"];
     case "swarm-builder-research":
-      return ["read", "grep", "glob", "list", "bash", "web_fetch", "web_search", "propose_hunks"];
+      return [
+        "read",
+        "grep",
+        "glob",
+        "list",
+        "bash",
+        "write",
+        "edit",
+        "web_fetch",
+        "web_search",
+        "propose_hunks",
+        "git_status",
+        "git_diff",
+      ];
     case "swarm-auto":
-      return ["read", "grep", "glob", "list", "bash", "web_fetch", "web_search", "propose_hunks"];
+      return [
+        "read",
+        "grep",
+        "glob",
+        "list",
+        "bash",
+        "write",
+        "edit",
+        "web_fetch",
+        "web_search",
+        "propose_hunks",
+        "git_status",
+        "git_diff",
+      ];
     case "swarm-write":
-      return ["read", "grep", "glob", "list", "propose_hunks"];
+      return ["read", "grep", "glob", "list", "bash", "write", "edit", "propose_hunks", "git_status", "git_diff"];
     case "swarm-research":
-      return ["read", "grep", "glob", "list", "web_fetch", "web_search"];
+      return ["read", "grep", "glob", "list", "git_status", "git_diff", "web_fetch", "web_search"];
   }
 }
 
@@ -91,6 +142,8 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     propose_hunks: "deny",
     web_fetch: "deny",
     web_search: "deny",
+    git_status: "deny",
+    git_diff: "deny",
   },
   "swarm-read": {
     read: "allow",
@@ -103,6 +156,8 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     propose_hunks: "deny",
     web_fetch: "deny",
     web_search: "deny",
+    git_status: "allow",
+    git_diff: "allow",
   },
   // Blackboard planners may inspect as many repository files as needed.
   // The profile remains strictly read-only and clone-scoped; its larger
@@ -118,6 +173,8 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     propose_hunks: "deny",
     web_fetch: "allow",
     web_search: "allow",
+    git_status: "allow",
+    git_diff: "allow",
   },
   "swarm-builder": {
     read: "allow",
@@ -125,11 +182,13 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     glob: "allow",
     list: "allow",
     bash: "allow",
-    write: "deny",
-    edit: "deny",
+    write: "allow",
+    edit: "allow",
     propose_hunks: "allow",
     web_fetch: "deny",
     web_search: "deny",
+    git_status: "allow",
+    git_diff: "allow",
   },
   "swarm-builder-research": {
     read: "allow",
@@ -137,36 +196,42 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     glob: "allow",
     list: "allow",
     bash: "allow",
-    write: "deny",
-    edit: "deny",
+    write: "allow",
+    edit: "allow",
     propose_hunks: "allow",
     web_fetch: "allow",
     web_search: "allow",
+    git_status: "allow",
+    git_diff: "allow",
   },
-  /** High-trust auto-approve: max toolkit (mutations via propose_hunks apply). */
+  /** High-trust auto-approve: full toolkit incl. working-tree write + host bash. */
   "swarm-auto": {
     read: "allow",
     grep: "allow",
     glob: "allow",
     list: "allow",
     bash: "allow",
-    write: "deny",
-    edit: "deny",
+    write: "allow",
+    edit: "allow",
     propose_hunks: "allow",
     web_fetch: "allow",
     web_search: "allow",
+    git_status: "allow",
+    git_diff: "allow",
   },
   "swarm-write": {
     read: "allow",
     grep: "allow",
     glob: "allow",
     list: "allow",
-    bash: "deny",
-    write: "deny",
-    edit: "deny",
+    bash: "allow",
+    write: "allow",
+    edit: "allow",
     propose_hunks: "allow",
     web_fetch: "deny",
     web_search: "deny",
+    git_status: "allow",
+    git_diff: "allow",
   },
   // New profile for external data access (MCP-style). Opt-in via run config.
   "swarm-research": {
@@ -180,6 +245,8 @@ export const PROFILES: Record<ProfileName, Record<ToolName, Permission>> = {
     propose_hunks: "deny",
     web_fetch: "allow",
     web_search: "allow",
+    git_status: "allow",
+    git_diff: "allow",
   },
 };
 

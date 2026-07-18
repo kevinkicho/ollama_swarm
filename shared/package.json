@@ -49,7 +49,9 @@
     "./swarmControl/controlAdvice": "./src/swarmControl/controlAdvice.ts",
     "./wsProtocol": "./src/wsProtocol.ts",
     "./workerHunks": "./src/workerHunks.ts",
-    "./presetMaturity": "./src/presetMaturity.ts"
+    "./presetMaturity": "./src/presetMaturity.ts",
+    "./brainOs": "./src/brainOs/index.ts",
+    "./brainOs/dispatchTypes": "./src/brainOs/dispatchTypes.ts"
   },
   "scripts": {
     "test": "node scripts/run-tests.mjs",

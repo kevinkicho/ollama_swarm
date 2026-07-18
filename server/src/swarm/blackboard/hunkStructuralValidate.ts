@@ -8,6 +8,11 @@ export function validateProposedHunksStructural(
   hunks: ReadonlyArray<Record<string, unknown>>,
 ): { ok: boolean; reason: string } {
   for (const h of hunks) {
+    // Git-native proposals: disk already mutated; no replace/content to lint.
+    const op = typeof h.op === "string" ? h.op : "";
+    if (op === "working_tree" || op === "workingTree" || op === "git_commit") {
+      continue;
+    }
     const file = typeof h.file === "string" ? h.file : "";
     const replace =
       typeof h.replace === "string"

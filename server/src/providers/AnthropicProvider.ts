@@ -28,7 +28,18 @@ const MAX_TOOL_TURNS = 100;
 // OpenAIProvider can share them. Mirror the args ToolDispatcher's
 // handlers actually consume.
 export const TOOL_SCHEMAS: Record<
-  "read" | "grep" | "glob" | "list" | "bash" | "propose_hunks" | "web_fetch" | "web_search",
+  | "read"
+  | "grep"
+  | "glob"
+  | "list"
+  | "bash"
+  | "write"
+  | "edit"
+  | "propose_hunks"
+  | "git_status"
+  | "git_diff"
+  | "web_fetch"
+  | "web_search",
   { description: string; input_schema: Record<string, unknown> }
 > = {
   read: {
@@ -66,11 +77,54 @@ export const TOOL_SCHEMAS: Record<
     },
   },
   bash: {
-    description: "Run a shell command from the curated allowlist (npm/npx/yarn/pnpm/bun/tsc/eslint/etc.). Bounded to 60s. NO chaining (`;`, `&&`), NO redirection (`>`, `<`), NO substitution ($(), backticks).",
+    description:
+      "Run a host shell command in the clone (Windows: cmd). Prefer write/edit/git_status/git_diff for file work. " +
+      "Use for npm/node/git when available. Bounded timeout. Prefer swarm read/grep/list over Unix-only CLIs on Windows.",
     input_schema: {
       type: "object",
       properties: { command: { type: "string" } },
       required: ["command"],
+    },
+  },
+  write: {
+    description:
+      "Write full file contents to the working tree (git-native). Prefer for large rewrites. " +
+      "After writes, finish with {workingTree:true,files:[...],message:\"...\"} or propose_hunks.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "repo-relative path" },
+        content: { type: "string", description: "full new file contents" },
+      },
+      required: ["path", "content"],
+    },
+  },
+  edit: {
+    description:
+      "Replace one (or allowMultiple) exact string in a working-tree file. Prefer unique search anchors.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        search: { type: "string" },
+        replace: { type: "string" },
+        allowMultiple: { type: "boolean" },
+      },
+      required: ["path", "search", "replace"],
+    },
+  },
+  git_status: {
+    description: "Run git status --porcelain in the clone (see dirty working tree).",
+    input_schema: { type: "object", properties: {} },
+  },
+  git_diff: {
+    description: "Run git diff (optional path; staged:true for cached).",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        staged: { type: "boolean" },
+      },
     },
   },
   propose_hunks: {

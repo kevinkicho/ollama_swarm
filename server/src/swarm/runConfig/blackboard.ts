@@ -70,6 +70,18 @@ export interface RunConfigBlackboard {
    */
   autoApprove?: boolean;
   /**
+   * Brain OS agentic dispatch: recruit helpers on apply_miss / progress_stuck /
+   * worker_decline instead of hard-coded strategy enums. Defaults **on** when
+   * `autoApprove` is true unless explicitly set to false.
+   * @see docs/design/brain-os-agentic-dispatch.md
+   */
+  brainOs?: boolean | {
+    enabled?: boolean;
+    maxHelpersPerRun?: number;
+    helperModel?: string;
+    maxDepth?: number;
+  };
+  /**
    * Legacy compatibility flag. Blackboard planners now always use the
    * read-only swarm-planner profile and may inspect repository files as
    * needed. This flag is retained for saved-run/config compatibility.

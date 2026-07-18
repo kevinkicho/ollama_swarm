@@ -563,6 +563,69 @@ export async function runAuditedExecution(
       ctx.setZeroProgressStreak(streak);
       if (shouldStop) {
         const reason = formatNoProductiveProgressReason(streak);
+        // Brain OS: one agentic chance to unstick (drain pending, re-scope) before hard stop.
+        try {
+          const active = ctx.getActive();
+          const { createRunBrainOs, dispatchBrainOsConflict, resolveBrainOsConfig } = await import(
+            "../brainOs/adapter.js"
+          );
+          const bcfg = resolveBrainOsConfig({
+            autoApprove: active?.autoApprove,
+            brainOs: (active as { brainOs?: boolean | object } | undefined)?.brainOs as
+              | boolean
+              | undefined,
+          });
+          const bc = ctx.boardCounts();
+          // boardCounts: open ≈ pending, claimed ≈ inProgress; pending-commit may be in open or separate
+          const openWork = (bc.open ?? 0) + (bc.claimed ?? 0) + (bc.stale ?? 0) > 0;
+          if (bcfg.enabled && openWork && active?.localPath && active?.runId) {
+            ctx.appendSystem(
+              `[progress] ${reason} — recruiting Brain OS before stop (open board still has work).`,
+            );
+            const bos = createRunBrainOs(
+              {
+                autoApprove: active.autoApprove,
+                brainOs: bcfg,
+                auditorModel: active.auditorModel,
+                model: active.model,
+              },
+              { appendSystem: (t) => ctx.appendSystem(t) },
+            );
+            const r = await dispatchBrainOsConflict(
+              bos,
+              {
+                runId: active.runId,
+                kind: "progress_stuck",
+                clonePath: active.localPath,
+                privileges: "arbiter",
+                boardSnapshot: {
+                  pending: bc.open ?? 0,
+                  inProgress: bc.claimed ?? 0,
+                  pendingCommit: 0,
+                  completed: bc.committed ?? 0,
+                  skipped: bc.skipped ?? 0,
+                },
+                autoApprove: active.autoApprove,
+                lastErrors: [reason],
+                helperModel: active.auditorModel ?? active.model,
+              },
+              {
+                appendSystem: (t) => ctx.appendSystem(t),
+              },
+            );
+            if (r.status === "resolved" || r.status === "partial") {
+              ctx.setZeroProgressStreak(0);
+              ctx.appendSystem(
+                `[progress] Brain OS unstuck (${r.status}): ${r.summary.slice(0, 200)} — continuing`,
+              );
+              return;
+            }
+          }
+        } catch (err) {
+          ctx.appendSystem(
+            `[progress] Brain OS unstick failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
         ctx.setCompletionDetail(reason);
         ctx.appendSystem(`[progress] ${reason} — stopping autonomous blackboard.`);
         try {

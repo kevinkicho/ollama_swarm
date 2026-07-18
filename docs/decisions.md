@@ -2,6 +2,39 @@
 
 This document records major architectural and product decisions with their rationale and status.
 
+## 2026-07-18: Brain OS agentic dispatch + git-native worker collaboration
+
+**Decision:** Mid-run recovery should **not** be primarily a hard-coded strategy enum
+(or ever-growing tool-coach micro-rules). **Brain OS** acts as a **runtime service**:
+the blackboard **dispatches** typed conflicts (`apply_miss`, `progress_stuck`,
+`worker_decline`); Brain OS **recruits** ephemeral helper agents with real agency
+(tools + judgment within privilege/budget); helpers return **structured effects**;
+agents are **released**.
+
+**Git-native collaboration (blackboard + council):** Workers prefer **write/edit +
+git_status/git_diff** on the clone, then finish with
+`{workingTree:true, files:[...], message:"..."}`. The orchestrator **commits disk
+reality** via a working-tree marker — it does **not** re-apply full-file write hunks
+(which no-op when disk already matches). Hunk JSON remains for small anchor patches
+only. Auditors review **git status/diff** for working-tree proposals.
+
+**Rationale:** Runs such as `4bd7f7f6` and `cff96fa8` show agents willing to work while
+product policy leashes tools/recovery; hardcoding every micro-behavior does not scale.
+Throwing invented search/replace hunks between workers and auditor is brittle vs
+shared git working tree. Windows **Administrator** elevation is **not** the fix.
+
+**Status:** Partial implementation landed (dispatch skeleton, apply_miss /
+progress_stuck / worker_decline hooks, write/edit/git tools, workingTree commit path).
+Flag: `brainOs` on run config; defaults on when `autoApprove`.
+
+**Detail:**
+- `docs/design/brain-os-agentic-dispatch.md`
+- `docs/design/brain-os-dispatch-api-sketch.md`
+- `server/src/swarm/brainOs/`, `server/src/swarm/blackboard/workingTreeCommit.ts`
+- Outer control surface remains `docs/BRAIN-OS-FOR-EXTERNAL-AGENTS.md`
+
+---
+
 ## 2026-07-09: Live prompt paths use transport retries and think-stream caps only
 
 **Decision:** Agent prompt paths use **transport retries** (network/timeouts) and the

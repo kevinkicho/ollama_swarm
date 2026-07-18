@@ -147,6 +147,99 @@ export async function handleWorkerSkip(
 
     if (verification.verdict === "valid" || verification.verdict === "unverified") {
       const label = verification.verdict === "valid" ? "VALID refusal" : "UNVERIFIED refusal";
+      // Brain OS: on UNVERIFIED declines, recruit a helper before hard fail (4bd7f7f6 thrash).
+      if (verification.verdict === "unverified") {
+        try {
+          const active = ctx.getActive();
+          const { createRunBrainOs, dispatchBrainOsConflict, resolveBrainOsConfig } = await import(
+            "../brainOs/adapter.js"
+          );
+          const bcfg = resolveBrainOsConfig({
+            autoApprove: active?.autoApprove,
+            brainOs: (active as { brainOs?: boolean | object } | undefined)?.brainOs as
+              | boolean
+              | undefined,
+          });
+          if (bcfg.enabled && active?.localPath && active?.runId) {
+            ctx.appendSystem(
+              `[${agent.id}] [brain-os] UNVERIFIED decline — recruiting helper before fail`,
+            );
+            const bos = createRunBrainOs(
+              {
+                autoApprove: active.autoApprove,
+                brainOs: bcfg,
+                auditorModel: active.auditorModel,
+                model: active.model,
+              },
+              {
+                appendSystem: (t) => ctx.appendSystem(t),
+                skipTodo: (id, reason) => {
+                  try {
+                    ctx.getWrappers().skipTodoQ(id, reason);
+                  } catch {
+                    /* */
+                  }
+                },
+              },
+            );
+            const r = await dispatchBrainOsConflict(
+              bos,
+              {
+                runId: active.runId,
+                kind: "worker_decline",
+                clonePath: active.localPath,
+                privileges: active.autoApprove ? "board_officer" : "repairer",
+                todoId: todo.id,
+                lastErrors: [skipReason, verification.rationale],
+                relevantFiles: [...todo.expectedFiles],
+                autoApprove: active.autoApprove,
+                helperModel: active.auditorModel ?? active.model,
+              },
+              {
+                appendSystem: (t) => ctx.appendSystem(t),
+                skipTodo: (id, reason) => {
+                  try {
+                    ctx.getWrappers().skipTodoQ(id, reason);
+                  } catch {
+                    /* */
+                  }
+                },
+              },
+            );
+            if (r.status === "resolved" || r.status === "partial") {
+              ctx.appendSystem(
+                `[${agent.id}] [brain-os] worker_decline handled: ${r.summary.slice(0, 200)}`,
+              );
+              ctx.recordInteraction(
+                "brain_os_decline",
+                todo.id,
+                agent.id,
+                r.summary.slice(0, 200),
+              );
+              // Prefer skip so the board can replan rather than thrash the same decline.
+              try {
+                ctx.getWrappers().skipTodoQ(
+                  todo.id,
+                  `brain-os: ${r.summary.slice(0, 200)} (worker: ${skipReason})`,
+                );
+              } catch {
+                ctx.getWrappers().failTodoQ(
+                  todo.id,
+                  `brain-os partial: ${r.summary.slice(0, 200)}`,
+                  "declined",
+                );
+              }
+              return "skipped";
+            }
+          }
+        } catch (err) {
+          ctx.appendSystem(
+            `[${agent.id}] [brain-os] worker_decline dispatch error: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
       ctx.appendSystem(`Auditor: ${label} — ${verification.rationale}. Routing to planner.`);
       ctx.getWrappers().postFindingQ({
         agentId: auditor.id,

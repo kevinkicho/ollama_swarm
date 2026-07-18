@@ -30,17 +30,46 @@ test("PROFILES — swarm-read allows read/grep/glob/list, denies edit/write/bash
   assert.equal(PROFILES["swarm-read"].bash, "deny");
 });
 
-test("PROFILES — swarm-builder-research allows bash, web tools, and propose_hunks", () => {
+test("PROFILES — swarm-builder-research allows bash, web tools, write, and propose_hunks", () => {
   assert.equal(PROFILES["swarm-builder-research"].bash, "allow");
   assert.equal(PROFILES["swarm-builder-research"].web_fetch, "allow");
   assert.equal(PROFILES["swarm-builder-research"].web_search, "allow");
   assert.equal(PROFILES["swarm-builder-research"].propose_hunks, "allow");
-  assert.equal(PROFILES["swarm-builder-research"].write, "deny");
+  assert.equal(PROFILES["swarm-builder-research"].write, "allow");
+  assert.equal(PROFILES["swarm-builder-research"].edit, "allow");
+  assert.equal(PROFILES["swarm-builder-research"].git_status, "allow");
 });
 
 test("PROFILES — swarm-builder allows propose_hunks", () => {
   assert.equal(PROFILES["swarm-builder"].propose_hunks, "allow");
   assert.equal(PROFILES["swarm-builder"].bash, "allow");
+  assert.equal(PROFILES["swarm-builder"].write, "allow");
+  assert.equal(PROFILES["swarm-builder"].edit, "allow");
+  assert.equal(PROFILES["swarm-builder"].git_status, "allow");
+  assert.equal(PROFILES["swarm-builder"].git_diff, "allow");
+});
+
+test("ToolDispatcher — write and edit mutate working tree", async () => {
+  const root = await makeFixtureClone();
+  try {
+    const d = new ToolDispatcher("swarm-builder", root);
+    const w = await d.dispatch({
+      tool: "write",
+      args: { path: "src/a.ts", content: "export const a = 99;\n" },
+    });
+    assert.equal(w.ok, true);
+    const text = await fs.readFile(path.join(root, "src", "a.ts"), "utf8");
+    assert.equal(text, "export const a = 99;\n");
+    const e = await d.dispatch({
+      tool: "edit",
+      args: { path: "src/a.ts", search: "99", replace: "100" },
+    });
+    assert.equal(e.ok, true);
+    const after = await fs.readFile(path.join(root, "src", "a.ts"), "utf8");
+    assert.equal(after, "export const a = 100;\n");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("PROFILES — swarm-planner has full read/web/bash, cannot mutate repo", () => {

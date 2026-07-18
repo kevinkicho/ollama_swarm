@@ -214,6 +214,56 @@ export async function tryWorkerPrompt(
     state.appendAgent(agent, res, { role: "worker" });
 
     const parsed = parseWorkerResponseWithRepair(res, expectedFiles);
+
+    // Git-native: worker used write/edit tools; commit dirty working tree (no re-apply).
+    if (
+      parsed.ok
+      && !parsed.skip
+      && (parsed.workingTree === true
+        || (parsed.hunks.length === 0 && (parsed.filesTouched?.length ?? 0) > 0))
+    ) {
+      const { commitWorkingTreeFiles, makeWorkingTreeProposal } = await import(
+        "./blackboard/workingTreeCommit.js"
+      );
+      const files =
+        parsed.filesTouched && parsed.filesTouched.length > 0
+          ? parsed.filesTouched
+          : expectedFiles;
+      const proposal = makeWorkingTreeProposal(
+        files,
+        parsed.gitMessage ?? todo.description.slice(0, 120),
+      );
+      const wtResult = await commitWorkingTreeFiles({
+        todoId: todo.id,
+        workerId: agent.id,
+        files: proposal.files,
+        message: proposal.hunks[0]?.message ?? todo.description.slice(0, 120),
+        fs: fsAdapter,
+        git: gitAdapter,
+        runId: state.cfg.runId,
+        clonePath: state.clonePath,
+      });
+      if (wtResult.ok && wtResult.filesWritten.length > 0) {
+        try {
+          state.todoQueue.clearLastApplyMiss(todo.id);
+        } catch {
+          /* ignore */
+        }
+        ctx.appendSystem(
+          `[execution] ${agent.id} ✓ git-native working-tree commit — ${wtResult.commitSha?.slice(0, 7)} ` +
+            `(${wtResult.filesWritten.length} file(s)).`,
+        );
+        return { outcome: "completed" };
+      }
+      return {
+        outcome: "retry",
+        reason: wtResult.ok
+          ? "working-tree commit wrote zero files"
+          : (wtResult.reason || "working-tree commit failed"),
+        lastResponse: res,
+      };
+    }
+
     if (parsed.ok && parsed.hunks.length > 0 && !parsed.skip) {
       // Auto-demote oversized replace/create → write/replace_between (83dc5910).
       const sizeCheck = validateHunkPayload(parsed.hunks, fileContents);

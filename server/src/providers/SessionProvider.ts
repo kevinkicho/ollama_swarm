@@ -57,7 +57,20 @@ export interface ChatOpts {
    *  loop, dispatching tool calls through `dispatcher.dispatch(...)`
    *  and feeding results back to the model until it emits a text-only
    *  response (or hits a 10-turn safety cap). */
-  tools?: ReadonlyArray<"read" | "grep" | "glob" | "list" | "bash" | "propose_hunks" | "web_fetch" | "web_search">;
+  tools?: ReadonlyArray<
+    | "read"
+    | "grep"
+    | "glob"
+    | "list"
+    | "bash"
+    | "write"
+    | "edit"
+    | "propose_hunks"
+    | "git_status"
+    | "git_diff"
+    | "web_fetch"
+    | "web_search"
+  >;
   /** Required when `tools` is set. Owns the security-gated execution
    *  of each tool (profile permission table, path safety, allowlist
    *  for bash). See server/src/tools/ToolDispatcher.ts. */

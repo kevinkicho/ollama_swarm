@@ -4,6 +4,8 @@ This guide helps external LLM agents, scripts, or tools use **Brain-as-OS** to c
 
 Brain acts as a librarian / master-admin: use-case tables in [`docs/swarm-patterns.md`](swarm-patterns.md) and [`docs/STATUS.md`](STATUS.md), historical outcomes, and mid-run control APIs.
 
+> **Inner Brain OS (partial):** mid-run **agentic dispatch** — when the blackboard hits `apply_miss` / `progress_stuck` / `worker_decline`, Brain OS can recruit ephemeral helper agents (enabled by default under `autoApprove`, or `brainOs: true`). Workers also prefer **git-native** write/edit + `{workingTree:true}` over inventing large hunks. See [`design/brain-os-agentic-dispatch.md`](design/brain-os-agentic-dispatch.md). This document remains the **outer** control surface (start/steer/stop/analyze).
+
 > **Machine-readable map:** `GET /api/swarm/brain/control-surface`  
 > **CLI mirror:** `ollama-swarm control-surface --json`
 
@@ -21,7 +23,7 @@ Brain acts as a librarian / master-admin: use-case tables in [`docs/swarm-patter
 | Start run | `POST /api/swarm/start` | `ollama-swarm start --directive ... --preset ...` |
 | Approve follow-up run | `POST /api/swarm/brain/provision` (`approved: true`) | — |
 
-**Start body (high-signal fields):** `parentPath`, `repoUrl`, `userDirective`, `preset`, `agentCount`, `rounds` / `continuous`, `model` / `plannerModel` / `workerModel`, `webTools`, `plannerTools`, `topology`, `wallClockCapMs`, `tokenBudget`, `writeMode`, `ambitionTiers`, `verifyCommand`.
+**Start body (high-signal fields):** `parentPath`, `repoUrl`, `userDirective`, `preset`, `agentCount`, `rounds` / `continuous`, `model` / `plannerModel` / `workerModel`, `webTools`, `plannerTools`, `topology`, `wallClockCapMs`, `tokenBudget`, `writeMode`, `ambitionTiers`, `verifyCommand`, `autoApprove`, `brainOs`.
 
 Returns `{ runId, navigateTo: "/runs/<runId>" }` — always use the runId for subsequent calls.
 

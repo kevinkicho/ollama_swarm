@@ -110,7 +110,16 @@ export const WorkerResponseSchema = z.object({
 });
 
 export type WorkerParseResult =
-  | { ok: true; hunks: Hunk[]; skip?: string; demotions?: HunkDemotion[] }
+  | {
+      ok: true;
+      hunks: Hunk[];
+      skip?: string;
+      demotions?: HunkDemotion[];
+      /** Git-native: worker mutated working tree via write/edit tools. */
+      workingTree?: boolean;
+      gitMessage?: string;
+      filesTouched?: string[];
+    }
   | { ok: false; reason: string };
 
 /** Record of an automatic op demotion for oversized payloads (83dc5910). */
@@ -274,9 +283,10 @@ function allowedFileSet(expectedFiles: readonly string[]): Set<string> {
 }
 
 /**
- * When expectedFiles is empty, allow any path (multi-writer / open reconcile
- * collect phase). Non-empty lists remain a hard allow-list so workers cannot
- * edit outside their TODO.
+ * When expectedFiles is empty, allow any path.
+ * Non-empty lists prefer the allow-list but **soft-accept** same-directory
+ * or same-basename paths so multi-file work is not hard-blocked
+ * (runs 4bd7f7f6 / design brain-os). Strict mode: set SWARM_STRICT_EXPECTED_FILES=1.
  */
 function fileAllowed(
   file: string,
@@ -284,7 +294,23 @@ function fileAllowed(
   allowAll: boolean,
 ): boolean {
   if (allowAll) return true;
-  return allowed.has(normalizeRepoPath(file));
+  const norm = normalizeRepoPath(file);
+  if (allowed.has(norm)) return true;
+  if (process.env.SWARM_STRICT_EXPECTED_FILES === "1") return false;
+  // Soft fence: same directory as an expected file, or basename match.
+  const base = norm.split("/").pop() ?? norm;
+  const dir = norm.includes("/") ? norm.slice(0, norm.lastIndexOf("/")) : "";
+  for (const a of allowed) {
+    const aBase = a.split("/").pop() ?? a;
+    const aDir = a.includes("/") ? a.slice(0, a.lastIndexOf("/")) : "";
+    if (base && base === aBase) return true;
+    if (dir && aDir && dir === aDir) return true;
+    // parent/child relationship (e.g. component next to hub file)
+    if (dir && aDir && (dir.startsWith(aDir + "/") || aDir.startsWith(dir + "/"))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function parseWorkerResponse(
@@ -299,6 +325,43 @@ export function parseWorkerResponse(
     return { ok: false, reason: envelopeResult.reason };
   }
   const parsed = envelopeResult.value;
+
+  // Git-native envelope: working tree already updated via write/edit tools.
+  // Prefer this over inventing search/replace when collaborating via git.
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const o = parsed as Record<string, unknown>;
+    const gitObj =
+      o.git && typeof o.git === "object" && !Array.isArray(o.git)
+        ? (o.git as Record<string, unknown>)
+        : null;
+    if (
+      o.workingTree === true
+      || o.git === true
+      || gitObj != null
+      || o.mode === "git"
+      || o.mode === "workingTree"
+    ) {
+      const filesRaw = gitObj?.files ?? o.files ?? o.filesTouched;
+      const filesTouched = Array.isArray(filesRaw)
+        ? filesRaw.map(String).map(normalizeRepoPath).filter(Boolean)
+        : [];
+      const gitMessage = String(
+        gitObj?.message ?? o.message ?? o.summary ?? "worker working-tree changes",
+      ).slice(0, 500);
+      const skip =
+        typeof o.skip === "string" && o.skip.trim()
+          ? o.skip.trim().slice(0, 500)
+          : undefined;
+      return {
+        ok: true,
+        hunks: [],
+        skip,
+        workingTree: true,
+        gitMessage,
+        filesTouched,
+      };
+    }
+  }
 
   // Try strict parse first; if it fails, attempt per-hunk extraction so one
   // bad hunk doesn't kill the whole response.
@@ -386,34 +449,40 @@ export function parseWorkerResponse(
 // ---------------------------------------------------------------------------
 
 export const WORKER_SYSTEM_PROMPT = [
-  "You are a WORKER implementing one TODO via file hunks.",
+  "You are a WORKER implementing one TODO.",
+  "Collaborate via the git working tree — not by inventing large search/replace payloads for peers.",
+  "PREFERRED: use write/edit tools (and git_status/git_diff) to change files on disk, then finish with:",
+  '  {"workingTree":true,"message":"short commit subject","files":["path/to/file.ts"]}',
+  "ALTERNATE (small anchor patches only): emit search/replace hunks:",
+  '  {"hunks":[{"op":"replace","file":"...","search":"...","replace":"..."}]}',
   "",
   "RULES:",
   "1. Final response:",
   ...JSON_ONLY_FINAL_RULE_LINES.map((line) => `   ${line}`),
-  "2. Shape: {\"hunks\": [...]}  — max " + String(MAX_HUNKS) + " hunks. Optional skip: {\"hunks\":[],\"skip\":\"reason\"}.",
-  "3. Each hunk: `op` + `file`. `file` must be in the TODO's expectedFiles only.",
-  "4. Ops:",
+  "2. Preferred shape: {\"workingTree\":true,\"message\":\"...\",\"files\":[...]} after write/edit tools.",
+  "   Hunks shape: {\"hunks\": [...]} — max " + String(MAX_HUNKS) + " hunks. Optional skip: {\"hunks\":[],\"skip\":\"reason\"}.",
+  "3. Target the TODO's expectedFiles (same directory / basename is ok). Prefer tools for multi-file work.",
+  "4. Hunk ops (when not using workingTree):",
   "   - replace: {op,file,search,replace} — `search` must match EXACTLY ONCE (enough context to be unique).",
   "   - replace_between: {op,file,start,endExclusive?,replace} — prefer for large section rewrites; omit endExclusive for start→EOF.",
   "   - write: {op,file,content} — full rewrite or create when unsure.",
   "   - create: {op,file,content} — only if the file does not exist yet.",
   "   - append: {op,file,content} — end of file, no stable anchor.",
   "   - delete: {op,file} — only when the TODO requires removing the file.",
-  "5. Hunks on one file apply in order. Missing expectedFiles → create them (do not skip). Skip only if verified already done or genuinely impossible.",
+  "5. Missing expectedFiles → create them (do not skip). Skip only if verified already done or genuinely impossible.",
   "6. USER DIRECTIVE (when present) is authoritative — no mock/placeholder data; serve its intent.",
-  "7. You may call propose_hunks mid-turn to dry-run anchors before the final JSON.",
+  "7. Prefer write/edit + workingTree over propose_hunks for large rewrites. propose_hunks dry-run is ok for small anchors.",
   "8. After a search/start miss: re-read the file and copy a unique anchor — do not re-emit the failed search or claim already-done without reading.",
   ...hostToolingConstraintLines().map((line) => `   ${line}`),
   "",
-  "WINDOWED files (large): head + gap + tail only — use replace_between/write or tools for middle sections; do not invent a search spanning the gap.",
+  "WINDOWED files (large): head + gap + tail only — use write/edit tools or replace_between/write; do not invent a search spanning the gap.",
   "",
   "EXAMPLES (shape only):",
+  '{"workingTree":true,"message":"fix clamp boundary","files":["src/utils.js"]}',
   '{"hunks":[{"op":"replace","file":"src/utils.js","search":"function clamp(n, max) {\\n  return n > max ? max : n;\\n}","replace":"function clamp(n, max) {\\n  return n >= max ? max : n;\\n}"}]}',
   '{"hunks":[{"op":"create","file":"src/log.js","content":"export function log(msg) {\\n  console.log(`[app] ${msg}`);\\n}\\n"}]}',
-  '{"hunks":[{"op":"append","file":"CHANGELOG.md","content":"\\n## v1.2.0\\n- Added clamp helper.\\n"}]}',
   "",
-  "Avoid: non-unique search; literal newlines in JSON (use \\n); create on an existing file; fences/line numbers in output.",
+  "Avoid: inventing giant search blobs; literal newlines in JSON (use \\n); create on an existing file; fences/line numbers in output.",
 ].join("\n");
 
 export interface WorkerSeed {
