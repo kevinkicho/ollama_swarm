@@ -9,6 +9,8 @@ import type { DeliberationSink } from "../swarm/deliberation/deliberationTypes.j
 
 export interface ToolContestRunSink {
   clonePath?: string;
+  /** When true, contested denials for safe tools auto one-shot approve. */
+  autoApprove?: boolean;
   appendSystem?: (msg: string, summary?: TranscriptEntrySummary) => void;
   emit?: (event: { type: string; [key: string]: unknown }) => void;
   logDiag?: (entry: Record<string, unknown>) => void;
@@ -19,7 +21,19 @@ const byRun = new Map<string, ToolContestRunSink>();
 export function setToolContestRunSink(runId: string, sink: ToolContestRunSink): void {
   const id = runId?.trim();
   if (!id) return;
-  byRun.set(id, sink);
+  // Merge so re-registration from lifecycle keeps prior flags (e.g. autoApprove).
+  const prev = byRun.get(id);
+  byRun.set(id, prev ? { ...prev, ...sink } : sink);
+}
+
+export function patchToolContestRunSink(
+  runId: string,
+  patch: Partial<ToolContestRunSink>,
+): void {
+  const id = runId?.trim();
+  if (!id) return;
+  const prev = byRun.get(id) ?? {};
+  byRun.set(id, { ...prev, ...patch });
 }
 
 export function clearToolContestRunSink(runId?: string): void {

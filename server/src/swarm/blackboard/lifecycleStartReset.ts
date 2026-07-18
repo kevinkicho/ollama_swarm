@@ -80,6 +80,7 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   if (cfg.runId) {
     setToolContestRunSink(cfg.runId, {
       clonePath: cfg.localPath,
+      autoApprove: !!(cfg as { autoApprove?: boolean }).autoApprove,
       appendSystem: (text, summary) => ctx.appendSystem(text, summary),
       emit: (event) => ctx.emit(event),
     });

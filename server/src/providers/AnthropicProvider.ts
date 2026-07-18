@@ -324,8 +324,8 @@ export class AnthropicProvider implements SessionProvider {
       }
       if (opts.runId && opts.agentId && cumulativeText) {
         try {
-          const { registerContestToolsFromText } = await import("../tools/toolContest.js");
-          registerContestToolsFromText({
+          const { scanAgentContestMessages } = await import("../tools/toolContest.js");
+          scanAgentContestMessages({
             runId: opts.runId,
             agentId: opts.agentId,
             text: cumulativeText,

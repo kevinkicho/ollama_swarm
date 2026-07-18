@@ -163,8 +163,8 @@ export class OpenAIProvider implements SessionProvider {
       cumulativeResponse += turnResult.responseTokens;
       if (opts.runId && opts.agentId && turnResult.text) {
         try {
-          const { registerContestToolsFromText } = await import("../tools/toolContest.js");
-          registerContestToolsFromText({
+          const { scanAgentContestMessages } = await import("../tools/toolContest.js");
+          scanAgentContestMessages({
             runId: opts.runId,
             agentId: opts.agentId,
             text: turnResult.text,

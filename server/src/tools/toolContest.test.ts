@@ -9,9 +9,12 @@ import {
   resetToolContests,
   formatContestableDenial,
   extractContestToolRequests,
+  extractResolveContestRequests,
   registerContestToolsFromText,
+  registerResolveContestFromText,
   publishToolContestEvent,
   formatToolContestLine,
+  isTrustedContestResolver,
 } from "./toolContest.js";
 import { setToolContestRunSink, clearToolContestRunSink } from "./toolContestSink.js";
 
@@ -110,5 +113,93 @@ describe("toolContest", () => {
     assert.equal(lines[0]!.summary?.kind, "tool_contest");
     assert.equal(lines[0]!.summary?.phase, "opened");
     assert.match(formatToolContestLine(c, "opened"), /OPEN/);
+  });
+
+  it("peer resolveContest approves and grants one-shot; self-approve blocked", () => {
+    const c = openToolContest({
+      runId: "r4",
+      agentId: "worker-1",
+      tool: "write",
+      profile: "swarm-read",
+      denyReason: "denied",
+    });
+    contestToolDenial({
+      runId: "r4",
+      contestId: c.id,
+      agentId: "worker-1",
+      tool: "write",
+      reason: "need write",
+    });
+    // Self cannot approve
+    const self = registerResolveContestFromText({
+      runId: "r4",
+      agentId: "worker-1",
+      text: `{"resolveContest":true,"contestId":"${c.id}","approve":true,"reason":"self"}`,
+    });
+    assert.equal(self.length, 0);
+    assert.equal(listOpenContests("r4").length, 1);
+    // Peer can approve
+    const peer = registerResolveContestFromText({
+      runId: "r4",
+      agentId: "planner",
+      profile: "swarm-planner",
+      text: `{"resolveContest":true,"contestId":"${c.id}","approve":true,"reason":"ok for contract"}`,
+    });
+    assert.equal(peer.length, 1);
+    assert.equal(peer[0]!.status, "approved");
+    assert.match(peer[0]!.resolver ?? "", /planner/);
+    assert.equal(listOpenContests("r4").length, 0);
+    assert.equal(consumeToolAllowOnce("r4", "worker-1", "write"), true);
+  });
+
+  it("autoApprove run auto one-shots safe tools after contest", () => {
+    setToolContestRunSink("r5", { autoApprove: true });
+    const c = openToolContest({
+      runId: "r5",
+      agentId: "w1",
+      tool: "edit",
+      profile: "swarm-write",
+      denyReason: "denied",
+    });
+    const applied = registerContestToolsFromText({
+      runId: "r5",
+      agentId: "w1",
+      text: `{"contestTool":true,"contestId":"${c.id}","reason":"fix typo"}`,
+    });
+    assert.equal(applied.length, 1);
+    assert.equal(listOpenContests("r5").length, 0);
+    assert.equal(consumeToolAllowOnce("r5", "w1", "edit"), true);
+  });
+
+  it("autoApprove does not auto-allow bash contests", () => {
+    setToolContestRunSink("r6", { autoApprove: true });
+    const c = openToolContest({
+      runId: "r6",
+      agentId: "w1",
+      tool: "bash",
+      profile: "swarm-read",
+      denyReason: "denied",
+    });
+    registerContestToolsFromText({
+      runId: "r6",
+      agentId: "w1",
+      text: `{"contestTool":true,"contestId":"${c.id}","reason":"need shell"}`,
+    });
+    assert.equal(listOpenContests("r6").length, 1);
+    assert.equal(consumeToolAllowOnce("r6", "w1", "bash"), false);
+  });
+
+  it("isTrustedContestResolver recognizes planner/auditor", () => {
+    assert.equal(isTrustedContestResolver({ agentId: "x", profile: "swarm-planner" }), true);
+    assert.equal(isTrustedContestResolver({ agentId: "auditor-1" }), true);
+    assert.equal(isTrustedContestResolver({ agentId: "worker-2", profile: "swarm-write" }), false);
+  });
+
+  it("extractResolveContestRequests parses approve/deny", () => {
+    const found = extractResolveContestRequests(
+      `ok {"resolveContest":true,"contestId":"c1","approve":false,"reason":"unsafe"}`,
+    );
+    assert.equal(found.length, 1);
+    assert.equal(found[0]!.approve, false);
   });
 });

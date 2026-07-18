@@ -530,14 +530,15 @@ export async function promptWithRetry(
               opts.manager?.markStreamingDone(agent.id);
               throw guardErr ?? new Error("aborted");
             }
-            // Free-text contestTool JSON (profile denials) — belt after tool-loop scans.
+            // Free-text contestTool / resolveContest JSON (profile denials).
             if (opts.runId && r.text) {
               try {
-                const { registerContestToolsFromText } = await import("../tools/toolContest.js");
-                registerContestToolsFromText({
+                const { scanAgentContestMessages } = await import("../tools/toolContest.js");
+                scanAgentContestMessages({
                   runId: opts.runId,
                   agentId: agent.id,
                   text: r.text,
+                  profile: agentName,
                 });
               } catch {
                 /* best-effort */

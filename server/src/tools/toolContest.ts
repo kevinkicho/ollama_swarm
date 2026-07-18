@@ -129,19 +129,41 @@ export interface ContestToolEmit {
   reason: string;
 }
 
+/** Peer/master resolve payload: `{"resolveContest":true,"approve":true,...}`. */
+export interface ResolveContestEmit {
+  contestId?: string;
+  tool?: string;
+  approve: boolean;
+  reason: string;
+}
+
 /**
- * Extract `{"contestTool":true,...}` objects from free-form assistant text
- * (prose, fences, multi-object). Brace-matched JSON only.
+ * Tools safe to one-shot auto-approve under autoApprove after a contest.
+ * bash/run stay operator/peer-gated (host execution).
  */
-export function extractContestToolRequests(text: string): ContestToolEmit[] {
-  if (!text || !text.includes("contestTool")) return [];
-  const out: ContestToolEmit[] = [];
+export const AUTO_APPROVE_CONTEST_TOOLS = new Set([
+  "write",
+  "edit",
+  "propose_hunks",
+  "git_status",
+  "git_diff",
+  "read",
+  "list",
+  "glob",
+  "grep",
+  "web_search",
+  "web_fetch",
+]);
+
+/** Brace-match JSON objects around a key marker in free-form text. */
+function extractJsonObjectsNearKey(text: string, key: string): Record<string, unknown>[] {
+  if (!text || !text.includes(key)) return [];
+  const out: Record<string, unknown>[] = [];
   const seen = new Set<string>();
   let i = 0;
   while (i < text.length) {
-    const keyIdx = text.indexOf("contestTool", i);
+    const keyIdx = text.indexOf(key, i);
     if (keyIdx < 0) break;
-    // Walk back to the nearest `{` that could start the object.
     let start = keyIdx;
     while (start > 0 && text[start] !== "{") start--;
     if (text[start] !== "{") {
@@ -180,39 +202,118 @@ export function extractContestToolRequests(text: string): ContestToolEmit[] {
     seen.add(slice);
     try {
       const obj = JSON.parse(slice) as Record<string, unknown>;
-      if (obj.contestTool !== true && obj.contestTool !== "true") continue;
-      const reasonRaw = obj.reason ?? obj.why ?? obj.rationale;
-      const reason =
-        typeof reasonRaw === "string" && reasonRaw.trim()
-          ? reasonRaw.trim()
-          : "agent contested profile denial";
-      const contestId =
-        typeof obj.contestId === "string" && obj.contestId.trim()
-          ? obj.contestId.trim()
-          : undefined;
-      const tool =
-        typeof obj.tool === "string" && obj.tool.trim() ? obj.tool.trim() : undefined;
-      out.push({ contestId, tool, reason: reason.slice(0, 500) });
+      if (obj && typeof obj === "object") out.push(obj);
     } catch {
-      /* not valid JSON — skip */
+      /* skip */
     }
   }
   return out;
 }
 
 /**
+ * Extract `{"contestTool":true,...}` objects from free-form assistant text
+ * (prose, fences, multi-object). Brace-matched JSON only.
+ */
+export function extractContestToolRequests(text: string): ContestToolEmit[] {
+  const out: ContestToolEmit[] = [];
+  for (const obj of extractJsonObjectsNearKey(text, "contestTool")) {
+    if (obj.contestTool !== true && obj.contestTool !== "true") continue;
+    const reasonRaw = obj.reason ?? obj.why ?? obj.rationale;
+    const reason =
+      typeof reasonRaw === "string" && reasonRaw.trim()
+        ? reasonRaw.trim()
+        : "agent contested profile denial";
+    const contestId =
+      typeof obj.contestId === "string" && obj.contestId.trim()
+        ? obj.contestId.trim()
+        : undefined;
+    const tool =
+      typeof obj.tool === "string" && obj.tool.trim() ? obj.tool.trim() : undefined;
+    out.push({ contestId, tool, reason: reason.slice(0, 500) });
+  }
+  return out;
+}
+
+/**
+ * Extract peer/master `{"resolveContest":true,"approve":true|false,...}` payloads.
+ */
+export function extractResolveContestRequests(text: string): ResolveContestEmit[] {
+  const out: ResolveContestEmit[] = [];
+  for (const obj of extractJsonObjectsNearKey(text, "resolveContest")) {
+    if (obj.resolveContest !== true && obj.resolveContest !== "true") continue;
+    const approveRaw = obj.approve ?? obj.allow ?? obj.granted;
+    const approve =
+      approveRaw === true
+      || approveRaw === "true"
+      || approveRaw === "approve"
+      || approveRaw === "yes";
+    const deny =
+      approveRaw === false
+      || approveRaw === "false"
+      || approveRaw === "deny"
+      || approveRaw === "no";
+    if (!approve && !deny) continue;
+    const reasonRaw = obj.reason ?? obj.why ?? obj.rationale;
+    const reason =
+      typeof reasonRaw === "string" && reasonRaw.trim()
+        ? reasonRaw.trim()
+        : approve
+          ? "peer/master approved contest"
+          : "peer/master denied contest";
+    const contestId =
+      typeof obj.contestId === "string" && obj.contestId.trim()
+        ? obj.contestId.trim()
+        : undefined;
+    const tool =
+      typeof obj.tool === "string" && obj.tool.trim() ? obj.tool.trim() : undefined;
+    out.push({ contestId, tool, approve, reason: reason.slice(0, 500) });
+  }
+  return out;
+}
+
+/**
+ * Trusted hierarchy resolvers (planner / auditor / master labels).
+ * Peers (other agents) may also resolve — self-approve is always blocked.
+ */
+export function isTrustedContestResolver(input: {
+  agentId: string;
+  profile?: string;
+}): boolean {
+  const id = (input.agentId || "").toLowerCase();
+  const profile = (input.profile || "").toLowerCase();
+  if (
+    profile.includes("planner")
+    || profile.includes("auditor")
+    || profile === "swarm-auto"
+    || profile === "swarm"
+  ) {
+    return true;
+  }
+  if (
+    /\b(planner|auditor|master|lead|judge|synthesizer)\b/.test(id)
+    || id.includes("agent-0")
+    || /^(planner|auditor)\b/.test(id)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
  * Scan assistant text for contestTool JSON and attach reasons to open contests.
- * Does not auto-approve — peer/operator resolve still required.
+ * Under autoApprove + safe tools, auto one-shot-approve after contest.
  */
 export function registerContestToolsFromText(input: {
   runId?: string;
   agentId?: string;
   text?: string;
   sink?: DeliberationSink;
+  profile?: string;
 }): ToolContest[] {
   const { runId, agentId, text } = input;
   if (!runId || !agentId || !text) return [];
   const applied: ToolContest[] = [];
+  const autoApprove = !!getToolContestRunSink(runId)?.autoApprove;
   for (const req of extractContestToolRequests(text)) {
     const c = contestToolDenial({
       runId,
@@ -221,12 +322,102 @@ export function registerContestToolsFromText(input: {
       tool: req.tool ?? "",
       reason: req.reason,
     });
-    if (c) {
-      applied.push(c);
-      publishToolContestEvent({ contest: c, phase: "contested", sink: input.sink });
+    if (!c) continue;
+    applied.push(c);
+    publishToolContestEvent({ contest: c, phase: "contested", sink: input.sink });
+    // Trusted local runs: auto one-shot for collaboration tools (not bash/run).
+    if (autoApprove && AUTO_APPROVE_CONTEST_TOOLS.has(c.tool)) {
+      const resolved = resolveToolContest({
+        runId,
+        contestId: c.id,
+        approve: true,
+        resolver: "autoApprove",
+      });
+      if (resolved) {
+        publishToolContestEvent({
+          contest: resolved,
+          phase: "approved",
+          sink: input.sink,
+        });
+      }
     }
   }
   return applied;
+}
+
+/**
+ * Scan assistant text for peer/master resolveContest JSON.
+ * Blocks self-approve; peers and trusted hierarchy may approve|deny.
+ */
+export function registerResolveContestFromText(input: {
+  runId?: string;
+  agentId?: string;
+  text?: string;
+  sink?: DeliberationSink;
+  profile?: string;
+}): ToolContest[] {
+  const { runId, agentId, text } = input;
+  if (!runId || !agentId || !text) return [];
+  const resolved: ToolContest[] = [];
+  for (const req of extractResolveContestRequests(text)) {
+    const m = byRun.get(runId);
+    if (!m) continue;
+    let c: ToolContest | undefined;
+    if (req.contestId) c = m.get(req.contestId);
+    if (!c || c.status !== "open") {
+      for (const x of [...m.values()].reverse()) {
+        if (x.status !== "open") continue;
+        if (req.tool && x.tool !== req.tool) continue;
+        c = x;
+        break;
+      }
+    }
+    if (!c || c.status !== "open") continue;
+    // Self-approve forbidden — request peer/master or operator.
+    if (c.agentId === agentId) continue;
+    // Peers always ok; prefer labeling trusted hierarchy in resolver id.
+    const trusted = isTrustedContestResolver({
+      agentId,
+      profile: input.profile,
+    });
+    const resolverLabel = trusted ? `${agentId}:master` : `${agentId}:peer`;
+    // Attach peer reason onto contest before resolve for transcript.
+    if (req.reason) c.contestReason = (c.contestReason ?? c.denyReason).slice(0, 300);
+    const out = resolveToolContest({
+      runId,
+      contestId: c.id,
+      approve: req.approve,
+      resolver: resolverLabel,
+    });
+    if (!out) continue;
+    // Prefer peer reason in transcript when approving.
+    if (req.reason) {
+      out.contestReason = req.reason.slice(0, 500);
+    }
+    publishToolContestEvent({
+      contest: out,
+      phase: req.approve ? "approved" : "denied",
+      sink: input.sink,
+    });
+    resolved.push(out);
+  }
+  return resolved;
+}
+
+/**
+ * Scan assistant text for both contestTool and resolveContest envelopes.
+ */
+export function scanAgentContestMessages(input: {
+  runId?: string;
+  agentId?: string;
+  text?: string;
+  sink?: DeliberationSink;
+  profile?: string;
+}): { contested: ToolContest[]; resolved: ToolContest[] } {
+  return {
+    contested: registerContestToolsFromText(input),
+    resolved: registerResolveContestFromText(input),
+  };
 }
 
 export type ToolContestPhase = "opened" | "contested" | "approved" | "denied";
@@ -352,8 +543,11 @@ export function formatContestableDenial(input: {
   return (
     `tool "${input.tool}" denied by profile "${input.profile}" ` +
     `(contestable). Contest id=${input.contestId}. ` +
-    `To contest: ask a peer/master to approve, or emit JSON ` +
+    `To contest: emit JSON ` +
     `{"contestTool":true,"contestId":"${input.contestId}","reason":"why this tool is needed"}. ` +
+    `Peer/master approve (not self): ` +
+    `{"resolveContest":true,"contestId":"${input.contestId}","approve":true,"reason":"why allow once"}. ` +
+    `Operator can also approve in Run resilience → Contests. ` +
     `Prefer write/edit/git_status on builder profiles, or use working-tree collaboration. ` +
     `Path sandbox denials are not contestable.`
   );

@@ -86,8 +86,8 @@ export async function chatWithOllamaToolLoop(
     });
     if (opts.runId && opts.agentId && single.text) {
       try {
-        const { registerContestToolsFromText } = await import("../tools/toolContest.js");
-        registerContestToolsFromText({
+        const { scanAgentContestMessages } = await import("../tools/toolContest.js");
+        scanAgentContestMessages({
           runId: opts.runId,
           agentId: opts.agentId,
           text: single.text,
@@ -136,8 +136,8 @@ export async function chatWithOllamaToolLoop(
     // Agent free-text contest protocol (profile denials).
     if (opts.runId && opts.agentId && (turnResult.text || turnResult.contentOnly)) {
       try {
-        const { registerContestToolsFromText } = await import("../tools/toolContest.js");
-        registerContestToolsFromText({
+        const { scanAgentContestMessages } = await import("../tools/toolContest.js");
+        scanAgentContestMessages({
           runId: opts.runId,
           agentId: opts.agentId,
           text: `${turnResult.text ?? ""}\n${turnResult.contentOnly ?? ""}`,

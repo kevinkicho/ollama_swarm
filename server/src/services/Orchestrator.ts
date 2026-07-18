@@ -874,6 +874,7 @@ export class Orchestrator {
         const { setToolContestRunSink } = await import("../tools/toolContestSink.js");
         setToolContestRunSink(runId, {
           clonePath: cfg.localPath,
+          autoApprove: !!cfg.autoApprove,
           appendSystem: (text, summary) => {
             try {
               activeRun.runner.appendSystemMessage?.(text, summary);
