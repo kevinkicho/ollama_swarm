@@ -11,12 +11,41 @@ function formatMs(ms: number): string {
   return `${Math.ceil(ms / 60_000)}m`;
 }
 
+/** Highest-count fail bucket for chip label (e.g. apply_miss). */
+function topCycleFailBucket(
+  failByBucket: Record<string, number> | undefined,
+): string | null {
+  if (!failByBucket) return null;
+  let best: string | null = null;
+  let n = 0;
+  for (const [k, v] of Object.entries(failByBucket)) {
+    if (typeof v === "number" && v > n) {
+      n = v;
+      best = k;
+    }
+  }
+  return best && n > 0 ? best : null;
+}
+
+function formatFailBuckets(
+  failByBucket: Record<string, number> | undefined,
+): string {
+  if (!failByBucket) return "";
+  const parts = Object.entries(failByBucket)
+    .filter(([, v]) => typeof v === "number" && v > 0)
+    .sort((a, b) => b[1]! - a[1]!)
+    .slice(0, 5)
+    .map(([k, v]) => `${k}:${v}`);
+  return parts.length ? `buckets ${parts.join(",")}` : "";
+}
+
 export function RunHealthChip() {
   const runId = useSwarm((s) => s.runId);
   const phase = useSwarm((s) => s.phase);
   const cfg = useSwarm((s) => s.runConfig);
   const caps = useSwarm((s) => s.capsRemaining);
   const progressHb = useSwarm((s) => s.progressHeartbeat);
+  const cycleIntegrity = useSwarm((s) => s.cycleIntegrity);
   const early = useSwarm((s) => s.earlyStopDetail);
   const drainEligible = useSwarm((s) => s.drainEligible);
   const drainReason = useSwarm((s) => s.drainIneligibleReason);
@@ -63,6 +92,20 @@ export function RunHealthChip() {
       parts.push(`progress ${formatMs(quiet)}`);
     }
   }
+  if (cycleIntegrity && live) {
+    const empty = cycleIntegrity.emptyExecutionCycles ?? 0;
+    const streak = cycleIntegrity.lastEmptyStreak ?? 0;
+    const fails = cycleIntegrity.todosFailed ?? 0;
+    const topBucket = topCycleFailBucket(cycleIntegrity.failByBucket);
+    if (streak >= 2) {
+      parts.push(`empty×${streak}`);
+    } else if (empty > 0 && empty >= 2) {
+      parts.push(`empty ${empty}`);
+    }
+    if (fails > 0) {
+      parts.push(topBucket ? `fails ${fails} (${topBucket})` : `fails ${fails}`);
+    }
+  }
   if (early) {
     // Surface a short reason in the chip itself (not only the tooltip).
     const short =
@@ -87,6 +130,21 @@ export function RunHealthChip() {
     progressHb
       ? `Orchestration progress quiet ≈ ${formatMs(progressHb.progressQuietMs)} (since last durable apply/commit)`
       : null,
+    cycleIntegrity
+      ? [
+          `Cycle integrity: empty=${cycleIntegrity.emptyExecutionCycles}`,
+          `lastEmptyStreak=${cycleIntegrity.lastEmptyStreak}`,
+          `todo fails=${cycleIntegrity.todosFailed}` +
+            (cycleIntegrity.todosFailedUnique != null
+              ? ` (${cycleIntegrity.todosFailedUnique} unique)`
+              : ""),
+          `ok=${cycleIntegrity.todosSucceeded}`,
+          `cycles=${cycleIntegrity.cyclesCompleted}`,
+          formatFailBuckets(cycleIntegrity.failByBucket),
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : null,
     drainEligible === false ? `Drain: ${drainReason ?? "not eligible"}` : null,
     drainEligible === true ? "Drain: soft-stop available" : null,
     early ? `Early stop / guard: ${early}` : null,
@@ -95,9 +153,16 @@ export function RunHealthChip() {
     .filter(Boolean)
     .join("\n");
 
+  const cycleStressed =
+    !!cycleIntegrity
+    && live
+    && ((cycleIntegrity.lastEmptyStreak ?? 0) >= 2
+      || (cycleIntegrity.todosFailed ?? 0) >= 3);
   const tone = early
     ? "border-amber-700/50 bg-amber-950/40 text-amber-200"
-    : "border-ink-600 bg-ink-800/80 text-ink-300";
+    : cycleStressed
+      ? "border-amber-800/40 bg-amber-950/25 text-amber-100"
+      : "border-ink-600 bg-ink-800/80 text-ink-300";
 
   async function reconfig(patch: Record<string, number>) {
     if (!runId || busy || !live) return;

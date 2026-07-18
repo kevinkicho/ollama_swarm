@@ -907,6 +907,12 @@ export interface SwarmStatusSnapshot {
     wallClockMsRemaining?: number;
     tokenBudgetRemaining?: number;
   };
+  progressHeartbeat?: {
+    lastProductiveAt: number;
+    progressQuietMs: number;
+  };
+  /** Live cycle fail taxonomy (mirrors summary.cycleIntegrity). */
+  cycleIntegrity?: RunSummary["cycleIntegrity"];
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   thinkGuardReferee?: ResolvedThinkGuardRefereeBudget;
   pipelinePhase?: {

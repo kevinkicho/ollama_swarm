@@ -120,6 +120,8 @@ export interface SwarmStatus {
     lastProductiveAt: number;
     progressQuietMs: number;
   };
+  /** RR-D: live cycle fail taxonomy (empty cycles, apply/json/tool buckets). */
+  cycleIntegrity?: import("@ollama-swarm/shared/cycleIntegrityReport").CycleIntegrityReport;
   /** Blackboard planning pipeline step (seeding / contract / todos). */
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   /** Live think-guard referee budget (resolved defaults + usage). */

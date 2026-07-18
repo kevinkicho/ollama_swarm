@@ -201,6 +201,17 @@ export interface SwarmStore {
     lastProductiveAt: number;
     progressQuietMs: number;
   };
+  /** RR-D: live cycle fail taxonomy from /status. */
+  cycleIntegrity?: {
+    cyclesCompleted: number;
+    emptyExecutionCycles: number;
+    failByBucket: Record<string, number>;
+    todosFailed: number;
+    todosFailedUnique?: number;
+    todosSucceeded: number;
+    lastEmptyStreak: number;
+    maxEmptyStreak: number;
+  };
   earlyStopDetail?: string;
   /** Active composite pipeline sub-phase (from /status). */
   pipelinePhase?: {
@@ -230,6 +241,7 @@ export interface SwarmStore {
     earlyStopDetail?: string;
     pipelinePhase?: SwarmStore["pipelinePhase"] | null;
     progressHeartbeat?: SwarmStore["progressHeartbeat"] | null;
+    cycleIntegrity?: SwarmStore["cycleIntegrity"] | null;
   }) => void;
   upsertAgent: (a: AgentState) => void;
   /** Replace entire agent roster (pipeline handoff / killAll). */

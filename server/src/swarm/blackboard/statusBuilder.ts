@@ -9,6 +9,7 @@ import { resolveDisplayPhase } from "@ollama-swarm/shared/mapRunPhase";
 import type { RunPhase } from "@ollama-swarm/shared/runStateMachine";
 import { config } from "../../config.js";
 import { snapshotProgressHeartbeat } from "../progressHeartbeat.js";
+import { snapshotCycleIntegrityForRun } from "../cycleIntegrityStats.js";
 import { listActiveHelpers } from "../brainOs/helperActivity.js";
 
 export interface StatusContext {
@@ -142,6 +143,10 @@ export function status(ctx: StatusContext): SwarmStatus {
     ...(() => {
       const hb = snapshotProgressHeartbeat(ctx.active?.runId);
       return hb ? { progressHeartbeat: hb } : {};
+    })(),
+    ...(() => {
+      const cycleIntegrity = snapshotCycleIntegrityForRun(ctx.active?.runId);
+      return cycleIntegrity ? { cycleIntegrity } : {};
     })(),
     round: ctx.round,
     repoUrl: ctx.active?.repoUrl,
