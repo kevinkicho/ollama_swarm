@@ -307,6 +307,15 @@ describe("applyHunks — multi-file dispatch", () => {
     assert.match(r.ok ? "" : r.error, /"unknown.md".*not provided/);
   });
 
+  it("matches leading-slash paths to seed keys (4de10651)", () => {
+    const hunks: Hunk[] = [
+      { op: "replace", file: "/24_loop.html", search: "old", replace: "new" },
+    ];
+    const r = applyHunks({ "24_loop.html": "old content" }, hunks);
+    assert.equal(r.ok, true);
+    if (r.ok) assert.equal(r.newTextsByFile["24_loop.html"], "new content");
+  });
+
   it("propagates per-file errors with a file prefix for debuggability", () => {
     const hunks: Hunk[] = [
       { op: "replace", file: "a.md", search: "MISSING", replace: "X" },

@@ -46,6 +46,37 @@ export {
 export type { ToolName, ProfileName, Permission };
 export type { ToolCall, ToolResult, ToolResultHook };
 
+/**
+ * Map invented tool names (Claude/Cursor/etc.) onto native ToolDispatcher tools.
+ * Live: 36632e9e wrap-up burned 8 contests on `str_replace_editor`.
+ */
+export function canonicalizeToolName(name: string): string {
+  const n = name
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+  const aliases: Record<string, ToolName> = {
+    str_replace_editor: "edit",
+    str_replace: "edit",
+    search_replace: "edit",
+    apply_patch: "edit",
+    apply_diff: "edit",
+    multi_edit: "edit",
+    replace_in_file: "edit",
+    write_file: "write",
+    create_file: "write",
+    shell: "run",
+    powershell: "run",
+    cmd: "run",
+    terminal: "run",
+    execute: "run",
+    bash_tool: "bash",
+  };
+  // Preserve original casing for unknown names (MCP tools may be case-sensitive).
+  return aliases[n] ?? name;
+}
+
 export class ToolDispatcher {
   private mcpClients: Map<string, { client: Client; transport: StdioClientTransport; proc?: ChildProcess }> = new Map();
   private mcpToolToClient: Map<string, string> = new Map(); // toolName -> clientKey
@@ -189,9 +220,14 @@ export class ToolDispatcher {
   async dispatch(call: ToolCall): Promise<ToolResult> {
     // Ensure MCP servers finished connecting before first tool dispatch.
     await this.mcpReady;
+    // Live 36632e9e / 4de10651: models invent Claude/Cursor tool names.
+    // Map common aliases onto real tools before profile + switch.
+    const tool = canonicalizeToolName(call.tool);
+    const callNorm: ToolCall =
+      tool === call.tool ? call : { ...call, tool: tool as ToolName };
     let result: ToolResult;
     const profilePerms = PROFILES[this.profile] as Record<ToolName, Permission>;
-    const perm = profilePerms[call.tool];
+    const perm = profilePerms[callNorm.tool as ToolName];
     if (perm !== "allow") {
       // One-shot allow after peer/master approved a contest.
       const {
@@ -200,28 +236,31 @@ export class ToolDispatcher {
         formatContestableDenial,
         publishToolContestEvent,
       } = await import("./toolContest.js");
-      if (consumeToolAllowOnce(this.runId, this.agentId, call.tool)) {
+      if (consumeToolAllowOnce(this.runId, this.agentId, callNorm.tool)) {
         // fall through to execute as if allowed
       } else {
       // Check if it's an MCP tool (namespaced or direct)
-      const mcpKey = this.mcpToolToClient.get(call.tool) || this.mcpToolToClient.get(`${call.tool}`);
+      const mcpKey = this.mcpToolToClient.get(callNorm.tool) || this.mcpToolToClient.get(`${callNorm.tool}`);
       if (mcpKey && this.mcpClients.has(mcpKey)) {
-        result = await this.callMcpTool(mcpKey, call.tool, call.args);
-        this.notifyToolResult(call.tool, result);
+        result = await this.callMcpTool(mcpKey, callNorm.tool, callNorm.args);
+        this.notifyToolResult(callNorm.tool, result);
         return result;
       }
       // Contestable denial (profile leash) — not path sandbox.
-      let denyError = `tool "${call.tool}" denied by profile "${this.profile}"`;
+      let denyError = `tool "${callNorm.tool}" denied by profile "${this.profile}"`;
+      if (tool !== call.tool) {
+        denyError += ` (alias of "${call.tool}")`;
+      }
       if (this.runId && this.agentId) {
         const contest = openToolContest({
           runId: this.runId,
           agentId: this.agentId,
-          tool: call.tool,
+          tool: callNorm.tool,
           profile: this.profile,
           denyReason: denyError,
         });
         denyError = formatContestableDenial({
-          tool: call.tool,
+          tool: callNorm.tool,
           profile: this.profile,
           contestId: contest.id,
         });
@@ -239,13 +278,13 @@ export class ToolDispatcher {
         ok: false,
         error: denyError,
       };
-      this.notifyToolResult(call.tool, denied);
+      this.notifyToolResult(callNorm.tool, denied);
       return denied;
       }
     }
-    switch (call.tool) {
+    switch (callNorm.tool) {
       case "read":
-        result = await readTool(this.clonePath, call.args, unrestrictedReadTools(this.profile));
+        result = await readTool(this.clonePath, callNorm.args, unrestrictedReadTools(this.profile));
         break;
       case "list":
         result = await listTool(this.clonePath, call.args);
@@ -327,15 +366,21 @@ export class ToolDispatcher {
         break;
       }
       default: {
-        const mcpKey2 = this.mcpToolToClient.get(call.tool);
+        const mcpKey2 = this.mcpToolToClient.get(callNorm.tool);
         if (mcpKey2 && this.mcpClients.has(mcpKey2)) {
-          result = await this.callMcpTool(mcpKey2, call.tool, call.args);
+          result = await this.callMcpTool(mcpKey2, callNorm.tool, callNorm.args);
         } else {
-          result = { ok: false, error: `unknown tool ${call.tool}` };
+          result = {
+            ok: false,
+            error:
+              tool !== call.tool
+                ? `unknown tool ${call.tool} (canonicalized to ${callNorm.tool})`
+                : `unknown tool ${callNorm.tool}`,
+          };
         }
       }
     }
-    this.notifyToolResult(call.tool, result);
+    this.notifyToolResult(callNorm.tool, result);
     return result;
   }
 

@@ -410,17 +410,28 @@ export function applyHunks(
     return { ok: true, newTextsByFile: {} };
   }
 
+  // Normalize paths so leading-slash / bare variants match seed keys
+  // (live 4de10651: "/24_loop_quantum_gravity.html" vs "24_…").
+  const normKey = (p: string) =>
+    p.replace(/\\/g, "/").replace(/^\/+/, "").replace(/^\.\//, "").trim();
+  const textsByNorm = new Map<string, string | null>();
+  for (const [k, v] of Object.entries(currentTextsByFile)) {
+    textsByNorm.set(normKey(k), v);
+  }
+
   // Preserve first-seen order so deterministic error messages reference the
   // same hunk ordering the worker produced.
   const grouped = new Map<string, Hunk[]>();
   for (const h of hunks) {
-    if (!grouped.has(h.file)) grouped.set(h.file, []);
-    grouped.get(h.file)!.push(h);
+    const file = normKey(h.file);
+    const normalizedHunk = file === h.file ? h : ({ ...h, file } as Hunk);
+    if (!grouped.has(file)) grouped.set(file, []);
+    grouped.get(file)!.push(normalizedHunk);
   }
 
   const out: Record<string, string> = {};
   for (const [file, fileHunks] of grouped) {
-    if (!(file in currentTextsByFile)) {
+    if (!textsByNorm.has(file)) {
       const message = `hunk references file "${file}" which was not provided in currentTextsByFile`;
       return {
         ok: false,
@@ -437,7 +448,7 @@ export function applyHunks(
         }),
       };
     }
-    const r = applyFileHunks(currentTextsByFile[file], fileHunks);
+    const r = applyFileHunks(textsByNorm.get(file) ?? null, fileHunks);
     if (!r.ok) {
       return {
         ok: false,

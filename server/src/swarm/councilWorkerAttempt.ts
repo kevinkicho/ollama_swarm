@@ -252,8 +252,13 @@ export async function tryWorkerPrompt(
         } catch {
           /* ignore */
         }
+        const sha = wtResult.commitSha ?? "";
+        const shaLabel =
+          sha === "already-clean"
+            ? "already-clean (idempotent)"
+            : sha.slice(0, 7) || "ok";
         ctx.appendSystem(
-          `[execution] ${agent.id} ✓ git-native working-tree commit — ${wtResult.commitSha?.slice(0, 7)} ` +
+          `[execution] ${agent.id} ✓ git-native working-tree commit — ${shaLabel} ` +
             `(${wtResult.filesWritten.length} file(s)).`,
         );
         return { outcome: "completed" };

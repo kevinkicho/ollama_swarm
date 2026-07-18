@@ -272,6 +272,8 @@ export function validateHunkPayload(
 export function normalizeRepoPath(p: string): string {
   return p
     .replace(/\\/g, "/")
+    // Live 4de10651: models emit absolute-looking "/24_module.html" roots.
+    .replace(/^\/+/, "")
     .replace(/^\.\//, "")
     .replace(/\/+/g, "/")
     .replace(/\/$/, "")

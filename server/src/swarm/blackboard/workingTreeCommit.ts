@@ -163,6 +163,22 @@ async function commitWorkingTreeUnlocked(
         linesRemoved: 0,
       };
     }
+    // Live 4de10651: 33× "nothing to commit" after {workingTree:true}.
+    // Common causes: peer already committed the same files, or model claimed
+    // workingTree without write/edit. Files exist on disk → treat as idempotent
+    // success (already-settled) rather than burning more repair retries.
+    const nothingToCommit = /no new SHA|nothing to commit/i.test(commitRes.reason);
+    if (nothingToCommit && filesWritten.length > 0) {
+      noteApplySuccess(input.runId);
+      noteProductiveProgress(input.runId);
+      return {
+        ok: true,
+        commitSha: "already-clean",
+        filesWritten,
+        linesAdded: 0,
+        linesRemoved: 0,
+      };
+    }
     return {
       ok: false,
       reason:

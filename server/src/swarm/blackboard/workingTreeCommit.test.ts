@@ -65,6 +65,37 @@ describe("workingTreeCommit", () => {
     assert.equal(committed, true);
   });
 
+  it("commitWorkingTreeFiles treats nothing-to-commit as idempotent success when files exist", async () => {
+    const store = new Map<string, string>([["a.ts", "export const a = 1;\n"]]);
+    const fs: FilesystemAdapter = {
+      async read(p) {
+        return store.has(p) ? store.get(p)! : null;
+      },
+      async write() {},
+    };
+    const git: GitAdapter = {
+      async commitAll() {
+        return {
+          ok: false,
+          reason: 'git commit produced no new SHA — likely "nothing to commit"',
+        };
+      },
+    };
+    const r = await commitWorkingTreeFiles({
+      todoId: "t1",
+      workerId: "w1",
+      files: ["a.ts"],
+      message: "noop",
+      fs,
+      git,
+    });
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.commitSha, "already-clean");
+      assert.deepEqual(r.filesWritten, ["a.ts"]);
+    }
+  });
+
   it("commitWorkingTreeFiles fails when no files exist", async () => {
     const fs: FilesystemAdapter = {
       async read() {
