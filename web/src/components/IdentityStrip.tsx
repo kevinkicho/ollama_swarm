@@ -393,7 +393,7 @@ function PresetBadge({ preset }: { preset: string }) {
   })();
   const presetHelp: Record<string, string> = {
     blackboard:
-      "Blackboard — planner posts todos to a shared board; workers apply hunks and commit. Full write pipeline.",
+      "Blackboard — planner posts todos; workers edit the git working tree (or small patches) and auditor commits. Full write pipeline.",
     council:
       "Council — agents draft and debate, then execute todos in cycles with contract-driven exit criteria.",
     "debate-judge":

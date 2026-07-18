@@ -28,6 +28,26 @@ export function summarizeAgentResponse(raw: string): TranscriptEntrySummary | un
     return { kind: "worker_skip", reason: obj.skip.trim() };
   }
 
+  // Git-native: { workingTree: true, files, message } (preferred over hunks).
+  if (
+    obj.workingTree === true
+    || obj.mode === "workingTree"
+    || obj.mode === "git"
+    || obj.git === true
+  ) {
+    const filesRaw = obj.files ?? obj.filesTouched;
+    const files = Array.isArray(filesRaw)
+      ? filesRaw.map(String).filter(Boolean).slice(0, 24)
+      : [];
+    const message = String(obj.message ?? obj.summary ?? "working-tree changes").slice(0, 200);
+    return {
+      kind: "worker_working_tree",
+      fileCount: files.length,
+      files,
+      message,
+    };
+  }
+
   // Worker hunks: { hunks: [...] } — count by op, identify primary file.
   // Includes replace_between / write / delete (2010479c) so server tags
   // still attach when only those ops are present.

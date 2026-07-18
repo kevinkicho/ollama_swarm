@@ -165,16 +165,48 @@ export function salvageWorkerHunksFromBrokenJson(raw: string): ParsedHunk[] | nu
   return out.length > 0 ? out : null;
 }
 
+/** Git-native worker finish envelope (display). */
+export interface ParsedWorkingTree {
+  files: string[];
+  message: string;
+}
+
+export type WorkerEnvelopeDisplay =
+  | { type: "hunks"; hunks: ParsedHunk[] }
+  | { type: "workingTree"; workingTree: ParsedWorkingTree };
+
+function tryParseWorkingTree(parsed: Record<string, unknown>): ParsedWorkingTree | null {
+  const gitObj =
+    parsed.git && typeof parsed.git === "object" && !Array.isArray(parsed.git)
+      ? (parsed.git as Record<string, unknown>)
+      : null;
+  const isWt =
+    parsed.workingTree === true
+    || parsed.git === true
+    || gitObj != null
+    || parsed.mode === "git"
+    || parsed.mode === "workingTree";
+  if (!isWt) return null;
+  const filesRaw = gitObj?.files ?? parsed.files ?? parsed.filesTouched;
+  const files = Array.isArray(filesRaw)
+    ? filesRaw.map(String).filter(Boolean)
+    : [];
+  const message = String(
+    gitObj?.message ?? parsed.message ?? parsed.summary ?? "working-tree changes",
+  ).slice(0, 500);
+  return { files, message };
+}
+
 /**
- * Client-side hunk extraction for transcript bubbles when server summary
- * tagging is missing. Supports replace_between / write (2010479c UI raw JSON).
- * Falls back to display salvage when JSON is invalid (raw newlines, bare
- * keys, unescaped quotes in code snippets).
+ * Prefer workingTree envelope, then hunks (display-only).
  */
-export function tryParseWorkerHunks(rawJson: string): ParsedHunk[] | null {
+export function tryParseWorkerEnvelope(rawJson: string): WorkerEnvelopeDisplay | null {
   const parsed = parseLooseJson(rawJson);
-  if (typeof parsed === "object" && parsed !== null) {
-    const hunks = (parsed as { hunks?: unknown }).hunks;
+  if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+    const o = parsed as Record<string, unknown>;
+    const wt = tryParseWorkingTree(o);
+    if (wt) return { type: "workingTree", workingTree: wt };
+    const hunks = o.hunks;
     if (Array.isArray(hunks)) {
       const out: ParsedHunk[] = [];
       for (const h of hunks) {
@@ -182,8 +214,23 @@ export function tryParseWorkerHunks(rawJson: string): ParsedHunk[] | null {
         const one = hunkFromObject(h as Record<string, unknown>);
         if (one) out.push(one);
       }
-      if (out.length > 0) return out;
+      if (out.length > 0) return { type: "hunks", hunks: out };
     }
   }
-  return salvageWorkerHunksFromBrokenJson(rawJson);
+  const salvaged = salvageWorkerHunksFromBrokenJson(rawJson);
+  if (salvaged) return { type: "hunks", hunks: salvaged };
+  return null;
+}
+
+/**
+ * Client-side hunk extraction for transcript bubbles when server summary
+ * tagging is missing. Supports replace_between / write (2010479c UI raw JSON).
+ * Falls back to display salvage when JSON is invalid (raw newlines, bare
+ * keys, unescaped quotes in code snippets).
+ * Prefer tryParseWorkerEnvelope when workingTree envelopes may appear.
+ */
+export function tryParseWorkerHunks(rawJson: string): ParsedHunk[] | null {
+  const env = tryParseWorkerEnvelope(rawJson);
+  if (env?.type === "hunks") return env.hunks;
+  return null;
 }

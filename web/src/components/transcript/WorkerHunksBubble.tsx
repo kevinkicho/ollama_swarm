@@ -13,6 +13,7 @@ import {
 // Soft-parse + replace_between/write live in shared tryParseWorkerHunks
 // (2010479c: raw JSON bubbles when client parse only knew replace/create/append).
 import {
+  tryParseWorkerEnvelope,
   tryParseWorkerHunks as parseSharedWorkerHunks,
   type ParsedHunk as SharedParsedHunk,
 } from "@ollama-swarm/shared/workerHunks";
@@ -44,15 +45,11 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
   const [showThinking, setShowThinking] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const [showToolTrace, setShowToolTrace] = useState(false);
-  // 2026-04-27 (UI Phase 3 follow-up per Kevin): collapsed by default,
-  // matching the "Posted N todos" / Contract bubble summary-then-expand
-  // pattern. Pre-fix, hunks rendered inline (capped via maxHeight) and
-  // every blackboard run visually drowned in diff blocks. Now: just
-  // the summary line + +/- counts; "Show diff" toggles the inline render.
+  // Collapsed by default so runs aren't drowned in patch/diff UI.
   const [expanded, setExpanded] = useState(false);
-  const hunks = useMemo(() => tryParseWorkerHunks(rawJson), [rawJson]);
+  const envelope = useMemo(() => tryParseWorkerEnvelope(rawJson), [rawJson]);
   // Fallback: if we can't parse, defer to AgentJsonBubble.
-  if (!hunks) {
+  if (!envelope) {
     return (
       <AgentJsonBubble
         className={className}
@@ -66,6 +63,65 @@ export const WorkerHunksBubble = memo(function WorkerHunksBubble({
       />
     );
   }
+
+  // Git-native: working tree already updated on disk — no search/replace cards.
+  if (envelope.type === "workingTree") {
+    const wt = envelope.workingTree;
+    return (
+      <div className={className} style={style}>
+        <div className="flex items-start justify-between gap-2 mb-1">
+          <div className="flex-1">{header}</div>
+          <BubbleToggleRow
+            thinking={thinking}
+            prompt={prompt}
+            toolTrace={toolTrace}
+            showThinking={showThinking}
+            showPrompt={showPrompt}
+            showToolTrace={showToolTrace}
+            onToggleThinking={() => setShowThinking((v) => !v)}
+            onTogglePrompt={() => setShowPrompt((v) => !v)}
+            onToggleToolTrace={() => setShowToolTrace((v) => !v)}
+          >
+            <button
+              onClick={() => setShowRaw((v) => !v)}
+              className="text-[10px] uppercase tracking-wide text-ink-400 hover:text-ink-200"
+            >
+              {showRaw ? "Hide JSON" : "View JSON"}
+            </button>
+          </BubbleToggleRow>
+        </div>
+        {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
+        {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
+        {showToolTrace && toolTrace?.length ? <ToolTraceContentPanel trace={toolTrace} /> : null}
+        <div className="flex flex-wrap items-center gap-2 text-[12px]">
+          <span className="inline-block px-1.5 py-0.5 text-[10px] uppercase tracking-wider rounded font-semibold bg-emerald-900/40 text-emerald-300">
+            git working tree
+          </span>
+          <span className="text-ink-200">{summary}</span>
+        </div>
+        {wt.files.length > 0 ? (
+          <ul className="mt-1.5 text-[11px] font-mono text-ink-400 space-y-0.5">
+            {wt.files.slice(0, 12).map((f) => (
+              <li key={f}>· {f}</li>
+            ))}
+            {wt.files.length > 12 ? (
+              <li className="text-ink-500">… +{wt.files.length - 12} more</li>
+            ) : null}
+          </ul>
+        ) : null}
+        {showRaw ? (
+          <pre
+            className="mt-2 text-[11px] font-mono text-ink-300 whitespace-pre-wrap break-all rounded border border-ink-700 bg-ink-950 p-2 overflow-y-auto"
+            style={{ maxHeight: MAX_BUBBLE_HEIGHT_PX }}
+          >
+            {rawJson}
+          </pre>
+        ) : null}
+      </div>
+    );
+  }
+
+  const hunks = envelope.hunks;
   // Per-bubble +/- totals — sum across hunks. Right-aligned next to
   // the summary line so the bubble's at-a-glance change footprint
   // matches the per-hunk badges below.

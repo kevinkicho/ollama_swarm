@@ -300,17 +300,18 @@ export function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string
       </div>
     );
   }
-  // If the entry carries a summary kind that wasn't handled above, flag
-  // it so a new server-side kind surfaces immediately in dev — this
-  // prevents silent rendering failures where a novel envelope type falls
-  // through to a generic bubble that hides the structured data.
+  // Novel system summary kinds: show a compact chip in DEV only (not a red wall).
   if (entry.summary?.kind) {
-    console.warn(`[MessageBubble] Unhandled system summary kind: "${entry.summary.kind}" — add a SystemBubble branch`);
+    if (import.meta.env?.DEV) {
+      console.warn(
+        `[SystemBubble] Unhandled system summary kind: "${entry.summary.kind}" — add a SystemBubble branch`,
+      );
+    }
     return (
-      <div className="border-l-2 border-rose-500/40 pl-3 py-1 text-xs">
-        <div className="text-rose-400/70 mb-0.5">
-          <span className="inline-block px-1 py-0 text-[9px] uppercase tracking-wider rounded bg-rose-900/40 mr-1.5">
-            unknown:{entry.summary.kind}
+      <div className="border-l-2 border-ink-600 pl-3 py-1 text-xs">
+        <div className="text-ink-500 mb-0.5">
+          <span className="inline-block px-1 py-0 text-[9px] uppercase tracking-wider rounded bg-ink-800 mr-1.5">
+            {entry.summary.kind}
           </span>
           {ts}
         </div>

@@ -114,6 +114,22 @@ describe("summarizeAgentResponse — extraction edge cases", () => {
     assert.equal(summarizeAgentResponse("```json\nbroken\n```"), undefined);
   });
 
+  it("tags workingTree envelopes as worker_working_tree", () => {
+    const s = summarizeAgentResponse(
+      JSON.stringify({
+        workingTree: true,
+        message: "fix clamp",
+        files: ["src/a.ts"],
+      }),
+    );
+    assert.equal(s?.kind, "worker_working_tree");
+    if (s?.kind === "worker_working_tree") {
+      assert.equal(s.fileCount, 1);
+      assert.equal(s.files[0], "src/a.ts");
+      assert.match(s.message, /fix clamp/);
+    }
+  });
+
   it("tags replace_between-only payloads as worker_hunks", () => {
     const raw = JSON.stringify({
       hunks: [

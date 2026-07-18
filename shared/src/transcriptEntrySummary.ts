@@ -24,7 +24,7 @@ export type TranscriptEntrySummary =
       kind: "worker_hunks";
       hunkCount: number;
       // Per-op breakdown so the UI can show "2 replace, 1 append".
-      ops: { replace: number; create: number; append: number };
+      ops: { replace: number; create: number; append: number; write?: number; delete?: number };
       // First file touched. Workers are bound to ≤2 expectedFiles
       // and almost always touch one file, so showing the first is
       // the useful cue. Absent on empty-hunks (which would be a skip).
@@ -32,6 +32,13 @@ export type TranscriptEntrySummary =
       // True when the worker spans multiple distinct files.
       multipleFiles: boolean;
       totalChars: number;
+    }
+  /** Git-native finish: working tree already mutated; commit proposed. */
+  | {
+      kind: "worker_working_tree";
+      fileCount: number;
+      files: string[];
+      message: string;
     }
   | {
       kind: "worker_skip";

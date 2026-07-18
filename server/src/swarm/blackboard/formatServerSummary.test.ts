@@ -30,7 +30,7 @@ describe("formatServerSummary — worker shapes", () => {
       firstFile: "src/a.ts",
       totalChars: 100,
     });
-    assert.equal(out, "Wrote 1 hunk (1 replace) in src/a.ts (100 chars)");
+    assert.equal(out, "Patch 1 hunk (1 replace) in src/a.ts (100 chars)");
   });
 
   it("worker_hunks multi-op single file", () => {
@@ -44,7 +44,7 @@ describe("formatServerSummary — worker shapes", () => {
     });
     assert.equal(
       out,
-      "Wrote 3 hunks (1 replace, 1 create, 1 append) in src/b.ts (1,234 chars)",
+      "Patch 3 hunks (1 replace, 1 create, 1 append) in src/b.ts (1,234 chars)",
     );
   });
 
@@ -57,7 +57,7 @@ describe("formatServerSummary — worker shapes", () => {
       firstFile: "src/a.ts",
       totalChars: 0,
     });
-    assert.equal(out, "Wrote 5 hunks (5 replace) across multiple files");
+    assert.equal(out, "Patch 5 hunks (5 replace) across multiple files");
   });
 
   it("worker_hunks no firstFile (defensive '(no file)')", () => {
@@ -68,7 +68,7 @@ describe("formatServerSummary — worker shapes", () => {
       multipleFiles: false,
       totalChars: 50,
     });
-    assert.equal(out, "Wrote 1 hunk (1 create) (no file) (50 chars)");
+    assert.equal(out, "Patch 1 hunk (1 create) (no file) (50 chars)");
   });
 });
 

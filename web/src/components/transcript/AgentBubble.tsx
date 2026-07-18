@@ -9,7 +9,8 @@ import {
   JsonPrettyBubble,
   tryPrettyJson,
 } from "./JsonBubbles";
-import { WorkerHunksBubble, tryParseWorkerHunks } from "./WorkerHunksBubble";
+import { WorkerHunksBubble } from "./WorkerHunksBubble";
+import { tryParseWorkerEnvelope } from "@ollama-swarm/shared/workerHunks";
 import { DebateVerdictBubble } from "./DebateVerdictBubble";
 import { formatServerSummary } from "../../../../shared/src/formatServerSummary";
 import {
@@ -280,11 +281,8 @@ export function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string 
         />
       );
     }
-    // Task #74 (2026-04-25): worker_hunks renders as a real diff view
-    // — per hunk, op + file header + search/replace as stacked
-    // dim-red / bright-green blocks. Falls back to AgentJsonBubble if
-    // the envelope can't be parsed.
-    if (entry.summary.kind === "worker_hunks") {
+    // worker_hunks / worker_working_tree: patch cards or git working-tree summary.
+    if (entry.summary.kind === "worker_hunks" || entry.summary.kind === "worker_working_tree") {
       const oneLine = formatServerSummary(entry.summary);
       return (
         <WorkerHunksBubble
@@ -433,16 +431,36 @@ export function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string 
         </div>
       );
     }
+    // Known kinds intentionally use a one-line summary + JSON body (or prose above).
+    // Only warn in dev for novel kinds so we don't spam historical/agent bubbles.
+    const knownGeneric = new Set([
+      "worker_skip",
+      "ow_assignments",
+      "build_result",
+      "contract",
+      "planner_todos",
+      "worker_hunks",
+      "worker_working_tree",
+      "planner_brief",
+      "council_draft",
+      "debate_turn",
+      "council_synthesis",
+      "stigmergy_report",
+      "stigmergy_annotation",
+      "role_diff_synthesis",
+      "mapreduce_synthesis",
+      "next_action_phase",
+      "debate_verdict",
+      "stretch_goals",
+    ]);
     if (
-      ![
-        "worker_skip",
-        "ow_assignments",
-        "build_result",
-        "contract",
-        "planner_todos",
-      ].includes(entry.summary.kind)
+      import.meta.env?.DEV
+      && entry.summary.kind
+      && !knownGeneric.has(entry.summary.kind)
     ) {
-      console.warn(`[MessageBubble] Unhandled agent summary kind: "${entry.summary.kind}" — add an AgentBubble branch`);
+      console.warn(
+        `[AgentBubble] Unhandled agent summary kind: "${entry.summary.kind}" — add a branch or formatServerSummary`,
+      );
     }
     return (
       <AgentJsonBubble
@@ -457,11 +475,8 @@ export function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string 
       />
     );
   }
-  // 2026-04-25: client-side worker_hunks detection for legacy entries
-  // whose server-side summary tagging dropped (pre-fix runs OR entries
-  // from envelopes the lenient parser couldn't slice). Mirrors the
-  // WorkerHunksBubble routing so the diff renderer applies even when
-  // summary.kind is missing.
+  // Client-side envelope detection when server summary tagging is missing
+  // (replays, salvage, workingTree without tag).
   return (
     <AgentClientFallback
       entry={entry}
@@ -499,18 +514,22 @@ function AgentClientFallback({
   // returns above don't violate the rules-of-hooks. (Hook count must
   // be stable per render, but transcript entries are append-only so
   // each entry hits exactly one of the upstream branches consistently.)
-  const looseHunks = useMemo(() => tryParseWorkerHunks(entry.text), [entry.text]);
+  const workerEnvelope = useMemo(() => tryParseWorkerEnvelope(entry.text), [entry.text]);
   const clientSummary = useMemo(() => summarizeAgentJson(entry.text), [entry.text]);
   const prettyJson = useMemo(() => tryPrettyJson(entry.text), [entry.text]);
   const buildResult = useMemo(() => tryParseBuildResult(entry.text), [entry.text]);
 
-  if (looseHunks) {
+  if (workerEnvelope) {
+    const summary =
+      workerEnvelope.type === "workingTree"
+        ? `Git working tree · ${workerEnvelope.workingTree.files.length} file(s)`
+        : `${workerEnvelope.hunks.length} hunk${workerEnvelope.hunks.length === 1 ? "" : "s"}`;
     return (
       <WorkerHunksBubble
         className={className}
         style={style}
         header={header}
-        summary={`${looseHunks.length} hunk${looseHunks.length === 1 ? "" : "s"}`}
+        summary={summary}
         rawJson={entry.text}
         thinking={thinking}
         prompt={prompt}

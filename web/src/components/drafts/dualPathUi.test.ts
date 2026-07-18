@@ -75,4 +75,21 @@ describe("dual-path UI — worker hunk bubble parser", () => {
     assert.ok(hunks);
     assert.equal(hunks![0]!.search, "line1\nline2");
   });
+
+  it("parses workingTree envelopes without inventing hunks", async () => {
+    const { tryParseWorkerEnvelope } = await import("@ollama-swarm/shared/workerHunks");
+    const raw = JSON.stringify({
+      workingTree: true,
+      message: "add helper",
+      files: ["src/a.ts", "src/b.ts"],
+    });
+    const env = tryParseWorkerEnvelope(raw);
+    assert.ok(env);
+    assert.equal(env!.type, "workingTree");
+    if (env!.type === "workingTree") {
+      assert.equal(env.workingTree.files.length, 2);
+      assert.match(env.workingTree.message, /add helper/);
+    }
+    assert.equal(tryParseWorkerHunks(raw), null);
+  });
 });

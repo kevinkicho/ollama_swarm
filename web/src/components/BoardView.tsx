@@ -21,20 +21,20 @@ const COLUMNS: { key: TodoStatus; label: string; accent: string; help: string }[
     key: "pending-commit",
     label: "Pending Commit",
     accent: "border-violet-500/40 text-violet-300",
-    help: "Worker produced hunks/files; awaiting auditor approval before final commit to disk.",
+    help: "Worker finished (git working tree and/or patches); awaiting auditor approval before git commit.",
   },
   {
     key: "committed",
     label: "Committed",
     accent: "border-emerald-500/40 text-emerald-300",
-    help: "Diff passed CAS and was written to disk. A git commit is created at the clone root.",
+    help: "Auditor approved; changes committed on the clone (git). Working tree was the source of truth.",
   },
   {
     key: "stale",
     label: "Stale",
     accent: "border-rose-500/40 text-rose-300",
     help:
-      "CAS rejected this commit — a file changed underneath the worker. The planner will rewrite and reopen it; the R1/R2 badge counts replans.",
+      "Apply/commit failed (e.g. anchors moved, verify failed). Planner may replan; R1/R2 badges count replans.",
   },
   {
     key: "skipped",
@@ -76,9 +76,7 @@ export const BoardView = memo(function BoardView() {
   // For claimed todos, only show a live ticking age while the assigned agent
   // is actually in "thinking" state. This keeps the board attribution in sync
   // with the sidebar status signals (green=ready vs blue thinking+timer).
-  // If the worker has finished its prompt (proposed hunks, now awaiting auditor)
-  // the agent will be ready and we suppress the growing "4m.." age even if the
-  // todo record in the client is momentarily stale.
+  // If the worker finished (pending-commit / ready), suppress a growing claim age.
   const claimAge = (todo: Todo): string | null => {
     if (todo.status !== "claimed" || !todo.claim) return null;
     const a = agents[todo.claim.agentId];

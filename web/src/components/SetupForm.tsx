@@ -416,7 +416,7 @@ export function SetupForm() {
             <span>
               Auto-approve (high trust)
               <span className="text-ink-500 ml-1">
-                (all roles get bash + web + propose_hunks; auditor auto-accepts pending commits;
+                (all roles get bash/run + web + write/edit; auditor auto-accepts pending commits;
                 5m bash wall; no bash fail lockout; skips prior-DENY todo filters — trusted local only)
               </span>
             </span>

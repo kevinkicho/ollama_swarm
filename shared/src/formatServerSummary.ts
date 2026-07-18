@@ -126,12 +126,25 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
     const sectionsLabel = s.sectionTitles.length === 1 ? "1 section" : `${s.sectionTitles.length} sections`;
     return `Saved deliverable → ${s.filename} (${sectionsLabel}, ${s.bytes.toLocaleString()} bytes)`;
   }
-  // worker_hunks (only kind remaining after all the if-returns above)
-  if (s.kind === 'worker_hunks') {
+  if (s.kind === "worker_working_tree") {
+    const n = s.fileCount;
+    const fileLabel = n === 1 ? "1 file" : `${n} files`;
+    const preview = s.files.slice(0, 3).join(", ");
+    const more = s.files.length > 3 ? "…" : "";
+    const msg = s.message ? ` — ${s.message.slice(0, 80)}` : "";
+    return `Git working tree · ${fileLabel}${preview ? ` (${preview}${more})` : ""}${msg}`;
+  }
+  if (s.kind === "brain_os_dispatch") {
+    return `Brain OS · ${s.phase} · ${s.conflictKind}`;
+  }
+  // worker_hunks (optional small patches; not the primary collaboration bus)
+  if (s.kind === "worker_hunks") {
     const opParts: string[] = [];
     if (s.ops.replace > 0) opParts.push(`${s.ops.replace} replace`);
     if (s.ops.create > 0) opParts.push(`${s.ops.create} create`);
     if (s.ops.append > 0) opParts.push(`${s.ops.append} append`);
+    if ((s.ops.write ?? 0) > 0) opParts.push(`${s.ops.write} write`);
+    if ((s.ops.delete ?? 0) > 0) opParts.push(`${s.ops.delete} delete`);
     const opSummary = opParts.length === 1 ? opParts[0] : opParts.join(", ");
     const hunkLabel = s.hunkCount === 1 ? "1 hunk" : `${s.hunkCount} hunks`;
     const where = s.multipleFiles
@@ -140,7 +153,7 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
         ? `in ${s.firstFile}`
         : `(no file)`;
     const charsSuffix = s.totalChars > 0 ? ` (${s.totalChars.toLocaleString()} chars)` : "";
-    return `Wrote ${hunkLabel} (${opSummary}) ${where}${charsSuffix}`;
+    return `Patch ${hunkLabel}${opSummary ? ` (${opSummary})` : ""} ${where}${charsSuffix}`;
   }
   if (s.kind === 'brain_suggestion') {
     return `Brain suggestion: ${s.title}`;

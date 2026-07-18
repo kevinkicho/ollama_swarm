@@ -76,9 +76,29 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
 
   const pretty = safePretty(parsed);
 
-  // Worker v2: { hunks: [ replace | create | append ], skip?: string }. Must
-  // be checked BEFORE the v1 diffs branch — a malformed response could in
-  // principle have both keys, but worker.ts only emits hunks now.
+  // Git-native: { workingTree: true, files, message }
+  if (isObject(parsed)) {
+    const o = parsed as Record<string, unknown>;
+    if (
+      o.workingTree === true
+      || o.mode === "workingTree"
+      || o.mode === "git"
+      || o.git === true
+    ) {
+      const filesRaw = o.files ?? o.filesTouched;
+      const files = Array.isArray(filesRaw) ? filesRaw.map(String).filter(Boolean) : [];
+      const message = String(o.message ?? o.summary ?? "working-tree changes").slice(0, 160);
+      const n = files.length;
+      return {
+        summary: `Git working tree · ${n} file${n === 1 ? "" : "s"}${message ? ` — ${message}` : ""}`,
+        json: pretty,
+        parsed: { kind: "unknown" },
+      };
+    }
+  }
+
+  // Worker v2: { hunks: [ replace | create | append | write | … ], skip?: string }.
+  // Must be checked BEFORE the v1 diffs branch.
   if (isObject(parsed) && Array.isArray((parsed as { hunks?: unknown }).hunks)) {
     const p = parsed as { hunks: unknown[]; skip?: unknown };
     if (typeof p.skip === "string" && p.skip.trim().length > 0) {

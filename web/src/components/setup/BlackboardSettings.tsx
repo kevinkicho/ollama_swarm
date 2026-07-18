@@ -326,7 +326,7 @@ export function AuditorControlFlags({
   return (
     <Field
       label="Auditor Mutation Control (new)"
-      hint="When auditor-only mutations are enabled, workers can only propose hunks (via pending-commit). The auditor performs an explicit hunk review prompt, then (with verification) applies changes and creates **one batched git commit** for the round. This makes the auditor the sole writer to the repo."
+      hint="When auditor-only mutations are enabled, workers propose via pending-commit (git working tree and/or patches). The auditor reviews (git status/diff or hunk review), then (with verification) creates **one batched git commit** for the round."
     >
       <div className="space-y-3 pt-1">
         {setAutoApprove != null && autoApprove != null ? (
@@ -334,7 +334,7 @@ export function AuditorControlFlags({
             label="Auto-approve (high trust)"
             checked={autoApprove}
             onChange={setAutoApprove}
-            hint="Every role gets max tools (bash + web + propose_hunks). Auditor auto-accepts pending commits. Bash lockout off, 5m bash wall. Skips prior-DENY todo filters. Use only on trusted local clones."
+            hint="Every role gets max tools (bash/run + web + write/edit + git). Auditor auto-accepts pending commits. Bash lockout off, 5m shell wall. Skips prior-DENY todo filters. Use only on trusted local clones."
           />
         ) : null}
         <ToggleField
