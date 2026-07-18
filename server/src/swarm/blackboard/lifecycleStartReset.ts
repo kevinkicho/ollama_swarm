@@ -12,6 +12,7 @@ import { startBrainOsMetrics } from "../brainOs/metricsRegistry.js";
 import { resetToolBlockDispatchFires } from "../brainOs/toolBlockDispatch.js";
 import { resetHelperActivity } from "../brainOs/helperActivity.js";
 import { resetToolContests } from "../../tools/toolContest.js";
+import { setToolContestRunSink } from "../../tools/toolContestSink.js";
 import { resetResilienceAdvice } from "../resilienceAdviceRegistry.js";
 
 /**
@@ -75,6 +76,14 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   resetHelperActivity(cfg.runId);
   resetToolContests(cfg.runId);
   resetResilienceAdvice(cfg.runId);
+  // ToolDispatcher has no runner ref — bind transcript/WS for contest bubbles.
+  if (cfg.runId) {
+    setToolContestRunSink(cfg.runId, {
+      clonePath: cfg.localPath,
+      appendSystem: (text, summary) => ctx.appendSystem(text, summary),
+      emit: (event) => ctx.emit(event),
+    });
+  }
   {
     const plannerModel = cfg.plannerModel ?? cfg.model;
     const workerModel = cfg.workerModel ?? cfg.model;

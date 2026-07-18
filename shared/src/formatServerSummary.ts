@@ -137,6 +137,17 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
   if (s.kind === "brain_os_dispatch") {
     return `Brain OS · ${s.phase} · ${s.conflictKind}`;
   }
+  if (s.kind === "tool_contest") {
+    const phase =
+      s.phase === "opened"
+        ? "open"
+        : s.phase === "contested"
+          ? "contested"
+          : s.phase === "approved"
+            ? "approved once"
+            : "denied";
+    return `Tool contest · ${phase} · ${s.tool} (${s.agentId})`;
+  }
   // worker_hunks (optional small patches; not the primary collaboration bus)
   if (s.kind === "worker_hunks") {
     const opParts: string[] = [];

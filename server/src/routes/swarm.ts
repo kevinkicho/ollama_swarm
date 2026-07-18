@@ -156,8 +156,7 @@ export function swarmRouter(orch: Orchestrator): Router {
         return;
       }
       const body = req.body as z.infer<typeof ToolContestResolveBody>;
-      void import("../tools/toolContest.js").then(
-        ({ resolveToolContest, recordContestResolutionDeliberation }) => {
+      void import("../tools/toolContest.js").then(({ resolveToolContest, publishToolContestEvent }) => {
           const resolved = resolveToolContest({
             runId,
             contestId: body.contestId,
@@ -169,16 +168,19 @@ export function swarmRouter(orch: Orchestrator): Router {
             return;
           }
           try {
-            recordContestResolutionDeliberation(resolved, {
-              runId,
-              clonePath: orch.statusForRun(runId)?.localPath,
+            publishToolContestEvent({
+              contest: resolved,
+              phase: body.approve ? "approved" : "denied",
+              sink: {
+                runId,
+                clonePath: orch.statusForRun(runId)?.localPath,
+              },
             });
           } catch {
             /* best-effort */
           }
           res.json({ ok: true, contest: resolved });
-        },
-      );
+        });
     },
   );
 

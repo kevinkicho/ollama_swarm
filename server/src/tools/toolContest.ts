@@ -5,8 +5,13 @@
  */
 
 import { randomUUID } from "node:crypto";
+import type { TranscriptEntrySummary } from "@ollama-swarm/shared/transcriptEntrySummary";
 import type { DeliberationSink } from "../swarm/deliberation/deliberationTypes.js";
 import { recordDeliberationAsync } from "../swarm/deliberation/deliberationLog.js";
+import {
+  getToolContestRunSink,
+  mergeToolContestSink,
+} from "./toolContestSink.js";
 
 export type ToolContestStatus = "open" | "approved" | "denied";
 
@@ -203,6 +208,7 @@ export function registerContestToolsFromText(input: {
   runId?: string;
   agentId?: string;
   text?: string;
+  sink?: DeliberationSink;
 }): ToolContest[] {
   const { runId, agentId, text } = input;
   if (!runId || !agentId || !text) return [];
@@ -215,9 +221,103 @@ export function registerContestToolsFromText(input: {
       tool: req.tool ?? "",
       reason: req.reason,
     });
-    if (c) applied.push(c);
+    if (c) {
+      applied.push(c);
+      publishToolContestEvent({ contest: c, phase: "contested", sink: input.sink });
+    }
   }
   return applied;
+}
+
+export type ToolContestPhase = "opened" | "contested" | "approved" | "denied";
+
+/** One-line operator text for transcript / logs. */
+export function formatToolContestLine(
+  contest: ToolContest,
+  phase: ToolContestPhase,
+): string {
+  const who = contest.agentId;
+  const tool = contest.tool;
+  if (phase === "opened") {
+    return (
+      `[tool-contest] OPEN · ${who} · ${tool} (profile ${contest.profile}) ` +
+      `id=${contest.id.slice(0, 8)} — contestable profile denial`
+    );
+  }
+  if (phase === "contested") {
+    const why = (contest.contestReason ?? "").slice(0, 120);
+    return (
+      `[tool-contest] CONTESTED · ${who} · ${tool} id=${contest.id.slice(0, 8)}` +
+      (why ? ` — ${why}` : "")
+    );
+  }
+  const verdict = phase === "approved" ? "APPROVED (one-shot allow)" : "DENIED";
+  const by = contest.resolver ?? "operator";
+  return `[tool-contest] ${verdict} · ${who} · ${tool} by ${by} id=${contest.id.slice(0, 8)}`;
+}
+
+function contestSummary(
+  contest: ToolContest,
+  phase: ToolContestPhase,
+): Extract<TranscriptEntrySummary, { kind: "tool_contest" }> {
+  return {
+    kind: "tool_contest",
+    phase,
+    contestId: contest.id,
+    tool: contest.tool,
+    agentId: contest.agentId,
+    profile: contest.profile,
+    reason: (contest.contestReason ?? contest.denyReason).slice(0, 240),
+    ...(contest.resolver ? { resolver: contest.resolver } : {}),
+  };
+}
+
+/**
+ * Surface a contest lifecycle step: structured transcript bubble + deliberation
+ * WS/JSONL (via registry sink when call-site has no runner).
+ */
+export function publishToolContestEvent(input: {
+  contest: ToolContest;
+  phase: ToolContestPhase;
+  sink?: DeliberationSink;
+}): void {
+  const { contest, phase } = input;
+  const reg = getToolContestRunSink(contest.runId);
+  const line = formatToolContestLine(contest, phase);
+  const summary = contestSummary(contest, phase);
+  try {
+    reg?.appendSystem?.(line, summary);
+  } catch {
+    /* best-effort */
+  }
+
+  const delibSink = mergeToolContestSink(contest.runId, input.sink);
+  // Avoid duplicate plain-text system lines from recordDeliberation.
+  const sinkNoPlain: DeliberationSink = {
+    ...delibSink,
+    appendSystem: undefined,
+  };
+
+  if (phase === "opened") {
+    recordDenialDeliberation(contest, sinkNoPlain);
+  } else if (phase === "contested") {
+    recordDeliberationAsync(
+      {
+        runId: contest.runId,
+        layer: "control",
+        subject: `tool-contest:${contest.tool}`,
+        claim: (contest.contestReason ?? contest.denyReason).slice(0, 400),
+        proposer: contest.agentId,
+        validator: `profile:${contest.profile}`,
+        verdict: "challenge",
+        validationReason: `agent contested contestId=${contest.id}`,
+        evidence: [contest.tool, contest.id],
+      },
+      sinkNoPlain,
+    );
+  } else {
+    recordContestResolutionDeliberation(contest, sinkNoPlain);
+  }
 }
 
 export function resolveToolContest(input: {
@@ -276,7 +376,7 @@ export function recordDenialDeliberation(
       evidence: [contest.tool, contest.profile],
       related: { agentIndex: undefined },
     },
-    sink,
+    mergeToolContestSink(contest.runId, sink),
   );
 }
 
@@ -296,6 +396,6 @@ export function recordContestResolutionDeliberation(
       validationReason: `tool contest ${contest.status}`,
       evidence: [contest.tool, contest.id],
     },
-    sink,
+    mergeToolContestSink(contest.runId, sink),
   );
 }

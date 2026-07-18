@@ -198,7 +198,7 @@ export class ToolDispatcher {
         consumeToolAllowOnce,
         openToolContest,
         formatContestableDenial,
-        recordDenialDeliberation,
+        publishToolContestEvent,
       } = await import("./toolContest.js");
       if (consumeToolAllowOnce(this.runId, this.agentId, call.tool)) {
         // fall through to execute as if allowed
@@ -226,9 +226,10 @@ export class ToolDispatcher {
           contestId: contest.id,
         });
         try {
-          recordDenialDeliberation(contest, {
-            runId: this.runId,
-            clonePath: this.clonePath,
+          publishToolContestEvent({
+            contest,
+            phase: "opened",
+            sink: { runId: this.runId, clonePath: this.clonePath },
           });
         } catch {
           /* best-effort */

@@ -277,6 +277,12 @@ export class Orchestrator {
       terminalReason: opts.terminalReason,
     });
     this.runs.delete(run.runId);
+    try {
+      const { clearToolContestRunSink } = await import("../tools/toolContestSink.js");
+      clearToolContestRunSink(run.runId);
+    } catch {
+      /* optional */
+    }
   }
 
   setBrainChatHistory(runId: string, history: Array<{ role: string; content: string }>) {
@@ -861,6 +867,31 @@ export class Orchestrator {
       this.runs.set(runId, activeRun);
       registeredInMap = true;
       orphanCloneLock = false; // ActiveRun owns release now
+
+      // Contestable tool denials: ToolDispatcher has no runner ref — register
+      // transcript/WS sink so open/contest/resolve surface for operators.
+      try {
+        const { setToolContestRunSink } = await import("../tools/toolContestSink.js");
+        setToolContestRunSink(runId, {
+          clonePath: cfg.localPath,
+          appendSystem: (text, summary) => {
+            try {
+              activeRun.runner.appendSystemMessage?.(text, summary);
+            } catch {
+              /* best-effort */
+            }
+          },
+          emit: (event) => {
+            try {
+              activeRun.emit(event);
+            } catch {
+              /* best-effort */
+            }
+          },
+        });
+      } catch {
+        /* optional module */
+      }
 
       this.runPaths.set(runId, {
         clonePath: cfg.localPath,

@@ -73,6 +73,57 @@ export function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string
     );
   }
 
+  // Contestable tool denial (profile leash) — open / contested / resolve.
+  if (entry.summary?.kind === "tool_contest") {
+    const s = entry.summary;
+    const palette =
+      s.phase === "approved"
+        ? {
+            ring: "border-emerald-800/60 bg-emerald-950/25",
+            chip: "bg-emerald-900/60 text-emerald-200",
+            label: "approved once",
+          }
+        : s.phase === "denied"
+          ? {
+              ring: "border-rose-800/60 bg-rose-950/25",
+              chip: "bg-rose-900/60 text-rose-200",
+              label: "denied",
+            }
+          : s.phase === "contested"
+            ? {
+                ring: "border-amber-700/60 bg-amber-950/30",
+                chip: "bg-amber-900/60 text-amber-100",
+                label: "contested",
+              }
+            : {
+                ring: "border-amber-800/50 bg-ink-900/80",
+                chip: "bg-amber-950/70 text-amber-200",
+                label: "open",
+              };
+    return (
+      <div className={`rounded-md border px-3 py-2 text-xs space-y-0.5 ${palette.ring}`}>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={`inline-block font-mono uppercase tracking-wider px-1.5 py-0.5 rounded ${palette.chip}`}>
+            tool contest · {palette.label}
+          </span>
+          <span className="text-ink-200 font-mono text-[11px]">{s.tool}</span>
+          <span className="text-ink-400 font-mono text-[10px]">{s.agentId}</span>
+          <span className="text-ink-500 text-[10px]">profile {s.profile}</span>
+          {s.resolver ? (
+            <span className="text-ink-400 text-[10px]">by {s.resolver}</span>
+          ) : null}
+          <span className="text-ink-500 text-[10px] ml-auto">{ts}</span>
+        </div>
+        {s.reason ? (
+          <div className="text-ink-300 text-[11px] break-words leading-snug">{s.reason.slice(0, 280)}</div>
+        ) : null}
+        <div className="text-ink-500 font-mono text-[9px] truncate" title={s.contestId}>
+          id={s.contestId}
+        </div>
+      </div>
+    );
+  }
+
   // Task #72: dedicated grid renderers for structured system entries.
   if (entry.summary?.kind === "run_finished") {
     return <RunFinishedGrid summary={entry.summary} ts={entry.ts} />;

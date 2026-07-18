@@ -10,10 +10,16 @@ import {
   formatContestableDenial,
   extractContestToolRequests,
   registerContestToolsFromText,
+  publishToolContestEvent,
+  formatToolContestLine,
 } from "./toolContest.js";
+import { setToolContestRunSink, clearToolContestRunSink } from "./toolContestSink.js";
 
 describe("toolContest", () => {
-  beforeEach(() => resetToolContests());
+  beforeEach(() => {
+    resetToolContests();
+    clearToolContestRunSink();
+  });
 
   it("opens contestable denial and grants one-shot allow on approve", () => {
     const c = openToolContest({
@@ -82,5 +88,27 @@ describe("toolContest", () => {
     assert.equal(applied.length, 1);
     assert.equal(applied[0]!.contestReason, "need shell for tsc");
     assert.equal(listOpenContests("r2")[0]!.contestReason, "need shell for tsc");
+  });
+
+  it("publishToolContestEvent writes structured transcript via run sink", () => {
+    const lines: Array<{ text: string; summary?: { kind: string; phase?: string } }> = [];
+    setToolContestRunSink("r3", {
+      appendSystem: (text, summary) => {
+        lines.push({ text, summary: summary as { kind: string; phase?: string } });
+      },
+    });
+    const c = openToolContest({
+      runId: "r3",
+      agentId: "a9",
+      tool: "write",
+      profile: "swarm-read",
+      denyReason: "denied",
+    });
+    publishToolContestEvent({ contest: c, phase: "opened" });
+    assert.equal(lines.length, 1);
+    assert.match(lines[0]!.text, /tool-contest/i);
+    assert.equal(lines[0]!.summary?.kind, "tool_contest");
+    assert.equal(lines[0]!.summary?.phase, "opened");
+    assert.match(formatToolContestLine(c, "opened"), /OPEN/);
   });
 });

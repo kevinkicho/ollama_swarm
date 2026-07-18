@@ -20,6 +20,17 @@ export type TranscriptEntrySummary =
       model?: string;
       status?: string;
     }
+  /** Contestable tool denial (profile leash) — open / agent contest / resolve. */
+  | {
+      kind: "tool_contest";
+      phase: "opened" | "contested" | "approved" | "denied";
+      contestId: string;
+      tool: string;
+      agentId: string;
+      profile: string;
+      reason: string;
+      resolver?: string;
+    }
   | {
       kind: "worker_hunks";
       hunkCount: number;
