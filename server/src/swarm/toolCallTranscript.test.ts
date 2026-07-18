@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  extractUrlsFromToolTrace,
   formatToolInvokePreview,
   makeBufferedToolHandler,
+  peekPendingToolTrace,
   takePendingToolTrace,
 } from "./toolCallTranscript.js";
 
@@ -41,4 +43,36 @@ test("makeBufferedToolHandler attaches trace to next agent bubble", () => {
   assert.equal(trace?.[0]?.tool, "read");
   assert.equal(trace?.[1]?.ok, false);
   assert.equal(takePendingToolTrace(pending, "agent-2"), undefined);
+});
+
+test("extractUrlsFromToolTrace pulls https from web_fetch/web_search previews", () => {
+  const urls = extractUrlsFromToolTrace([
+    {
+      tool: "web_fetch",
+      ok: true,
+      preview: "https://api.stlouisfed.org/fred → FRED docs body…",
+      ts: 1,
+    },
+    {
+      tool: "web_search",
+      ok: true,
+      preview:
+        "Web search results for: x\nhttps://stats.bis.org/api\nhttps://example.com/skip",
+      ts: 2,
+    },
+    { tool: "read", ok: true, preview: "src/a.ts → code", ts: 3 },
+  ]);
+  assert.ok(urls.includes("https://api.stlouisfed.org/fred"));
+  assert.ok(urls.includes("https://stats.bis.org/api"));
+  assert.ok(!urls.some((u) => u.includes("example.com")));
+});
+
+test("peekPendingToolTrace is non-destructive", () => {
+  const pending = new Map<string, import("./toolCallTranscript.js").ToolTraceEntry[]>();
+  const onTool = makeBufferedToolHandler(pending, "a1");
+  onTool({ tool: "web_fetch", ok: true, preview: "https://imf.org/data → ok" });
+  assert.equal(peekPendingToolTrace(pending, "a1").length, 1);
+  assert.equal(peekPendingToolTrace(pending, "a1").length, 1);
+  assert.equal(takePendingToolTrace(pending, "a1")?.length, 1);
+  assert.equal(peekPendingToolTrace(pending, "a1").length, 0);
 });

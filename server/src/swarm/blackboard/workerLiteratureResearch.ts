@@ -156,15 +156,34 @@ export async function runWorkerLiteratureResearch(
   try {
     const res = await chatOnceWithStreaming(agent, surface, chatOpts);
     const text = extractText(res)?.trim() ?? "";
-    if (isUsableResearchBrief(text)) {
+    // RR-C D6: when tools ran, require brief URLs to intersect tool results.
+    const { peekPendingToolTrace, extractUrlsFromToolTrace } = await import(
+      "../toolCallTranscript.js"
+    );
+    const toolUrls = extractUrlsFromToolTrace(
+      peekPendingToolTrace(ctx.pendingToolTraceByAgent, agent.id),
+    );
+    const usable =
+      text
+      && (toolUrls.length > 0
+        ? isUsableResearchBrief(text, toolUrls)
+        : isUsableResearchBrief(text));
+    if (usable && text) {
       const capped = text.length > 8000 ? `${text.slice(0, 8000)}…` : text;
       ctx.appendAgent(agent, capped);
       noteResearchSuccess(runId);
+      if (toolUrls.length > 0) {
+        ctx.appendSystem(
+          `[${agent.id}] Literature research: brief cited tool URL host(s) (${toolUrls.length}).`,
+        );
+      }
       return capped;
     }
     const { blackoutJustActivated } = noteResearchFailure("unusable brief", runId);
     ctx.appendSystem(
-      `[${agent.id}] Literature research: no usable brief — trying local endpoint catalog.`,
+      `[${agent.id}] Literature research: no usable brief` +
+        (toolUrls.length > 0 ? " (URLs must match tool results)" : "") +
+        ` — trying local endpoint catalog.`,
     );
     if (blackoutJustActivated) {
       ctx.appendSystem(

@@ -122,5 +122,43 @@ export function takePendingToolTrace(
   return trace;
 }
 
+/** Non-destructive peek for literature citation checks. */
+export function peekPendingToolTrace(
+  pending: Map<string, ToolTraceEntry[]> | undefined,
+  agentId: string,
+): readonly ToolTraceEntry[] {
+  if (!pending) return [];
+  return pending.get(agentId) ?? [];
+}
+
+/**
+ * Pull https URLs from tool-trace previews (web_fetch args / web_search results).
+ * Used by isUsableResearchBrief(text, urls) so briefs must cite real tool output.
+ */
+export function extractUrlsFromToolTrace(
+  entries: readonly ToolTraceEntry[],
+): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const re = /https?:\/\/[^\s)\]>"'→]+/gi;
+  for (const e of entries) {
+    if (!e.ok) continue;
+    if (e.tool !== "web_fetch" && e.tool !== "web_search" && !e.tool.includes("search")) {
+      // Still scan previews for search MCP tools that embed URLs.
+      if (!/search|fetch|http/i.test(e.tool)) continue;
+    }
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(e.preview)) !== null) {
+      const u = m[0]!.replace(/[.,;:]+$/, "");
+      if (seen.has(u)) continue;
+      if (/example\.com|your-org|localhost|127\.0\.0\.1|file:\/\//i.test(u)) continue;
+      seen.add(u);
+      urls.push(u);
+    }
+  }
+  return urls;
+}
+
 // Back-compat alias
 export const webToolCallSummary = toolInvokeSummary;

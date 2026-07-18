@@ -167,9 +167,25 @@ export async function runCouncilLiteratureResearch(
       promptWallClockMs: 90_000,
     });
     const text = extractText(res)?.trim();
-    if (text && isUsableResearchBrief(text)) {
+    // RR-C D6: when tools ran, require brief URLs to intersect tool results.
+    const { peekPendingToolTrace, extractUrlsFromToolTrace } = await import(
+      "./toolCallTranscript.js"
+    );
+    const toolUrls = extractUrlsFromToolTrace(
+      peekPendingToolTrace(state.pendingToolTraceByAgent, agent.id),
+    );
+    const usable =
+      text
+      && (toolUrls.length > 0
+        ? isUsableResearchBrief(text, toolUrls)
+        : isUsableResearchBrief(text));
+    if (usable && text) {
       const capped = text.length > 8000 ? `${text.slice(0, 8000)}…` : text;
-      appendSystem(`[${agent.id}] Literature research: captured ${capped.length} chars of notes.`);
+      appendSystem(
+        `[${agent.id}] Literature research: captured ${capped.length} chars of notes` +
+          (toolUrls.length > 0 ? ` (cited ${toolUrls.length} tool URL(s))` : "") +
+          `.`,
+      );
       blackout.consecutiveFailures = 0;
       noteResearchSuccess(runId);
       cache.set(todo.id, capped);
@@ -177,7 +193,11 @@ export async function runCouncilLiteratureResearch(
     }
     if (text && text.length >= 80) {
       appendSystem(
-        `[${agent.id}] Literature research: rejected output (need prose notes with URLs, not JSON hunks or intent-only stubs).`,
+        `[${agent.id}] Literature research: rejected output (need prose notes with URLs` +
+          (toolUrls.length > 0
+            ? " that match web_search/web_fetch results"
+            : ", not JSON hunks or intent-only stubs") +
+          ").",
       );
     }
     blackout.consecutiveFailures += 1;
