@@ -97,6 +97,14 @@ import {
 } from "./councilProgress.js";
 import { runCouncilCycle } from "./councilRunCycle.js";
 import { decideCouncilLoopAfterCycle } from "./councilSettlementPolicy.js";
+import { writeCouncilDeliverable } from "./councilDeliverable.js";
+import {
+  formatCumulativeFailRateReason,
+  formatHighFailCycleReason,
+  isHighFailCycle,
+  shouldStopOnCumulativeFailRate,
+  updateHighFailStreak,
+} from "./executionHealthGuard.js";
 
 /**
  * Ambition tier cap for council (mirrors blackboard tierRunner.resolvedMaxTiers).
@@ -134,6 +142,9 @@ export class CouncilRunner extends DiscussionRunnerBase {
   private criterionProgressWaves = 0;
   /** Autonomous: consecutive cycles without durable progress (commits / durable met / tier). */
   private zeroProgressStreak = 0;
+  /** Consecutive cycles with high fail rate (apply_miss thrash circuit). */
+  private highFailCycleStreak = 0;
+  private cumulativeExecution = { done: 0, failed: 0, skipped: 0 };
   private maxTiers = Infinity;
 
   private drainResolve: (() => void) | undefined;
@@ -494,10 +505,76 @@ export class CouncilRunner extends DiscussionRunnerBase {
         }
         break;
       }
+
+      // End-of-run only: deliverable + wrap-up (must not run mid cycle-1 before drain).
+      // See run 36632e9e — wrap-up tool thrash ate the hour before workers started.
+      if (cfg.runId && !this.stopping) {
+        try {
+          await writeCouncilDeliverable(
+            cfg,
+            this.transcript,
+            null,
+            this.round,
+            this.earlyStopDetail,
+            undefined,
+            {
+              manager: this.opts.manager as any,
+              repos: this.opts.repos as any,
+              emit: (e) => this.opts.emit(e as any),
+              appendSystem: (text, summary) =>
+                this.appendSystem(text, summary as any),
+            },
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(`[deliverable] End-of-run write failed: ${msg}`);
+        }
+      }
+
       this.appendCouncilTerminalMessage();
     }, {
       shouldSetCompleted: () => !this.earlyStopDetail,
     });
+  }
+
+  /** Thrash circuit for multi-cycle execution (4de10651-class apply_miss storms). */
+  private noteCycleExecutionHealth(counts: {
+    done: number;
+    failed: number;
+    skipped: number;
+  }): "ok" | "stop" {
+    this.cumulativeExecution = {
+      done: this.cumulativeExecution.done + counts.done,
+      failed: this.cumulativeExecution.failed + counts.failed,
+      skipped: this.cumulativeExecution.skipped + (counts.skipped || 0),
+    };
+
+    const high = isHighFailCycle(counts);
+    const { streak, shouldStop } = updateHighFailStreak(this.highFailCycleStreak, high);
+    this.highFailCycleStreak = streak;
+
+    if (high) {
+      this.appendSystem(
+        `[execution-health] High-fail cycle: ${counts.done} done / ${counts.failed} failed` +
+          ` (streak ${streak}).`,
+      );
+    }
+
+    if (shouldStop) {
+      const reason = formatHighFailCycleReason(streak, counts);
+      this.earlyStopDetail = reason;
+      this.appendSystem(`[execution-health] ${reason} — stopping run.`);
+      return "stop";
+    }
+
+    if (shouldStopOnCumulativeFailRate(this.cumulativeExecution)) {
+      const reason = formatCumulativeFailRateReason(this.cumulativeExecution);
+      this.earlyStopDetail = reason;
+      this.appendSystem(`[execution-health] ${reason}.`);
+      return "stop";
+    }
+
+    return "ok";
   }
 
   private progressHost(): CouncilProgressHost {
@@ -604,6 +681,7 @@ export class CouncilRunner extends DiscussionRunnerBase {
         cycleTranscriptSlice: () => this.cycleTranscriptSlice(),
         drainTodos: (c, cy) => this.drainTodos(c, cy),
         finalizeCycleProgress: (cy) => this.finalizeCycleProgress(cy),
+        noteCycleExecutionHealth: (counts) => this.noteCycleExecutionHealth(counts),
         runAudit: (c, cy) => this.runAudit(c, cy),
       },
       cfg,
@@ -612,8 +690,11 @@ export class CouncilRunner extends DiscussionRunnerBase {
     );
   }
 
-  private async drainTodos(cfg: RunConfig, cycle: number): Promise<void> {
-    await drainCouncilTodos(
+  private async drainTodos(
+    cfg: RunConfig,
+    cycle: number,
+  ): Promise<{ done: number; failed: number; skipped: number }> {
+    return drainCouncilTodos(
       {
         state: this.state,
         manager: this.opts.manager,

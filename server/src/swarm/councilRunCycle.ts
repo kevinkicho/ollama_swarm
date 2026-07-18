@@ -14,8 +14,6 @@ import { runSynthesisPass } from "./councilSynthesis.js";
 import { extractActionableTodos } from "./councilDecisions.js";
 import { postCouncilTodoBatch } from "./councilTodoPlan.js";
 import { persistCouncilPendingTodos } from "./councilExecutionResume.js";
-import { writeCouncilDeliverable } from "./councilDeliverable.js";
-import { maybeRunWrapUpApply } from "./wrapUpApplyPhase.js";
 import { reconcileCriteriaFromSkips } from "./councilSkipReconcile.js";
 import type { PostTodoInput } from "./blackboard/TodoQueue.js";
 import type { SwarmControlCenter } from "./control/SwarmControlCenter.js";
@@ -78,8 +76,20 @@ export interface CouncilRunCycleHost {
   postCouncilTodo: (input: PostTodoInput) => string;
   synthesizeStandup: (cfg: RunConfig, cycle: number) => Promise<void>;
   cycleTranscriptSlice: () => TranscriptEntry[];
-  drainTodos: (cfg: RunConfig, cycle: number) => Promise<void>;
+  drainTodos: (
+    cfg: RunConfig,
+    cycle: number,
+  ) => Promise<{ done: number; failed: number; skipped: number }>;
   finalizeCycleProgress: (cycle: number) => void;
+  /**
+   * Record cycle execution counts; return "stop" when thrash circuit fires.
+   * Optional for unit hosts that only exercise discussion.
+   */
+  noteCycleExecutionHealth?: (counts: {
+    done: number;
+    failed: number;
+    skipped: number;
+  }) => "ok" | "stop";
   runAudit: (cfg: RunConfig, cycle: number) => Promise<"done" | "retry" | "stop">;
   getRunId?: () => string | undefined;
   getBrainService?: () =>
@@ -166,14 +176,22 @@ export async function runCouncilCycle(
   }
 
   host.setExecutionFailures([]);
+  let drainCounts = { done: 0, failed: 0, skipped: 0 };
   if (!host.getStopping()) {
-    await host.drainTodos(cfg, cycle);
+    drainCounts = await host.drainTodos(cfg, cycle);
   }
 
   if (host.closingRequested()) {
     // Soft drain / hard stop: permanently skip residual soft-failed work so
     // the run does not leave the board half-settled without a reason.
     abandonUnresolvedCouncilTodos(host, cycle, "run stopping");
+    host.finalizeCycleProgress(cycle);
+    return "stop";
+  }
+
+  // Execution thrash circuit (runs 4de10651 / 36632e9e class).
+  if (host.noteCycleExecutionHealth?.(drainCounts) === "stop") {
+    abandonUnresolvedCouncilTodos(host, cycle, "execution thrash circuit");
     host.finalizeCycleProgress(cycle);
     return "stop";
   }
@@ -362,40 +380,10 @@ async function runCycle1Discussion(
       }
     }
   }
-
-  if (!host.getStopping() && cfg.runId) {
-    await writeCouncilDeliverable(
-      cfg,
-      host.transcript,
-      null,
-      host.round,
-      host.earlyStopDetail,
-      undefined,
-      {
-        manager: host.manager as any,
-        repos: host.repos as any,
-        emit: host.emit as any,
-        // Must forward summary so deliverable gets kind:"deliverable"
-        // (green card UI). Dropping it made "Deliverable saved → …" a
-        // plain system line (run 9f449937 post-mortem).
-        appendSystem: ((text: string, summary?: unknown) =>
-          host.appendSystem(text, summary as any)) as any,
-      },
-    );
-    const wrapLead = host.manager.list().find((a) => a.index === 1);
-    if (wrapLead) {
-      await maybeRunWrapUpApply({
-        cfg,
-        presetName: "council",
-        agent: wrapLead,
-        manager: host.manager,
-        repos: host.repos,
-        emit: host.emit,
-        appendSystem: (text: string) => host.appendSystem(text),
-        relevantFiles: [],
-      });
-    }
-  }
+  // NOTE: Deliverable + wrap-up intentionally NOT here.
+  // Runs 36632e9e / similar burned 1–2h writing deliverable and wrap-up
+  // (tool-loop thrash) *before* drainTodos executed the enqueued work.
+  // End-of-run closeout in CouncilRunner.loop owns deliverable/wrap-up.
 }
 
 async function runCycleStandup(

@@ -44,25 +44,32 @@ export interface CouncilDrainHost {
   resolveDrain?: () => void;
 }
 
+export interface DrainCouncilTodosResult {
+  done: number;
+  failed: number;
+  skipped: number;
+}
+
 export async function drainCouncilTodos(
   host: CouncilDrainHost,
   cfg: RunConfig,
   cycle: number,
-): Promise<void> {
+): Promise<DrainCouncilTodosResult> {
   void cfg;
+  const empty: DrainCouncilTodosResult = { done: 0, failed: 0, skipped: 0 };
   const agents = host.manager.list();
   const executionAgents = agents.filter((a) => a.index > 1);
-  if (executionAgents.length === 0) return;
+  if (executionAgents.length === 0) return empty;
 
   const pending = host.state.todoQueue.counts().pending;
-  if (pending > 0) {
-    host.appendSystem(`[execution] Starting ${pending} todo(s)…`, {
-      kind: "council_stage",
-      cycle,
-      stage: "execution",
-      detail: `${pending} todo${pending === 1 ? "" : "s"}`,
-    });
-  }
+  if (pending <= 0) return empty;
+
+  host.appendSystem(`[execution] Starting ${pending} todo(s)…`, {
+    kind: "council_stage",
+    cycle,
+    stage: "execution",
+    detail: `${pending} todo${pending === 1 ? "" : "s"}`,
+  });
 
   host.setPhase("executing");
 
@@ -109,11 +116,12 @@ export async function drainCouncilTodos(
   }, REAPER_INTERVAL);
   reaper.unref();
 
+  let totalCompleted = 0;
+  let totalFailed = 0;
+  let totalSkipped = 0;
+
   const drainWork = (async () => {
     const coachAgent = host.manager.list().find((a) => a.index === 1);
-    let totalCompleted = 0;
-    let totalFailed = 0;
-    let totalSkipped = 0;
     let pass = 0;
     const MAX_SETTLEMENT_PASSES = Math.max(4, maxAttempts + 2);
 
@@ -254,4 +262,5 @@ export async function drainCouncilTodos(
   } finally {
     clearInterval(reaper);
   }
+  return { done: totalCompleted, failed: totalFailed, skipped: totalSkipped };
 }
