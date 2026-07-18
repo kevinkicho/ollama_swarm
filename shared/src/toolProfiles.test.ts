@@ -31,8 +31,11 @@ describe("toolProfiles", () => {
     assert.equal(resolveToolProfileId("worker", { webTools: true }), "swarm-builder-research");
     assert.equal(resolveToolProfileId("auditor", { webTools: true }), "swarm-research");
     assert.equal(resolveToolProfileId("auditor", {}), "swarm-read");
+    // RR-C PR5: planner web is opt-in via webTools / plannerTools.
     assert.equal(resolveToolProfileId("planner", { webTools: true }), "swarm-planner");
-    assert.equal(resolveToolProfileId("planner", {}), "swarm-planner");
+    assert.equal(resolveToolProfileId("planner", { plannerTools: true }), "swarm-planner");
+    assert.equal(resolveToolProfileId("planner", {}), "swarm-read");
+    assert.equal(resolveToolProfileId("planner", { webTools: false }), "swarm-read");
     assert.equal(resolveToolProfileId("worker-build", { webTools: true }), "swarm-builder-research");
   });
 
@@ -64,6 +67,9 @@ describe("toolProfiles", () => {
     assert.equal(effectiveToolProfileId("swarm-read", {}), "swarm-read");
     assert.equal(effectiveToolProfileId("swarm-read", { webTools: true }), "swarm-research");
     assert.equal(effectiveToolProfileId("swarm-planner", { webTools: true }), "swarm-planner");
+    // RR-C PR5: demote hardcoded planner when web flags off.
+    assert.equal(effectiveToolProfileId("swarm-planner", {}), "swarm-read");
+    assert.equal(effectiveToolProfileId("swarm-planner", { webTools: false }), "swarm-read");
   });
 
   it("resolveDiscussionProfileId mirrors read/build roles", () => {

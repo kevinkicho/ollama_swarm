@@ -123,9 +123,9 @@ Tools (via in-process `ToolDispatcher`, resolved in `shared/src/toolProfiles.ts`
 | Profile                  | Tools                                      | Typical users                  | Internet? |
 |--------------------------|--------------------------------------------|--------------------------------|-----------|
 | `swarm`                  | none (must emit clean JSON)                | Blackboard workers             | No        |
-| `swarm-read`             | `read`, `grep`, `glob`, `list`             | Planners, auditors, discussion roles | No (local FS only) |
+| `swarm-read`             | `read`, `grep`, `glob`, `list`             | Planners (default), auditors, discussion roles | No (local FS only) |
 | `swarm-builder`          | above + restricted `bash`                  | Build / test roles             | No (allowlisted build cmds only, no curl) |
-| `swarm-planner`          | read family + `web_search`, `web_fetch`    | Planner when web tools on      | Yes (opt-in) |
+| `swarm-planner`          | read family + bash + `web_search`, `web_fetch` | Planner when `webTools` / `plannerTools` on | Yes (opt-in) |
 | `swarm-research`         | read family + `web_search`, `web_fetch`    | Workers/auditors when web tools on | Yes (opt-in) |
 | `swarm-builder-research` | builder + `web_search`, `web_fetch`        | Build roles when web tools on  | Yes (opt-in) |
 

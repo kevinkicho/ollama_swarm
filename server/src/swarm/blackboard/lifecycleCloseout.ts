@@ -15,6 +15,7 @@ import {
   runDesignMemoryUpdatePass,
 } from "./reflectionPasses.js";
 import { isStopping as lifecycleIsStopping } from "./lifecycleState.js";
+import { resolveToolProfile } from "../toolProfiles.js";
 import type { LifecycleContext } from "./lifecycleRunner.js";
 
 export async function runLifecycleCloseout(
@@ -177,11 +178,14 @@ export async function runLifecycleCloseout(
         // Create a prompt function that uses promptPlannerSafely
         const brainModel = ctx.getActive()?.model ?? "deepseek-v4-flash:cloud";
         const brainPromptFn = async (prompt: string, model: string, maxTokens: number, timeoutMs: number): Promise<string> => {
-          const plannerAgent: Agent = { id: "brain", index: 0, model, port: 0, sessionId: "brain", cwd: ctx.getActive()?.localPath ?? "" };
+          const activeForTools = ctx.getActive();
+          // RR-C PR5: honor webTools/plannerTools instead of always swarm-planner.
+          const brainProfile = resolveToolProfile("planner", activeForTools);
+          const plannerAgent: Agent = { id: "brain", index: 0, model, port: 0, sessionId: "brain", cwd: activeForTools?.localPath ?? "" };
           const { response } = await ctx.promptPlannerSafely(
             plannerAgent,
             prompt,
-            "swarm-planner",
+            brainProfile,
           );
           return response;
         };

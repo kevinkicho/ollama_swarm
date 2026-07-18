@@ -41,8 +41,9 @@ export function resolveToolProfileId(
   const web = isWebToolsEnabled(cfg);
   switch (role) {
     case "planner":
-      // Planner always gets the full read/web/bash toolkit — not gated on run config.
-      return "swarm-planner";
+      // RR-C PR5: web_search/web_fetch only when webTools or plannerTools.
+      // Local default matches docs (swarm-read); opt-in web → swarm-planner (+ bash).
+      return web ? "swarm-planner" : "swarm-read";
     case "worker":
       // Git-native collaboration: workers mutate the working tree via write/edit
       // (+ git_status/git_diff/run), then finish with {workingTree:true}.
@@ -99,6 +100,10 @@ export function effectiveToolProfileId(
   }
   if (isAutoApproveEnabled(cfg)) return "swarm-auto";
   const base = (KNOWN_PROFILES.has(agentName) ? agentName : "swarm") as ToolProfileId;
+  // RR-C PR5: hardcoded swarm-planner without web flags demotes to local read.
+  if (base === "swarm-planner" && !isWebToolsEnabled(cfg)) {
+    return "swarm-read";
+  }
   if (!isWebToolsEnabled(cfg)) return base;
   if (base === "swarm-read") return "swarm-research";
   if (base === "swarm-builder") return "swarm-builder-research";
