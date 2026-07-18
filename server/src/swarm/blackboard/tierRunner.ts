@@ -741,6 +741,26 @@ export async function runAuditedExecution(
       }
       const stuckCycles = ctx.getConsecutiveStuckCycles() + 1;
       ctx.setConsecutiveStuckCycles(stuckCycles);
+      // RR-D: feed cycleIntegrity empty_plan + operator-visible streak lines.
+      try {
+        const { recordEmptyExecutionCycle } = await import("../cycleIntegrityStats.js");
+        const {
+          formatEmptyPlanReason,
+          EMPTY_EXECUTION_LIMIT,
+        } = await import("../emptyExecutionGuard.js");
+        recordEmptyExecutionCycle(ctx.getActive()?.runId);
+        const atLimit = stuckCycles >= EMPTY_EXECUTION_LIMIT;
+        ctx.appendSystem(
+          `[cycle-integrity] empty_execution streak=${stuckCycles}` +
+            (atLimit ? " — limit reached" : ""),
+        );
+        if (atLimit) {
+          const reason = formatEmptyPlanReason(stuckCycles);
+          ctx.appendSystem(`[empty-execution] ${reason}`);
+        }
+      } catch {
+        /* non-fatal */
+      }
       if (isAutonomous && stuckCycles < MAX_STUCK_CYCLES_FOR_INFINITE_RUN) {
         ctx.appendSystem(
           `Stuck cycle ${stuckCycles}/${MAX_STUCK_CYCLES_FOR_INFINITE_RUN} — auditor + planner produced no new work; re-trying in autonomous mode.`,
@@ -753,8 +773,9 @@ export async function runAuditedExecution(
       ctx.appendSystem(stuckDetail + ".");
       try {
         const { notifyGuardTrip } = await import("../guardNotify.js");
+        // Prefer empty-execution kind so Brain RECONFIG matches council standup guard.
         notifyGuardTrip({
-          kind: "tier-stuck",
+          kind: "empty-execution",
           detail: stuckDetail,
           runId: ctx.getActive()?.runId,
           appendSystem: (t, s) => ctx.appendSystem(t, s),
@@ -766,5 +787,12 @@ export async function runAuditedExecution(
       return;
     }
     ctx.setConsecutiveStuckCycles(0);
+    // RR-D: productive / non-empty cycle — reset empty streak in cycleIntegrity.
+    try {
+      const { recordNonEmptyExecutionCycle } = await import("../cycleIntegrityStats.js");
+      recordNonEmptyExecutionCycle(ctx.getActive()?.runId);
+    } catch {
+      /* non-fatal */
+    }
   }
 }

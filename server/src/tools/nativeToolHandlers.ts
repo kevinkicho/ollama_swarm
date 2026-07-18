@@ -389,26 +389,26 @@ function firstShellBinary(command: string): string {
  * Map simple Unix one-liners onto in-process tools so Windows agents don't
  * shell out to missing binaries. Returns null when the command should run as-is.
  */
-async function tryFulfillUnixBashViaTools(
+/** Exported for unit tests — in-process Unix CLI rewrites (esp. Windows). */
+export async function tryFulfillUnixBashViaTools(
   clone: string,
   command: string,
 ): Promise<ToolResult | null> {
   const trimmed = command.trim();
-  // RR-E: allow simple two-step `cmd1 && cmd2` when both rewrite cleanly.
+  // RR-E: allow short `cmd1 && cmd2 [&& cmd3]` chains when each leg rewrites cleanly.
   if (/\n/.test(trimmed)) return null;
   if (/[|;]/.test(trimmed)) return null;
   if (/&&/.test(trimmed)) {
     const parts = trimmed.split(/\s*&&\s*/).map((p) => p.trim()).filter(Boolean);
-    if (parts.length === 2) {
-      const a = await tryFulfillUnixBashViaTools(clone, parts[0]!);
-      if (!a || !a.ok) return a;
-      const b = await tryFulfillUnixBashViaTools(clone, parts[1]!);
-      if (!b) return null;
-      if (!b.ok) return b;
-      return {
-        ok: true,
-        output: [a.output, b.output].filter(Boolean).join("\n"),
-      };
+    if (parts.length >= 2 && parts.length <= 3) {
+      const outs: string[] = [];
+      for (const part of parts) {
+        const r = await tryFulfillUnixBashViaTools(clone, part);
+        if (!r) return null;
+        if (!r.ok) return r;
+        if (r.output) outs.push(r.output);
+      }
+      return { ok: true, output: outs.join("\n") };
     }
     return null;
   }
@@ -450,6 +450,52 @@ async function tryFulfillUnixBashViaTools(
       const n = headM[1] ? Number(headM[1]) : 20;
       const lines = r.output.split("\n").slice(0, Math.max(1, n));
       return { ok: true, output: lines.join("\n") };
+    }
+  }
+
+  // tail [-n N] FILE → last N lines via read
+  const tailM =
+    /^tail(?:\s+-n\s+(\d+))?\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
+  if (tailM) {
+    const p = tailM[2] ?? tailM[3] ?? tailM[4] ?? "";
+    if (p) {
+      const r = await readTool(clone, { path: p });
+      if (!r.ok) return r;
+      const n = tailM[1] ? Number(tailM[1]) : 20;
+      const all = r.output.replace(/\r\n/g, "\n").split("\n");
+      if (all.length > 0 && all[all.length - 1] === "") all.pop();
+      const lines = all.slice(Math.max(0, all.length - Math.max(1, n)));
+      return { ok: true, output: lines.join("\n") };
+    }
+  }
+
+  // wc -l|-w|-c FILE → line/word/byte counts (common thrash on Windows)
+  const wcM =
+    /^wc\s+(-[lwc]+)\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed)
+    || /^wc\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
+  if (wcM) {
+    const flags = (wcM[1]?.startsWith("-") ? wcM[1] : "-lwc").toLowerCase();
+    const p = wcM[1]?.startsWith("-")
+      ? (wcM[2] ?? wcM[3] ?? wcM[4] ?? "")
+      : (wcM[1] ?? wcM[2] ?? wcM[3] ?? "");
+    if (p) {
+      const r = await readTool(clone, { path: p });
+      if (!r.ok) return r;
+      const text = r.output.replace(/\r\n/g, "\n");
+      // GNU wc -l counts newline characters (not split length with trailing empty).
+      const lines = (text.match(/\n/g) ?? []).length;
+      const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+      const bytes = Buffer.byteLength(text, "utf8");
+      const wantL = flags.includes("l");
+      const wantW = flags.includes("w");
+      const wantC = flags.includes("c");
+      // Default bare `wc FILE` → all three (GNU wc style).
+      const showAll = !wantL && !wantW && !wantC;
+      const cols: number[] = [];
+      if (showAll || wantL) cols.push(lines);
+      if (showAll || wantW) cols.push(words);
+      if (showAll || wantC) cols.push(bytes);
+      return { ok: true, output: `${cols.join(" ")}\t${p}` };
     }
   }
 
@@ -559,6 +605,7 @@ function windowsUnixBashHint(binary: string): string {
     head: 'use the swarm **read** tool',
     tail: 'use the swarm **read** tool',
     ls: 'use the swarm **list** tool: {tool:"list", args:{path:"."}}',
+    wc: 'use read + count lines, or `wc -l path` is rewritten in-process when simple',
     which: "use where.exe on Windows, or prefer swarm tools",
   };
   const tip = map[binary] ?? "prefer swarm read/grep/glob/list tools";
