@@ -197,6 +197,8 @@ export function SwarmStoreProvider({ runId, children }: SwarmStoreProviderProps)
               plannerModel: summary.runConfig?.plannerModel,
               workerModel: summary.runConfig?.workerModel,
               agentCount: summary.runConfig?.agentCount,
+              dedicatedAuditor: summary.runConfig?.dedicatedAuditor,
+              topology: summary.runConfig?.topology ?? summary.topology,
               repoUrl: summary.runConfig?.repoUrl,
             },
             "divider-fallback",

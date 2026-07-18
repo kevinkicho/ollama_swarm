@@ -19,7 +19,13 @@ interface ActiveRun {
     workerModel?: string;
     repoUrl?: string;
     clonePath?: string;
+    /**
+     * Legacy blackboard field: non-auditor agents only when dedicatedAuditor.
+     * Prefer topology.agents.length for display (full roster including auditor).
+     */
     agentCount?: number;
+    dedicatedAuditor?: boolean;
+    topology?: { agents?: unknown[] };
   };
   startedAt: number;
   isRunning: boolean;
@@ -29,6 +35,17 @@ interface ActiveRun {
   currentAgentIndex?: number;
   brainInitiated?: boolean;
   brainProposalId?: string;
+}
+
+/** Full roster size for UI — never undercount dedicated auditor on blackboard. */
+function displayAgentRosterCount(cfg: ActiveRun["runConfig"]): number | undefined {
+  const topoN = cfg.topology?.agents?.length;
+  if (typeof topoN === "number" && topoN > 0) return topoN;
+  const n = cfg.agentCount;
+  if (typeof n !== "number" || n <= 0) return undefined;
+  // Legacy blackboard: agentCount is planner+workers only; auditor is +1.
+  if (cfg.dedicatedAuditor === true) return n + 1;
+  return n;
 }
 
 interface ActiveRunsResponse {
@@ -110,13 +127,14 @@ const ActiveRunRow = memo(function ActiveRunRow({
   const elapsed = now - run.startedAt;
   const isBusy = busy?.runId === run.runId;
   const phase = run.phase ?? (run.isRunning ? "running" : "terminated");
+  const rosterN = displayAgentRosterCount(run.runConfig);
   const progress =
     run.earlyStopDetail
       ? run.earlyStopDetail.length > 40
         ? `${run.earlyStopDetail.slice(0, 38)}…`
         : run.earlyStopDetail
       : run.currentAgentIndex != null
-        ? `agent ${run.currentAgentIndex}/${run.runConfig.agentCount ?? "?"}`
+        ? `agent ${run.currentAgentIndex}/${rosterN ?? "?"}`
         : "—";
 
   return (
@@ -130,8 +148,15 @@ const ActiveRunRow = memo(function ActiveRunRow({
         ) : null}
       </td>
       <td className="py-1.5 px-2 text-[11px] text-ink-300">{run.runConfig.preset}</td>
-      <td className="py-1.5 px-2 text-[11px] text-ink-400 tabular-nums">
-        {run.runConfig.agentCount ?? "?"}
+      <td
+        className="py-1.5 px-2 text-[11px] text-ink-400 tabular-nums"
+        title={
+          rosterN != null
+            ? `Full agent roster (${rosterN}). Blackboard legacy agentCount may exclude the dedicated auditor.`
+            : undefined
+        }
+      >
+        {rosterN ?? "?"}
       </td>
       <td className="py-1.5 px-2 text-[11px] text-ink-400 max-w-[10rem] truncate" title={progress}>
         {progress}

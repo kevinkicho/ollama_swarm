@@ -221,12 +221,20 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
       s.setMapperSlices(ev.slices);
       break;
     case "run_started":
+      // Display full roster (topology length). Legacy blackboard agentCount
+      // excludes dedicated auditor — UI "3 agents" vs AGENTS (4) is wrong.
       s.resetForNewRun({
         runId: ev.runId,
         preset: ev.preset,
         plannerModel: ev.plannerModel,
         workerModel: ev.workerModel,
-        agentCount: ev.agentCount,
+        agentCount:
+          (Array.isArray(ev.topology?.agents) && ev.topology.agents.length > 0
+            ? ev.topology.agents.length
+            : undefined)
+          ?? (ev.dedicatedAuditor === true && typeof ev.agentCount === "number"
+            ? ev.agentCount + 1
+            : ev.agentCount),
         repoUrl: ev.repoUrl,
       });
       s.setRunStartedAt(ev.startedAt);

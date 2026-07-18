@@ -54,9 +54,18 @@ export function buildSyntheticRunStartDivider(
     workerModel?: string;
     agentCount?: number;
     repoUrl?: string;
+    dedicatedAuditor?: boolean;
+    topology?: { agents?: unknown[] };
   },
   idPrefix = "divider-hydrate",
 ): TranscriptEntry {
+  const roster =
+    (Array.isArray(meta.topology?.agents) && meta.topology!.agents!.length > 0
+      ? meta.topology!.agents!.length
+      : undefined)
+    ?? (meta.dedicatedAuditor === true && typeof meta.agentCount === "number"
+      ? meta.agentCount + 1
+      : meta.agentCount);
   return {
     id: `${idPrefix}-${Date.now()}`,
     role: "system",
@@ -66,7 +75,8 @@ export function buildSyntheticRunStartDivider(
       `preset=${meta.preset ?? ""}`,
       `plannerModel=${meta.plannerModel ?? ""}`,
       `workerModel=${meta.workerModel ?? ""}`,
-      `agentCount=${meta.agentCount ?? ""}`,
+      // Prefer topology roster length (blackboard agentCount excludes auditor).
+      `agentCount=${roster ?? ""}`,
       `repoUrl=${meta.repoUrl ?? ""}`,
     ].join("|"),
     ts: Date.now(),
@@ -282,6 +292,8 @@ export function applyStatusSnapshotToStore(
         plannerModel: snap.runConfig?.plannerModel,
         workerModel: snap.runConfig?.workerModel,
         agentCount: snap.runConfig?.agentCount,
+        dedicatedAuditor: snap.runConfig?.dedicatedAuditor,
+        topology: snap.runConfig?.topology,
         repoUrl: snap.runConfig?.repoUrl,
       }),
     ]);
