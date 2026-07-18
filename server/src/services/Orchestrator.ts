@@ -4,14 +4,13 @@ import * as nodePath from "node:path";
 import type { AgentManager } from "./AgentManager.js";
 import type { RepoService } from "./RepoService.js";
 import type { AgentState, SwarmEvent, SwarmPhase, SwarmStatus, SwarmStatusRunConfig } from "../types.js";
-import type { PresetId, RunConfig, RunnerOpts, SwarmRunner } from "../swarm/SwarmRunner.js";
+import type { PresetId, RunConfig, SwarmRunner } from "../swarm/SwarmRunner.js";
 
 import { roleForAgent, selectRoleCatalog } from "../swarm/roles.js";
 import { ConformanceMonitor } from "./ConformanceMonitor.js";
 import { EmbeddingDriftMonitor } from "./EmbeddingDriftMonitor.js";
 import { tokenTracker } from "./ollamaProxy.js";
 import { setupConformanceAndDriftMonitors as setupConformanceAndDriftMonitorsExtracted } from "./orchestratorMonitors.js";
-import { createWrappedEmit as createWrappedEmitExtracted } from "./orchestratorEmit.js";
 import { AmendmentsBuffer, type Amendment } from "./AmendmentsBuffer.js";
 import {
   applyRunReconfig,
@@ -24,7 +23,7 @@ import { config } from "../config.js";
 import { createLogger, rootLogger } from "./logger.js";
 import { ActiveRun } from "./ActiveRun.js";
 import { RunEventHub } from "./RunEventHub.js";
-import { prepareResearchConfig, isResearchRun } from "../swarm/researchHelpers.js";
+import { isResearchRun } from "../swarm/researchHelpers.js";
 import { BrainIntegration } from "./BrainIntegration.js";
 import {
   mergeKnownParents,
@@ -37,6 +36,10 @@ import {
 } from "./knownParents.js";
 import { statusForRun as statusForRunExtracted } from "./statusForRun.js";
 import { buildSwarmStatusRunConfig } from "./orchestratorRunConfig.js";
+import {
+  buildRunner as buildRunnerExtracted,
+  type BuildRunnerContext,
+} from "./orchestratorBuildRunner.js";
 
 // Re-export pure helpers for existing tests (Orchestrator.test.ts).
 export { mergeKnownParents, scanForRunParents, KNOWN_PARENTS_MAX };
@@ -73,17 +76,6 @@ export interface OrchestratorOpts {
    *  hits this number, start() throws "cap reached". The route layer
    *  reads config.SWARM_MAX_CONCURRENT_RUNS to set this. */
   maxConcurrentRuns?: number;
-}
-
-/** Per-run context threaded into buildRunner so wrappedEmit and the
- *  runner's AgentManager stay bound to one runId under concurrency. */
-interface BuildRunnerContext {
-  runId: string;
-  startedAt: number;
-  persister: RunStatePersister;
-  manager: AgentManager;
-  getRunner: () => SwarmRunner;
-  hub?: RunEventHub;
 }
 
 // Re-exported so callers (routes/swarm.ts, index.ts) don't have to reach into
@@ -1101,88 +1093,23 @@ export class Orchestrator {
     });
   }
 
-  private createWrappedEmit(params: {
-    runId: string;
-    startedAt: number;
-    cfg: RunConfig;
-    persister: RunStatePersister;
-    hub?: RunEventHub;
-    getRunner: () => SwarmRunner;
-  }): (e: SwarmEvent) => void {
-    return createWrappedEmitExtracted({
-      ...params,
-      baseEmit: this.opts.emit,
-      brain: this.brain,
-      amendments: this.amendments,
-    });
-  }
-
   private async buildRunner(
     preset: PresetId,
     cfg: RunConfig,
     ctx: BuildRunnerContext,
   ): Promise<SwarmRunner> {
-    const originalCfg = cfg;
-    // Carved research helper: normalize for scientific/internet use cases
-    cfg = prepareResearchConfig(cfg);
-    const { runId, startedAt, persister, manager, getRunner } = ctx;
-    // #299: thread getAmendments into runner opts so each runner can
-    // read live HITL nudges. Bound to this run's id — safe under
-    // concurrent runs (no activeRun getter).
-    // Deeper extract: the event wrapping + persistence scheduling is now its own method.
-    // This keeps buildRunner smaller and makes the "emit + snapshot" lifecycle easier to test/refactor.
-    const wrappedEmit = this.createWrappedEmit({
-      runId,
-      startedAt,
+    return buildRunnerExtracted(
+      {
+        repos: this.opts.repos,
+        emit: this.opts.emit,
+        logDiag: this.opts.logDiag,
+        ollamaBaseUrl: this.opts.ollamaBaseUrl,
+        brain: this.brain,
+        amendments: this.amendments,
+      },
+      preset,
       cfg,
-      persister,
-      hub: ctx.hub,
-      getRunner,
-    });
-    const opts: RunnerOpts = this.createRunnerOpts(runId, manager, wrappedEmit, cfg);
-
-    const { createRunner } = await import("../swarm/presetRouter.js");
-    // Unified factory (role-diff / baseline multi / pipeline via hooks).
-    const roles =
-      preset === "role-diff"
-        ? selectRoleCatalog({
-            customRoles: cfg.roles,
-            userDirective: cfg.userDirective,
-            dynamicRoles: cfg.dynamicRoles,
-          })
-        : undefined;
-    return createRunner(cfg, opts, {
-      rolesForRoleDiff: roles,
-      baselineMultiAttempt: preset === "baseline" && (cfg.baselineAttempts ?? 1) > 1,
-      pipelineFactory:
-        preset === "pipeline"
-          ? async (p: PresetId) => this.buildRunner(p, cfg, ctx)
-          : undefined,
-    });
-  }
-
-  /**
-   * Extracted runner opts builder (deeper refactor slice for orchestrator).
-   * Centralizes common wiring (amendments, brain guard, logging) so buildRunner
-   * and callers stay lean. Supports future per-preset overrides.
-   */
-  private createRunnerOpts(
-    runId: string,
-    manager: any,
-    wrappedEmit: any,
-    cfg: RunConfig
-  ): RunnerOpts {
-    return {
-      manager,
-      repos: this.opts.repos,
-      emit: wrappedEmit,
-      logDiag: this.opts.logDiag,
-      ollamaBaseUrl: this.opts.ollamaBaseUrl,
-      getAmendments: () => this.amendments.list(runId),
-      // Brain enablement controlled only by enableBrainAnalysis.
-      getBrainService: (cfg.enableBrainAnalysis === false)
-        ? () => null
-        : () => this.brain.getService(),
-    };
+      ctx,
+    );
   }
 }

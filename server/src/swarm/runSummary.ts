@@ -519,6 +519,30 @@ export function buildRunFinishedSummary(summary: RunSummary): TranscriptEntrySum
     // Task #163: forward run-level token totals from the summary.
     totalPromptTokens: summary.totalPromptTokens,
     totalResponseTokens: summary.totalResponseTokens,
+    // Apply integrity for run-finished grid (recovered det/llm vs terminal miss).
+    ...(summary.applyIntegrity
+      ? {
+          applyIntegrity: {
+            attempts: summary.applyIntegrity.attempts,
+            applied: summary.applyIntegrity.applied,
+            missByKind: { ...summary.applyIntegrity.missByKind },
+            repairSuccesses: summary.applyIntegrity.repairSuccesses,
+            repairFailures: summary.applyIntegrity.repairFailures,
+            ...(summary.applyIntegrity.missRecoveredDet != null &&
+            summary.applyIntegrity.missRecoveredDet > 0
+              ? { missRecoveredDet: summary.applyIntegrity.missRecoveredDet }
+              : {}),
+            ...(summary.applyIntegrity.missRecoveredLlm != null &&
+            summary.applyIntegrity.missRecoveredLlm > 0
+              ? { missRecoveredLlm: summary.applyIntegrity.missRecoveredLlm }
+              : {}),
+            ...(summary.applyIntegrity.missTerminal != null &&
+            summary.applyIntegrity.missTerminal > 0
+              ? { missTerminal: summary.applyIntegrity.missTerminal }
+              : {}),
+          },
+        }
+      : {}),
     // Phase 1: carry composite phase data (additive)
     ...( (summary as any).currentPhase ? { currentPhase: (summary as any).currentPhase } : {} ),
     ...( (summary as any).phases ? { phases: (summary as any).phases } : {} ),

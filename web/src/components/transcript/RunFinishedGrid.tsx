@@ -93,6 +93,42 @@ export function RunFinishedGrid({
           <Tile label="Tokens out" value={fmtTokensCompact(s.totalResponseTokens)} accent="text-violet-300" />
         ) : null}
       </div>
+      {s.applyIntegrity ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+          <Tile
+            label="Apply"
+            value={`${s.applyIntegrity.applied}/${s.applyIntegrity.attempts}`}
+            accent="text-sky-300"
+          />
+          {(s.applyIntegrity.missRecoveredDet ?? 0) > 0 ? (
+            <Tile
+              label="Recovered det"
+              value={s.applyIntegrity.missRecoveredDet!}
+              accent="text-emerald-300"
+            />
+          ) : null}
+          {(s.applyIntegrity.missRecoveredLlm ?? 0) > 0 ? (
+            <Tile
+              label="Recovered llm"
+              value={s.applyIntegrity.missRecoveredLlm!}
+              accent="text-emerald-300"
+            />
+          ) : null}
+          {(s.applyIntegrity.missTerminal ?? 0) > 0 ? (
+            <Tile
+              label="Terminal miss"
+              value={s.applyIntegrity.missTerminal!}
+              accent="text-rose-300"
+            />
+          ) : null}
+          {s.applyIntegrity.repairSuccesses > 0 ? (
+            <Tile label="Repair ✓" value={s.applyIntegrity.repairSuccesses} accent="text-emerald-300" />
+          ) : null}
+          {s.applyIntegrity.repairFailures > 0 ? (
+            <Tile label="Repair ✗" value={s.applyIntegrity.repairFailures} accent="text-rose-300" />
+          ) : null}
+        </div>
+      ) : null}
       <AgentStatsTable
         label={`Per-agent (${s.agents.length})`}
         rows={rowsFromRunFinishedAgents(s.agents)}

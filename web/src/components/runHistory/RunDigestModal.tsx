@@ -214,6 +214,15 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
                     {summary.applyIntegrity.repairFailures > 0
                       ? ` · repair ✗${summary.applyIntegrity.repairFailures}`
                       : ""}
+                    {(summary.applyIntegrity.missRecoveredDet ?? 0) > 0
+                      ? ` · recovered det ${summary.applyIntegrity.missRecoveredDet}`
+                      : ""}
+                    {(summary.applyIntegrity.missRecoveredLlm ?? 0) > 0
+                      ? ` · recovered llm ${summary.applyIntegrity.missRecoveredLlm}`
+                      : ""}
+                    {(summary.applyIntegrity.missTerminal ?? 0) > 0
+                      ? ` · terminal miss ${summary.applyIntegrity.missTerminal}`
+                      : ""}
                     {Object.keys(summary.applyIntegrity.missByKind ?? {}).length > 0
                       ? ` · misses: ${Object.entries(summary.applyIntegrity.missByKind)
                           .map(([k, n]) => `${k}=${n}`)

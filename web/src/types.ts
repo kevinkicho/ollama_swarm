@@ -256,6 +256,12 @@ export interface RunSummary {
     missByKind: Record<string, number>;
     repairSuccesses: number;
     repairFailures: number;
+    /** First-pass misses recovered via deterministic uniqueCandidates. */
+    missRecoveredDet?: number;
+    /** First-pass misses recovered via LLM grounded repair. */
+    missRecoveredLlm?: number;
+    /** Misses that remained terminal after recovery. */
+    missTerminal?: number;
   };
   /** Cycle fail taxonomy + empty-execution streaks (optional, RR-D). */
   cycleIntegrity?: {

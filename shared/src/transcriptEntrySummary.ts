@@ -153,6 +153,17 @@ export type TranscriptEntrySummary =
       // tokenTracker.recent filtered by run window).
       totalPromptTokens?: number;
       totalResponseTokens?: number;
+      /** Apply/repair integrity (optional; council/blackboard apply paths). */
+      applyIntegrity?: {
+        attempts: number;
+        applied: number;
+        missByKind: Record<string, number>;
+        repairSuccesses: number;
+        repairFailures: number;
+        missRecoveredDet?: number;
+        missRecoveredLlm?: number;
+        missTerminal?: number;
+      };
       agents: Array<{
         agentIndex: number;
         role: string;
