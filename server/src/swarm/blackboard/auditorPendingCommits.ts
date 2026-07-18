@@ -13,6 +13,8 @@ import {
   recordDeliberationAsync,
   type DeliberationSink,
 } from "../deliberation/deliberationLog.js";
+export { validateProposedHunksStructural } from "./hunkStructuralValidate.js";
+import { validateProposedHunksStructural } from "./hunkStructuralValidate.js";
 
 function deliberationSink(ctx: AuditorContext): DeliberationSink {
   return {
@@ -51,6 +53,86 @@ export function batchAdvancesUnmetCriteria(
   };
 }
 
+/**
+ * Best-effort apply of pending-commit hunks on user-stop so ready work
+ * (e.g. 3d0aceba t6 DataProvider fix) is not abandoned mid-flight.
+ * Structural gate still applies; no LLM review (time-boxed stop path).
+ */
+export async function drainPendingCommitsOnStop(ctx: {
+  boardListTodos: () => Todo[];
+  getActive: () => { autoApprove?: boolean; localPath?: string; runId?: string } | undefined;
+  appendSystem: (msg: string) => void;
+  wrappers: {
+    approveCommitQ: (id: string) => void;
+    rejectCommitQ: (id: string, reason: string) => void;
+  };
+  applyHunksAndCommit?: (
+    hunks: readonly unknown[],
+    files: readonly string[],
+    message: string,
+    options?: { skipCommit?: boolean },
+  ) => Promise<{ ok: boolean; reason?: string; filesWritten?: string[] }>;
+}): Promise<void> {
+  const pending = ctx.boardListTodos().filter((t) => t.status === "pending-commit");
+  if (pending.length === 0) return;
+  ctx.appendSystem(
+    `[stop-drain] Applying ${pending.length} pending-commit todo(s) before hard stop…`,
+  );
+  const applyFn = ctx.applyHunksAndCommit;
+  if (!applyFn) {
+    ctx.appendSystem("[stop-drain] no apply fn — leaving pending-commit as-is");
+    return;
+  }
+  let applied = 0;
+  for (const todo of pending) {
+    const hunks = (todo as { proposedHunks?: unknown[] }).proposedHunks ?? [];
+    const files =
+      (todo as { proposedFiles?: string[] }).proposedFiles ?? todo.expectedFiles ?? [];
+    if (!hunks.length || !files.length) {
+      try {
+        ctx.wrappers.rejectCommitQ(todo.id, "stop-drain: no hunks/files");
+      } catch { /* */ }
+      continue;
+    }
+    const structural = validateProposedHunksStructural(hunks as Record<string, unknown>[]);
+    if (!structural.ok) {
+      try {
+        ctx.wrappers.rejectCommitQ(todo.id, `stop-drain structural: ${structural.reason}`);
+      } catch { /* */ }
+      ctx.appendSystem(
+        `[stop-drain] skipped ${todo.id.slice(0, 8)}: ${structural.reason}`,
+      );
+      continue;
+    }
+    try {
+      const res = await applyFn(
+        hunks,
+        files,
+        `[stop-drain] ${todo.description.slice(0, 80)}`,
+        { skipCommit: false },
+      );
+      if (res.ok) {
+        try {
+          ctx.wrappers.approveCommitQ(todo.id);
+        } catch { /* already applied */ }
+        applied += 1;
+        ctx.appendSystem(`[stop-drain] ✓ applied ${todo.id.slice(0, 8)}`);
+      } else {
+        try {
+          ctx.wrappers.rejectCommitQ(todo.id, `stop-drain apply failed: ${res.reason ?? "unknown"}`);
+        } catch { /* */ }
+        ctx.appendSystem(
+          `[stop-drain] ✗ ${todo.id.slice(0, 8)}: ${res.reason ?? "apply failed"}`,
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.appendSystem(`[stop-drain] ✗ ${todo.id.slice(0, 8)}: ${msg.slice(0, 160)}`);
+    }
+  }
+  ctx.appendSystem(`[stop-drain] done — applied ${applied}/${pending.length}`);
+}
+
 /** Review pending-commit todos and approve/reject each one.
  *  Called before applyAuditorResult so the auditor can evaluate
  *  proposed hunks before assessing contract criteria. */
@@ -85,6 +167,19 @@ export async function reviewPendingCommits(
         const msg = e instanceof Error ? e.message : String(e);
         ctx.appendSystem(`[auditor-gate] hunk review prompt failed: ${msg}`);
         approval = { approve: false, reason: msg };
+      }
+    }
+
+    // Even under autoApprove: structural/syntax gate. 3d0aceba shipped
+    // broken SEARCH_INDEX (orphan comma) and `<component />` instead of
+    // `<Component />` because autoApprove skipped LLM review entirely.
+    if (approval.approve && hunks.length > 0) {
+      const structural = validateProposedHunksStructural(hunks as any[]);
+      if (!structural.ok) {
+        approval = { approve: false, reason: structural.reason };
+        ctx.appendSystem(
+          `[auditor-gate] structural reject for ${todo.id.slice(0, 8)}: ${structural.reason}`,
+        );
       }
     }
 

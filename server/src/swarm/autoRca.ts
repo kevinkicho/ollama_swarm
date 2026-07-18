@@ -81,8 +81,16 @@ export function generateRca(input: RcaInput): RcaReport {
     primaryCause = `Run died after ${(durationMs / 1000).toFixed(1)}s — likely startup failure`;
   } else if (commitsLanded === 0) {
     primaryCause = `Run completed all turns but produced 0 commits`;
+  } else if (
+    /user|user-stop|stopped/i.test(String(terminationReason ?? finalPhase))
+  ) {
+    primaryCause =
+      `User stop — phase=${finalPhase}, ${commitsLanded} commit(s), tier ${tier}` +
+      (errors.length > 0
+        ? ` (${errors.length} classified error(s) before stop)`
+        : "");
   } else {
-    primaryCause = `Unknown — phase=${finalPhase}, ${commitsLanded} commits, tier ${tier}`;
+    primaryCause = `Incomplete run — phase=${finalPhase}, ${commitsLanded} commits, tier ${tier}`;
   }
   const secondaryCauses = ranked
     .slice(1, 4)
@@ -184,10 +192,19 @@ function buildRecommendation(input: {
   if (input.commitsLanded === 0 && input.tier === 0 && input.durationMs > 60_000) {
     return "Run finished without producing artifacts — try a smaller, more concrete directive or raise the rounds cap.";
   }
+  if (/user|user-stop/i.test(String(input.terminationReason ?? ""))) {
+    return (
+      "User stopped the run — check pending-commit drain, skipped todos (tool-loop / pure-think), " +
+      "and whether autoApprove shipped unreviewed hunks. Resume with a focused re-run on unmet criteria."
+    );
+  }
   if (input.terminationReason) {
     return `Termination reason was "${input.terminationReason}" — review the transcript for context.`;
   }
-  return "Re-run with --debug for finer-grained diagnostics.";
+  if (input.ranked.some(([c]) => c === "model-output")) {
+    return "Malformed/empty model outputs dominated — switch worker models or enable sibling failover for pure-think failures.";
+  }
+  return "Review skipped todos and stream/transcript-cap events in the run summary; re-run with a narrower directive if needed.";
 }
 
 function renderMarkdown(input: {

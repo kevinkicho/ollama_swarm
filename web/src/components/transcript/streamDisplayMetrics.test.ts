@@ -12,9 +12,9 @@ test("streamWaitingSubtitle — 60s+ warns no bytes yet", () => {
   assert.equal(sub, "contract draft · 86s · no bytes yet…");
 });
 
-test("streamWaitingSubtitle — 120s+ warns provider stall", () => {
+test("streamWaitingSubtitle — 120s+ waits for first token (not provider stall)", () => {
   const sub = streamWaitingSubtitle(130_000, { label: "contract draft" });
-  assert.equal(sub, "contract draft · 130s · provider stall…");
+  assert.equal(sub, "contract draft · 130s · waiting for first token…");
 });
 
 test("streamLiveSubtitle — reasoning-only includes wall-clock elapsed", () => {

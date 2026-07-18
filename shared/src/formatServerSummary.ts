@@ -150,7 +150,12 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
   }
   if (s.kind === "stream_integrity") {
     const tags = s.anomalyKinds.length > 0 ? s.anomalyKinds.join(", ") : "anomaly";
-    return `Stream integrity · ${s.agentId} · ${tags} (${s.rawChars.toLocaleString()} → ${s.finalChars.toLocaleString()} chars)`;
+    const isStorage = s.anomalyKinds.some((k) => /hard_truncate|truncate/i.test(k))
+      && !s.anomalyKinds.some((k) => /loop|collapse/i.test(k));
+    if (isStorage) {
+      return `Transcript cap · ${s.agentId} · ${tags} (storage only)`;
+    }
+    return `Output policy · ${s.agentId} · ${tags} (${s.rawChars.toLocaleString()} → ${s.finalChars.toLocaleString()} chars)`;
   }
   if (s.kind === "planner_brief") {
     const label = s.variant === "goal_analysis" ? "Goal analysis" : "Research brief";

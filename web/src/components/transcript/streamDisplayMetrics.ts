@@ -88,7 +88,10 @@ export function streamWaitingSubtitle(
     return opts.reason ? `retrying ${sec}s · ${opts.reason}` : `retrying ${sec}s…`;
   }
   const task = opts.label?.trim() ?? "prompt";
-  if (sec >= 120) return `${task} · ${sec}s · provider stall…`;
+  // Do not claim "provider stall" / "not responding" — long TTFT is normal
+  // for cloud models and pure-think workers (a12daea8). The provider is often
+  // still generating; we simply have no first token yet.
+  if (sec >= 120) return `${task} · ${sec}s · waiting for first token…`;
   if (sec >= 60) return `${task} · ${sec}s · no bytes yet…`;
   return `${task} · ${sec}s…`;
 }

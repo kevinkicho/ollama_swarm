@@ -70,6 +70,14 @@ describe("toolProfiles", () => {
     assert.equal(EMIT_ONLY_PROFILE_ID, "swarm");
   });
 
+  it("emit-only profile is not elevated under autoApprove", () => {
+    assert.equal(
+      effectiveToolProfileId(EMIT_ONLY_PROFILE_ID, { autoApprove: true }),
+      EMIT_ONLY_PROFILE_ID,
+    );
+    assert.equal(effectiveToolProfileId("swarm", { autoApprove: true, webTools: true }), "swarm");
+  });
+
   it("resolveMaxToolTurnsForProfile tiers caps by profile", () => {
     assert.equal(EXPLORE_MAX_TOOL_TURNS, 100);
     assert.equal(resolveMaxToolTurnsForProfile("swarm-planner"), 100);

@@ -28,7 +28,8 @@ export interface StreamIntegrityReport {
   hadHardTruncate: boolean;
 }
 
-const STREAM_INTEGRITY_RE = /^\[stream-integrity\]\s+(\S+):\s+(.+)$/i;
+// Accept both legacy [stream-integrity] and new [transcript-cap] prefixes.
+const STREAM_INTEGRITY_RE = /^\[(?:stream-integrity|transcript-cap)\]\s+(\S+):\s+(.+)$/i;
 const MAX_EVENTS = 40;
 
 export type TranscriptLike = {
@@ -68,11 +69,12 @@ export function collectStreamIntegrityReport(
       const detail = m[2] ?? "";
       agents.add(agentId);
       if (/collapsed|loop/i.test(detail)) hadLoopCollapse = true;
-      if (/hard-truncated|truncated/i.test(detail)) hadHardTruncate = true;
+      if (/hard-truncated|storage-capped|truncated/i.test(detail)) hadHardTruncate = true;
       if (events.length < MAX_EVENTS) {
+        const isLoop = /loop|collapsed/i.test(detail);
         events.push({
           agentId,
-          kind: hadLoopCollapse && /loop/i.test(detail) ? "loop" : "integrity",
+          kind: isLoop ? "loop" : /storage-capped|hard-truncated|truncated/i.test(detail) ? "storage_cap" : "integrity",
           detail: detail.slice(0, 400),
           ts: e.ts,
         });

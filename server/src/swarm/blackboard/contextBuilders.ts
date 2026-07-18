@@ -218,6 +218,62 @@ export function lifecycleContext(r: BlackboardRunnerFields): LifecycleContext {
     clearPheromoneHeatmap: () => {
       r.pheromoneHeatmap?.clear?.();
     },
+    drainPendingCommitsOnStop: async () => {
+      const { drainPendingCommitsOnStop } = await import("./auditorPendingCommits.js");
+      const applyHunksAndCommit = async (
+        hunks: readonly unknown[],
+        files: readonly string[],
+        message: string,
+        options?: { skipCommit?: boolean },
+      ) => {
+        const { applyAndCommit } = await import("./WorkerPipeline.js");
+        const { realFilesystemAdapter, realGitAdapter, isGitRepository } = await import("./v2Adapters.js");
+        const clonePath = r.active?.localPath ?? "";
+        const fs = realFilesystemAdapter(clonePath);
+        const git = realGitAdapter(clonePath);
+        const gitCommitOptional = !(await isGitRepository(clonePath));
+        const result = await applyAndCommit({
+          todoId: "stop-drain",
+          workerId: "auditor",
+          expectedFiles: files,
+          hunks: hunks as import("./applyHunks.js").Hunk[],
+          fs,
+          git,
+          auditorApproved: true,
+          skipCommit: options?.skipCommit,
+          gitCommitOptional,
+          runId: r.active?.runId,
+          clonePath,
+        });
+        if (result.ok) {
+          const auditorId = r.auditor?.id ?? "auditor";
+          const added = (result as { linesAdded?: number }).linesAdded ?? 0;
+          const removed = (result as { linesRemoved?: number }).linesRemoved ?? 0;
+          if (added || removed) {
+            r.linesAddedPerAgent.set(
+              auditorId,
+              (r.linesAddedPerAgent.get(auditorId) ?? 0) + added,
+            );
+            r.linesRemovedPerAgent.set(
+              auditorId,
+              (r.linesRemovedPerAgent.get(auditorId) ?? 0) + removed,
+            );
+          }
+        }
+        return {
+          ok: result.ok,
+          reason: result.ok ? undefined : (result as { reason?: string }).reason,
+          filesWritten: (result as { filesWritten?: string[] }).filesWritten,
+        };
+      };
+      await drainPendingCommitsOnStop({
+        boardListTodos: () => r.boardListTodos(),
+        getActive: () => r.active,
+        appendSystem: (msg) => r.appendSystem(msg),
+        wrappers: r.wrappers,
+        applyHunksAndCommit,
+      });
+    },
     stopQueueReaper: () => r.stopQueueReaper(),
     stopCapWatchdog: () => r.stopCapWatchdog(),
     stopReplanWatcher: () => r.stopReplanWatcher(),
@@ -263,7 +319,10 @@ export function contractContext(r: BlackboardRunnerFields): ContractContext {
     getAuditor: () => r.auditor,
     emitAgentState: (s: AgentState) => r.emitAgentState(s),
     manager: r.opts.manager,
-    getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
+    getPlannerFallbackModel: () =>
+      r.active?.workerFallbackModel
+      ?? r.active?.plannerFallbackModel
+      ?? r.active?.providerFailover?.[0],
     updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
     setContractDerivationFailure: (reason: string | undefined) => { r.contractDerivationFailure = reason; },
     promptPlannerSafely: (
@@ -365,7 +424,10 @@ export function plannerContext(r: BlackboardRunnerFields): PlannerContext {
     getContract: () => r.contract,
     getActive: () => r.active ?? undefined,
     isStopping: () => r.lifecycleState === "stopping",
-    getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
+    getPlannerFallbackModel: () =>
+      r.active?.workerFallbackModel
+      ?? r.active?.plannerFallbackModel
+      ?? r.active?.providerFailover?.[0],
     updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
     emit: (e: SwarmEvent) => r.opts.emit(e),
     appendSystem: (msg: string) => r.appendSystem(msg),
@@ -471,7 +533,10 @@ export function workerContext(r: BlackboardRunnerFields): WorkerContext {
     getPheromoneHeatmap: () => r.pheromoneHeatmap,
     brainPromptFn: brainEnabled() ? r.brainPromptFn.bind(r) : undefined,
     updateAgentModel: (agentId: string, model: string) => { r.opts.manager.updateAgentModel(agentId, model); },
-    getPlannerFallbackModel: () => r.active?.plannerFallbackModel,
+    getPlannerFallbackModel: () =>
+      r.active?.workerFallbackModel
+      ?? r.active?.plannerFallbackModel
+      ?? r.active?.providerFailover?.[0],
     // Plan 4: brain system overseer — wire tracker/collector to worker context
     recordInteraction: (type: string, todoId: string, agentId: string, reason: string) => {
       const tracker = r.interactionTracker;
@@ -645,6 +710,27 @@ export function auditorContext(r: BlackboardRunnerFields): AuditorContext {
       runId: r.active?.runId,
       clonePath,
     });
+    // Attribute line deltas to the auditor agent (batch path). Previously
+    // WorkerPipeline computed linesAdded/Removed but nobody called
+    // addLinesPerAgent → run_finished always showed +0/−0.
+    if (result.ok) {
+      const auditorId = r.auditor?.id ?? "auditor";
+      const added = (result as { linesAdded?: number }).linesAdded ?? 0;
+      const removed = (result as { linesRemoved?: number }).linesRemoved ?? 0;
+      if (added || removed) {
+        r.linesAddedPerAgent.set(
+          auditorId,
+          (r.linesAddedPerAgent.get(auditorId) ?? 0) + added,
+        );
+        r.linesRemovedPerAgent.set(
+          auditorId,
+          (r.linesRemovedPerAgent.get(auditorId) ?? 0) + removed,
+        );
+      }
+      if (!options?.skipCommit && (result as { commitSha?: string }).commitSha) {
+        bumpAgentCounter(r.commitsPerAgent, auditorId);
+      }
+    }
     return { 
       ok: result.ok, 
       reason: result.ok ? undefined : result.reason,

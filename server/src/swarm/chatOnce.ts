@@ -139,8 +139,15 @@ async function chatOnceOnce(
     // spawnAgent) so callers don't have to plumb it through
     // explicitly. Override via opts.clonePath when needed.
     const clonePath = opts.clonePath ?? agent.cwd;
-    const tools =
-      opts.toolsOverride && opts.toolsOverride.length > 0
+    // maxToolTurns <= 0 means emit-only: no tool iterations. Callers often
+    // still pass a tool-capable profile (replan/worker emit). If tools stay
+    // attached with maxToolTurns=0, Ollama's tool loop runs 0 turns and
+    // fails with "tool loop exceeded 0 turns" without ever generating text
+    // (runs 3d0aceba / a12daea8 replan permanent-skips).
+    const emitOnlyNoTools = opts.maxToolTurns !== undefined && opts.maxToolTurns <= 0;
+    const tools = emitOnlyNoTools
+      ? []
+      : opts.toolsOverride && opts.toolsOverride.length > 0
         ? [...opts.toolsOverride]
         : clonePath && profileForTools
           ? defaultToolsForProfile(profileForTools)

@@ -24,8 +24,9 @@
  *  - An UNCLOSED <think> at the end is treated as a thought (model
  *    likely crashed mid-thought; better to surface as collapsed
  *    thought than as raw text with a stray opening tag).
- *  - If extraction empties the final text entirely, return the
- *    ORIGINAL text as finalText so the bubble doesn't render empty.
+ *  - If extraction empties the final text but thoughts remain (pure-think),
+ *    finalText is "" — callers render thoughts separately. Do not re-inject
+ *    the original tagged raw (that duplicated storage / false integrity caps).
  *  - No <think> tags at all → thoughts="", finalText=input verbatim.
  */
 export function extractThinkTags(text: string): {
@@ -76,13 +77,22 @@ export function extractThinkTags(text: string): {
   // Collapse the whitespace introduced by removed <think> blocks.
   // Two newlines max in a row keeps paragraph structure intact.
   const finalText = stripped.replace(/\n{3,}/g, "\n\n").trim();
+  const thoughtsJoined = thoughts.join("\n\n---\n\n");
+
+  // Pure-think responses: do NOT fall back to the original tagged raw.
+  // Re-injecting raw <think>… into finalText (old behavior) duplicated
+  // ~30k into body + thoughts, tripped "stream integrity" hard-caps on
+  // thoughts while the body still showed the full think dump (a12daea8 /
+  // 3d0aceba). Callers render thoughts separately; empty body is fine.
+  if (finalText.length === 0 && thoughtsJoined.length > 0) {
+    return { thoughts: thoughtsJoined, finalText: "" };
+  }
 
   return {
-    thoughts: thoughts.join("\n\n---\n\n"),
-    // If extraction emptied everything, fall back to the original
-    // text — the bubble must render SOMETHING. The thoughts block
-    // still surfaces the same content (with the tags stripped
-    // visible), so the user isn't worse off than pre-fix.
+    thoughts: thoughtsJoined,
+    // No think markers produced content and strip emptied body without
+    // thoughts — keep prior fallback so the bubble is never blank for
+    // weird partial tags with no extractable body.
     finalText: finalText.length > 0 ? finalText : text,
   };
 }

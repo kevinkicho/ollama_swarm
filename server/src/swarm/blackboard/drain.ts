@@ -135,6 +135,20 @@ export async function stop(ctx: LifecycleContext): Promise<void> {
     clearInterval(ctx.getDrainWatcherTimer()!);
     ctx.setDrainWatcherTimer(undefined);
   }
+
+  // Drain pending-commit todos before aborting prompts (3d0aceba abandoned
+  // a ready DataProvider fix at pending-commit on user-stop). Best-effort;
+  // failures never block stop.
+  try {
+    if (typeof ctx.drainPendingCommitsOnStop === "function") {
+      await ctx.drainPendingCommitsOnStop();
+    }
+  } catch (err) {
+    ctx.appendSystem(
+      `⚠ stop drain pending-commit failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
   for (const ctrl of ctx.getActiveAborts()) {
     try {
       ctrl.abort(new Error("user stop"));

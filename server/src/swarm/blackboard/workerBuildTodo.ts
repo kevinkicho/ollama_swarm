@@ -102,10 +102,26 @@ export async function executeBuildTodo(
 
   const dirty = await ctx.gitStatus(clonePath);
   if (!dirty.changedFiles || dirty.changedFiles === 0) {
+    // Parse exit / ok from worker JSON so replan doesn't treat environment
+    // failures (server down, tests red) as permanent no-op thrash.
+    let exitHint = "";
+    try {
+      const m = response.match(/"ok"\s*:\s*(false|true)/i);
+      const ec = response.match(/"exitCode"\s*:\s*(-?\d+)/);
+      const sum = response.match(/"summary"\s*:\s*"([^"]{0,120})"/);
+      if (m?.[1]?.toLowerCase() === "false" || (ec && Number(ec[1]) !== 0)) {
+        exitHint = ` command failed (ok=${m?.[1] ?? "?"}, exit=${ec?.[1] ?? "?"}${sum?.[1] ? `, ${sum[1]}` : ""})`;
+      }
+    } catch { /* ignore */ }
     ctx.appendSystem(
-      `[${agent.id}] build command ran but working tree is clean — marking todo stale.`,
+      `[${agent.id}] build command ran but working tree is clean${exitHint} — marking todo stale.`,
     );
-    ctx.getWrappers().failTodoQ(todo.id, "build command produced no file changes");
+    ctx.getWrappers().failTodoQ(
+      todo.id,
+      exitHint
+        ? `build command produced no file changes —${exitHint.trim()}`
+        : "build command produced no file changes",
+    );
     return "stale";
   }
 

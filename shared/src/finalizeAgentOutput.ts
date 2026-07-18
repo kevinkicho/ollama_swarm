@@ -68,9 +68,19 @@ function hardCap(
 function looksLikeJsonEnvelope(text: string): boolean {
   const t = text.trim();
   if (!t) return false;
+  // Pure-think leftovers / planning prose often contain `{` `[` inside
+  // narrative — require a JSON-ish start (or fenced JSON) so worker
+  // suppress still fires on pure-think dumps (a12daea8).
   if (t.startsWith("{") || t.startsWith("[")) return true;
-  if (/```(?:json)?/i.test(t) && /[{[]/.test(t)) return true;
-  return /"hunks"\s*:/.test(t) || /"todos"\s*:/.test(t) || /"missionStatement"\s*:/.test(t);
+  if (/```(?:json)?\s*[\r\n]*\s*[{[]/i.test(t)) return true;
+  // Key present near the start of the body (not buried in 30k of plan text).
+  const head = t.slice(0, 400);
+  return (
+    /"hunks"\s*:/.test(head)
+    || /"todos"\s*:/.test(head)
+    || /"missionStatement"\s*:/.test(head)
+    || /"verdicts"\s*:/.test(head)
+  );
 }
 
 /**
@@ -112,7 +122,13 @@ export function finalizeAgentOutput(
     }
   }
 
-  if (opts.role === "worker" && finalText.length > 400 && !looksLikeJsonEnvelope(finalText)) {
+  // Pure-think: body empty after strip, huge thoughts — surface a short
+  // placeholder so UI doesn't look empty and stream-integrity isn't the
+  // only signal.
+  if (!finalText.trim() && thoughts.length > 400) {
+    finalText =
+      `(thinking-only response — ${thoughts.length.toLocaleString()} chars of reasoning, no JSON body)`;
+  } else if (opts.role === "worker" && finalText.length > 400 && !looksLikeJsonEnvelope(finalText)) {
     const salvage = finalText.slice(0, 280).replace(/\s+/g, " ").trim();
     finalText =
       `(worker response had no JSON hunk envelope after strip — ${finalText.length.toLocaleString()} chars suppressed)\n` +
@@ -153,6 +169,8 @@ export function formatFinalizeAnomalyLine(
   stats: FinalizedAgentOutput["stats"],
 ): string | null {
   if (anomalies.length === 0) return null;
+  const maxThought = TRANSCRIPT_THOUGHTS_HARD_MAX;
+  const maxFinal = TRANSCRIPT_FINAL_TEXT_HARD_MAX;
   const parts = anomalies.map((a) => {
     if (a.kind === "phrase_loop_collapsed") {
       return `collapsed ~${a.count}×${a.phraseLen}c loop (−${a.removedChars.toLocaleString()} chars)`;
@@ -160,14 +178,39 @@ export function formatFinalizeAnomalyLine(
     if (a.kind === "hard_truncated") {
       // Storage cap for transcript bubbles — does not cut the model mid-generation
       // and does not replace the raw buffer used for JSON apply (see parse path).
-      return `hard-truncated ${a.field} from ${a.originalChars.toLocaleString()} (transcript storage cap)`;
+      const cap = a.field === "thoughts" ? maxThought : maxFinal;
+      return (
+        `storage-capped ${a.field} ${a.originalChars.toLocaleString()}→${cap.toLocaleString()} ` +
+        `(transcript only; generation/apply path untouched)`
+      );
     }
     return a.kind;
   });
-  return (
-    `[stream-integrity] ${agentId}: ${parts.join("; ")} ` +
-    `(raw ${stats.rawChars.toLocaleString()} → final ${stats.finalChars.toLocaleString()})`
-  );
+  // Per-field footer: avoid "raw→final" when only thoughts were capped
+  // (old UI showed raw 32k→final 32k while claiming thought truncate).
+  type HardTrunc = Extract<AgentOutputAnomaly, { kind: "hard_truncated" }>;
+  const truncs = anomalies.filter((a): a is HardTrunc => a.kind === "hard_truncated");
+  const thoughtTrunc = truncs.find((a) => a.field === "thoughts");
+  const bodyTrunc = truncs.find((a) => a.field === "finalText");
+  const metrics: string[] = [];
+  if (thoughtTrunc) {
+    metrics.push(
+      `thoughts ${thoughtTrunc.originalChars.toLocaleString()}→${Math.min(thoughtTrunc.originalChars, maxThought).toLocaleString()}`,
+    );
+  }
+  if (bodyTrunc) {
+    metrics.push(
+      `body ${bodyTrunc.originalChars.toLocaleString()}→${Math.min(bodyTrunc.originalChars, maxFinal).toLocaleString()}`,
+    );
+  }
+  if (metrics.length === 0) {
+    metrics.push(
+      `raw ${stats.rawChars.toLocaleString()} → body ${stats.finalChars.toLocaleString()}`,
+    );
+  } else if (stats.finalChars > 0 && !bodyTrunc) {
+    metrics.push(`body ${stats.finalChars.toLocaleString()}`);
+  }
+  return `[transcript-cap] ${agentId}: ${parts.join("; ")} (${metrics.join("; ")})`;
 }
 
 /** Structured summary for SystemBubble + transcript filters. */

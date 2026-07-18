@@ -242,6 +242,30 @@ export function coercePlannerTodoItem(item: unknown): unknown {
     }
   }
 
+  // criteria must be short criterion IDs (c1…), not free-text acceptance
+  // criteria. Models often emit long human strings → schema drop of the
+  // entire todo (3d0aceba: "Dropped 5 invalid todo(s): criteria.0 max 40"
+  // then salvage re-posted without criteria). Strip overlong / non-id
+  // entries so the todo still posts; runner can re-bind later.
+  if (Array.isArray(o.criteria)) {
+    const cleaned: string[] = [];
+    for (const c of o.criteria) {
+      if (typeof c !== "string") continue;
+      const s = c.trim();
+      if (!s) continue;
+      const idHit = /^c\d{1,3}$/i.exec(s);
+      if (idHit) {
+        cleaned.push(idHit[0]!.toLowerCase());
+        continue;
+      }
+      // Long prose is not a criterion id — drop field, keep todo.
+      if (s.length > 40) continue;
+      cleaned.push(s.slice(0, 40));
+    }
+    if (cleaned.length > 0) o.criteria = cleaned;
+    else delete o.criteria;
+  }
+
   return o;
 }
 

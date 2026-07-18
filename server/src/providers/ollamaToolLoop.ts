@@ -71,7 +71,10 @@ export async function chatWithOllamaToolLoop(
   opts: ChatOpts,
 ): Promise<ChatResult> {
   const t0 = Date.now();
-  const useTools = !!(opts.tools?.length && opts.dispatcher);
+  const maxTurnsRequested = opts.maxToolTurns ?? DEFAULT_MAX_TOOL_TURNS;
+  // maxToolTurns <= 0 = emit-only: never enter the multi-turn tool loop
+  // (empty for-loop would immediately report "exceeded 0 turns").
+  const useTools = !!(opts.tools?.length && opts.dispatcher) && maxTurnsRequested > 0;
   if (!useTools) {
     const messages: OllamaLoopMessage[] = [];
     if (opts.system?.trim()) messages.push({ role: "system", content: opts.system });
@@ -90,7 +93,7 @@ export async function chatWithOllamaToolLoop(
   }
 
   const toolDefs = buildOllamaToolDefs(opts.tools!);
-  const maxTurns = opts.maxToolTurns ?? DEFAULT_MAX_TOOL_TURNS;
+  const maxTurns = maxTurnsRequested;
   const nudges = resolveNudges(opts);
   const stuckDetector = createToolLoopStuckDetector();
   const messages: OllamaLoopMessage[] = [];

@@ -220,6 +220,8 @@ export interface LifecycleContext {
   setPlanAndExecutePromise(p: Promise<void> | null): void;
   /** Reset per-run stigmergy heatmap (isolation across sequential runs). */
   clearPheromoneHeatmap(): void;
+  /** Best-effort apply of pending-commit todos before kill (user-stop). */
+  drainPendingCommitsOnStop(): Promise<void>;
   stopQueueReaper(): void;
   stopCapWatchdog(): void;
   stopReplanWatcher(): void;

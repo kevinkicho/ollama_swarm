@@ -130,7 +130,13 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
         `-d '${JSON.stringify({
           preset: cfg.preset,
           model: cfg.model,
-          agentCount: cfg.agentCount,
+          // Prefer topology roster length (includes dedicated auditor).
+          agentCount:
+            Array.isArray(cfg.topology?.agents) && cfg.topology.agents.length > 0
+              ? cfg.topology.agents.length
+              : cfg.dedicatedAuditor
+                ? (cfg.agentCount ?? 0) + 1
+                : cfg.agentCount,
           rounds: cfg.rounds,
           plannerModel: cfg.plannerModel,
           workerModel: cfg.workerModel,

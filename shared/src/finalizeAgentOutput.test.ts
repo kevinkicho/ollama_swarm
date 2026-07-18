@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+﻿import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   finalizeAgentOutput,
@@ -23,7 +23,7 @@ describe("finalizeAgentOutput", () => {
     assert.ok(r.finalText.length < PHRASE.length * 20);
     const line = formatFinalizeAnomalyLine("agent-3", r.anomalies, r.stats);
     assert.ok(line);
-    assert.match(line!, /stream-integrity/);
+    assert.match(line!, /transcript-cap|stream-integrity/);
   });
 
   it("hard-caps enormous final text even without loop signature", () => {
@@ -37,6 +37,26 @@ describe("finalizeAgentOutput", () => {
     assert.ok(r.anomalies.some((a) => a.kind === "hard_truncated"));
   });
 
+
+  it("hard-caps reports storage-capped in anomaly line", () => {
+    const parts: string[] = [];
+    for (let i = 0; i < 5_000; i++) {
+      parts.push(`unique-line-${i}-${(i * 7919) % 9973} with payload`);
+    }
+    const r = finalizeAgentOutput(parts.join("\n"));
+    const line = formatFinalizeAnomalyLine("agent-2", r.anomalies, r.stats);
+    assert.ok(line);
+    assert.match(line!, /transcript-cap/);
+    assert.match(line!, /storage-capped/);
+  });
+
+  it("pure-think does not re-inject raw tags into finalText", () => {
+    const think = "x".repeat(1000);
+    const r = finalizeAgentOutput(`<think>${think}</think>`);
+    assert.equal(r.thoughts.includes(think.slice(0, 20)), true);
+    assert.doesNotMatch(r.finalText, /<think>/);
+    assert.match(r.finalText, /thinking-only|no JSON/i);
+  });
   it("worker role suppresses long non-JSON prose", () => {
     const prose = "I will inspect the route and then fix it. ".repeat(40);
     const r = finalizeAgentOutput(prose, { role: "worker" });

@@ -269,10 +269,31 @@ export async function runFirstPassContractOrchestrator(
   const active = ctx.getActive();
   if (shouldSkipContractDerivation(active, seed)) {
     const directive = (seed.userDirective ?? active?.userDirective ?? "").trim();
-    const files = inferScopedUiExpectedFiles(seed, directive);
+    let files = inferScopedUiExpectedFiles(seed, directive);
+    // Durability / whole-app directives often match "scoped UI" regex but
+    // leave expectedFiles empty → weak done-ness + empty coverage (3d0aceba).
+    // Prefer any seed-mentioned paths over an empty criterion.
+    const repoList = seed.repoFiles ?? [];
+    if (files.length === 0 && repoList.length > 0) {
+      const fromDirective = (directive.match(
+        /[\w./-]+\.(?:jsx?|tsx?|mjs|cjs|css|md|json)/gi,
+      ) ?? []).slice(0, 8);
+      const repo = new Set(repoList.map((f) => f.replace(/\\/g, "/")));
+      for (const base of fromDirective) {
+        const norm = base.replace(/\\/g, "/");
+        const hit =
+          repo.has(norm)
+            ? norm
+            : [...repo].find((r) => r.endsWith("/" + norm) || r === norm);
+        if (hit && !files.includes(hit)) files.push(hit);
+        if (files.length >= 4) break;
+      }
+    }
     const synthetic = buildScopedUiContract(directive, files);
     ctx.appendSystem(
-      "Contract fast path: scoped UI directive — synthetic contract from seed (skipped LLM derivation).",
+      files.length > 0
+        ? `Contract fast path: scoped UI directive — synthetic contract from seed (${files.length} expected file(s); skipped LLM derivation).`
+        : "Contract fast path: scoped UI directive — synthetic contract from seed (no expectedFiles inferred; skipped LLM derivation).",
     );
     finalizeContract(ctx, synthetic, seed, planner);
     return;

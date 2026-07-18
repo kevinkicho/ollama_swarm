@@ -78,10 +78,19 @@ const KNOWN_PROFILES: ReadonlySet<string> = new Set([
  * Upgrade legacy profile names when web tools / autoApprove are enabled.
  * Lets discussion runners keep passing "swarm-read" while gaining web_search/web_fetch.
  */
+/** Tools-off profile for structured JSON emit retries (no read/bash loops). */
+export const EMIT_ONLY_PROFILE_ID: ToolProfileId = "swarm";
+
 export function effectiveToolProfileId(
   agentName: string,
   cfg?: WebToolsConfig | null,
 ): ToolProfileId {
+  // Emit-only must stay tools-off even when autoApprove elevates every role
+  // to swarm-auto. Otherwise maxToolTurns:0 + tools → "tool loop exceeded 0
+  // turns" on replan/worker repair (3d0aceba / a12daea8).
+  if (agentName === EMIT_ONLY_PROFILE_ID) {
+    return EMIT_ONLY_PROFILE_ID;
+  }
   if (isAutoApproveEnabled(cfg)) return "swarm-auto";
   const base = (KNOWN_PROFILES.has(agentName) ? agentName : "swarm") as ToolProfileId;
   if (!isWebToolsEnabled(cfg)) return base;
@@ -89,9 +98,6 @@ export function effectiveToolProfileId(
   if (base === "swarm-builder") return "swarm-builder-research";
   return base;
 }
-
-/** Tools-off profile for structured JSON emit retries (no read/bash loops). */
-export const EMIT_ONLY_PROFILE_ID: ToolProfileId = "swarm";
 
 /** Max provider round-trips (model → tool → model) for explore-style profiles. */
 /** Default explore/planner tool budget (provider floor is also 100). */

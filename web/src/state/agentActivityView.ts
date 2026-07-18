@@ -235,7 +235,8 @@ export function activityStubText(
     return `${who}: ${task} — streaming…`;
   }
   if (phase === "queued" || phase === "waiting") {
-    return `${who}: ${task} — awaiting provider…`;
+    // Prompt submitted; first token not yet observed. Not a health failure.
+    return `${who}: ${task} — waiting for first token…`;
   }
   return `${who}: ${task} — waiting…`;
 }

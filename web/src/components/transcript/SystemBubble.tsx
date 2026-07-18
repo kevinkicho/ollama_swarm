@@ -121,19 +121,33 @@ export function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string
       </div>
     );
   }
-  // Stream integrity (loop collapse / hard truncate) — amber ribbon so
-  // multi-minute generation loops are visible without grepping logs.
+  // Transcript storage cap / loop collapse — not a transport failure.
+  // Storage-only caps (thoughts/body) use a quieter ink ribbon; generation
+  // loops stay amber so multi-minute thrash is still obvious.
   if (
     entry.summary?.kind === "stream_integrity"
-    || (entry.text && entry.text.startsWith("[stream-integrity]"))
+    || (entry.text
+      && (entry.text.startsWith("[stream-integrity]")
+        || entry.text.startsWith("[transcript-cap]")))
   ) {
     const s = entry.summary?.kind === "stream_integrity" ? entry.summary : null;
     const tags = s?.anomalyKinds?.join(", ") ?? "anomaly";
+    const isLoop =
+      /collapsed|loop/i.test(entry.text ?? "")
+      || (s?.anomalyKinds ?? []).some((k) => /loop|collapse/i.test(k));
+    const isStorageOnly = !isLoop && /storage-capped|hard-truncated|transcript-cap/i.test(entry.text ?? "");
+    const border = isLoop
+      ? "border-amber-700/60 bg-amber-950/20"
+      : "border-ink-600/50 bg-ink-900/40";
+    const badge = isLoop
+      ? "bg-amber-900/60 text-amber-100"
+      : "bg-ink-700/80 text-ink-200";
+    const title = isLoop ? "generation loop" : isStorageOnly ? "transcript cap" : "output policy";
     return (
-      <div className="rounded-md border-2 border-amber-700/60 bg-amber-950/20 px-3 py-2 text-xs space-y-1">
+      <div className={`rounded-md border-2 ${border} px-3 py-2 text-xs space-y-1`}>
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="inline-block bg-amber-900/60 text-amber-100 font-mono uppercase tracking-wider px-1.5 py-0.5 rounded text-[10px]">
-            stream integrity
+          <span className={`inline-block ${badge} font-mono uppercase tracking-wider px-1.5 py-0.5 rounded text-[10px]`}>
+            {title}
           </span>
           {s ? (
             <span className="text-ink-300 font-mono">
@@ -143,9 +157,14 @@ export function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string
           <span className="text-ink-500">system · {ts}</span>
         </div>
         <div className="text-ink-200 font-mono break-words whitespace-pre-wrap">{entry.text}</div>
-        {s ? (
+        {s && !isStorageOnly ? (
           <div className="text-ink-500">
-            raw {s.rawChars.toLocaleString()} → final {s.finalChars.toLocaleString()} chars
+            raw {s.rawChars.toLocaleString()} → body {s.finalChars.toLocaleString()} chars
+          </div>
+        ) : null}
+        {isStorageOnly ? (
+          <div className="text-ink-500 text-[10px]">
+            Storage only — model generation and apply buffers are not cut mid-stream.
           </div>
         ) : null}
       </div>

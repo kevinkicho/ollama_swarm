@@ -164,9 +164,18 @@ export async function replanOne(
   if (todo.status !== "stale") return;
 
   // Fail-closed thrash: pure no-op / empty apply after one replan attempt is enough.
+  // Exclude build-todo "command ran, tree clean" when the command itself failed
+  // (ECONNREFUSED, exit≠0) — that is environment failure, not apply thrash
+  // (a12daea8 / 3d0aceba t8 permanent:noop-exhausted after regress ECONNREFUSED).
   const staleText = `${todo.staleReason ?? ""} ${(todo as { reason?: string }).reason ?? ""}`;
+  const isBuildEnvFail =
+    todo.kind === "build"
+    || /build command|test:regress|test:validate|ECONNREFUSED|exit(?:ed)?\s*(?:code\s*)?[1-9]/i.test(
+      staleText,
+    );
   const isNoopStale =
-    /no file changes|no-op elided|wrote zero files|zero files \(no-op\)|hunk-empty|empty hunks/i.test(
+    !isBuildEnvFail
+    && /no file changes|no-op elided|wrote zero files|zero files \(no-op\)|hunk-empty|empty hunks/i.test(
       staleText,
     );
   const replanCap = isNoopStale ? 1 : MAX_REPLAN_ATTEMPTS;

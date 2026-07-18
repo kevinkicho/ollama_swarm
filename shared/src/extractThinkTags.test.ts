@@ -68,13 +68,13 @@ describe("extractThinkTags — multi-block + unclosed", () => {
 });
 
 describe("extractThinkTags — edge cases + safety", () => {
-  it("preserves the ORIGINAL text when extraction empties everything", () => {
-    // All content was inside think tags → finalText would be ""
-    // but we fall back to the original so the bubble renders SOMETHING.
+  it("pure-think leaves finalText empty (thoughts hold content)", () => {
+    // All content inside think tags: do NOT re-inject raw tagged text into
+    // finalText (that duplicated ~30k bodies + tripped false stream-integrity).
     const original = "<think>everything is a thought</think>";
     const r = extractThinkTags(original);
     assert.equal(r.thoughts, "everything is a thought");
-    assert.equal(r.finalText, original);
+    assert.equal(r.finalText, "");
   });
 
   it("collapses 3+ consecutive newlines down to 2 in finalText", () => {

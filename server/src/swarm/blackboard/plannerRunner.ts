@@ -302,11 +302,24 @@ export async function runPlanner(
     }
 
   if (parsed.dropped.length > 0) {
-    ctx.appendSystem(
-      `Dropped ${parsed.dropped.length} invalid todo(s): ${parsed.dropped
-        .map((d) => d.reason)
-        .join(" | ")}`,
+    // Distinguish "whole todo rejected" vs "field-level noise that salvage
+    // may already have recovered" so operators don't think the board is empty.
+    const fieldOnly = parsed.dropped.every((d) =>
+      /criteria\.\d+|preferredTag|expectedAnchors|expectedSymbols/i.test(d.reason),
     );
+    if (fieldOnly && parsed.todos.length > 0) {
+      ctx.appendSystem(
+        `Normalized ${parsed.dropped.length} todo field issue(s) (todos still posted: ${parsed.todos.length}): ${parsed.dropped
+          .map((d) => d.reason)
+          .join(" | ")}`,
+      );
+    } else {
+      ctx.appendSystem(
+        `Dropped ${parsed.dropped.length} invalid todo(s)` +
+          (parsed.todos.length > 0 ? ` (${parsed.todos.length} valid posted)` : "") +
+          `: ${parsed.dropped.map((d) => d.reason).join(" | ")}`,
+      );
+    }
   }
 
   const groundedTodos: typeof parsed.todos = [];

@@ -73,23 +73,29 @@ export function RunFinishedGrid({
           {s.stopDetail ? <span className="text-ink-400 italic"> — {s.stopDetail}</span> : null}
         </div>
       </div>
-      {/* Headline tiles */}
+      {/* Headline tiles — zeroIsData for counters so 0 commits/skipped is not "—" */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-        <Tile label="Files changed" value={s.filesChanged} />
-        <Tile label="Commits" value={s.commits ?? 0} />
-        <Tile label="+ Lines" value={s.linesAdded} accent="text-emerald-300" />
-        <Tile label="− Lines" value={s.linesRemoved} accent="text-rose-300" />
-        {s.totalTodos !== undefined ? <Tile label="Total todos" value={s.totalTodos} /> : null}
-        {s.skippedTodos !== undefined ? <Tile label="Skipped todos" value={s.skippedTodos} /> : null}
-        {s.staleEvents !== undefined ? <Tile label="Stale events" value={s.staleEvents} /> : null}
-        <Tile label="Agents" value={s.agents.length} />
+        <Tile label="Files changed" value={s.filesChanged} zeroIsData />
+        <Tile label="Commits" value={s.commits ?? 0} zeroIsData />
+        {/* Only show line tiles when we have a non-zero signal; 0/0 often means
+            counters never wired (auditor batch) — hide rather than fake data. */}
+        {(s.linesAdded > 0 || s.linesRemoved > 0) ? (
+          <>
+            <Tile label="+ Lines" value={s.linesAdded} accent="text-emerald-300" zeroIsData />
+            <Tile label="− Lines" value={s.linesRemoved} accent="text-rose-300" zeroIsData />
+          </>
+        ) : null}
+        {s.totalTodos !== undefined ? <Tile label="Total todos" value={s.totalTodos} zeroIsData /> : null}
+        {s.skippedTodos !== undefined ? <Tile label="Skipped todos" value={s.skippedTodos} zeroIsData /> : null}
+        {s.staleEvents !== undefined ? <Tile label="Stale events" value={s.staleEvents} zeroIsData /> : null}
+        <Tile label="Agents" value={s.agents.length} zeroIsData />
         {/* Task #163: run-level token totals. Computed accurately from
             tokenTracker.recent filtered by run window (independent of
             per-agent approximations). */}
-        {s.totalPromptTokens !== undefined ? (
+        {s.totalPromptTokens !== undefined && s.totalPromptTokens > 0 ? (
           <Tile label="Tokens in" value={fmtTokensCompact(s.totalPromptTokens)} accent="text-sky-300" />
         ) : null}
-        {s.totalResponseTokens !== undefined ? (
+        {s.totalResponseTokens !== undefined && s.totalResponseTokens > 0 ? (
           <Tile label="Tokens out" value={fmtTokensCompact(s.totalResponseTokens)} accent="text-violet-300" />
         ) : null}
       </div>
@@ -271,12 +277,38 @@ function formatRuntime(ms: number): string {
   return `${sec}s`;
 }
 
-function Tile({ label, value, accent }: { label: string; value: number | string; accent?: string }) {
-  // 2026-04-25 fine-tune (Kevin): show "—" with opacity 0.5 when
-  // value is 0/null/undefined so empty tiles don't read as a real "0".
-  const isEmpty = typeof value === "number" ? !value : !value || value === "0";
-  const display = isEmpty ? "—" : (typeof value === "number" ? value.toLocaleString() : value);
-  const colorClass = isEmpty ? "text-ink-400 opacity-50" : (accent ?? "text-ink-100");
+function Tile({
+  label,
+  value,
+  accent,
+  /** When true, numeric 0 is a real measurement (commits/skipped/etc.), not "missing". */
+  zeroIsData = false,
+}: {
+  label: string;
+  value: number | string;
+  accent?: string;
+  zeroIsData?: boolean;
+}) {
+  // Only treat missing / undefined as empty. Legitimate zeros (0 commits,
+  // 0 skipped) were rendering as "—" which made run summaries look blank
+  // even when the run finished with structured counts.
+  const isMissing =
+    value === null
+    || value === undefined
+    || value === ""
+    || (typeof value === "number" && !Number.isFinite(value));
+  const isZero = typeof value === "number" && value === 0;
+  const showDash = isMissing || (isZero && !zeroIsData);
+  const display = showDash
+    ? "—"
+    : typeof value === "number"
+      ? value.toLocaleString()
+      : value;
+  const colorClass = showDash
+    ? "text-ink-400 opacity-50"
+    : isZero && zeroIsData
+      ? "text-ink-400"
+      : (accent ?? "text-ink-100");
   return (
     <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">
       <div className="text-[9px] uppercase tracking-wider text-ink-500">{label}</div>
