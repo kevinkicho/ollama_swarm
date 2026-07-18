@@ -110,6 +110,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
   progressHeartbeat: undefined,
   cycleIntegrity: undefined,
   applyIntegrity: undefined,
+  researchIntegrity: undefined,
   earlyStopDetail: undefined,
   pipelinePhase: undefined,
 
@@ -139,6 +140,12 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
           : patch.applyIntegrity !== undefined
             ? patch.applyIntegrity
             : s.applyIntegrity,
+      researchIntegrity:
+        patch.researchIntegrity === null
+          ? undefined
+          : patch.researchIntegrity !== undefined
+            ? patch.researchIntegrity
+            : s.researchIntegrity,
       earlyStopDetail:
         patch.earlyStopDetail !== undefined
           ? patch.earlyStopDetail
@@ -623,6 +630,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
       progressHeartbeat: undefined,
       cycleIntegrity: undefined,
       applyIntegrity: undefined,
+      researchIntegrity: undefined,
       earlyStopDetail: undefined,
       pipelinePhase: undefined,
     }),
@@ -706,6 +714,7 @@ const swarmStoreInitializer: StateCreator<SwarmStore> = (set) => ({
         progressHeartbeat: undefined,
         cycleIntegrity: undefined,
         applyIntegrity: undefined,
+        researchIntegrity: undefined,
         ...blackboardReset,
         transcript: newTranscript,
         transcriptPlainListLatched: true,

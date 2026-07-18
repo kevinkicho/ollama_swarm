@@ -6,8 +6,11 @@ import os from "node:os";
 import {
   buildLocalCatalogIndex,
   clearLocalCatalogCache,
+  isStrongLocalCatalogHit,
   localCatalogNotesOnResearchFail,
   lookupLocalCatalog,
+  lookupLocalCatalogRanked,
+  tryLocalFirstCatalog,
   splitMarkdownSections,
   textHasWholeTerm,
 } from "./localCatalogIndex.js";
@@ -202,6 +205,32 @@ describe("localCatalogIndex", () => {
     assert.equal(textHasWholeTerm("business metrics", "bis"), false);
     assert.equal(textHasWholeTerm("BIS credit", "bis"), true);
     assert.equal(textHasWholeTerm("bank for international settlements", "bank for international settlements"), true);
+  });
+
+  it("lookupLocalCatalogRanked exposes bestScore for local-first gate", () => {
+    const hit = lookupLocalCatalogRanked(
+      "Research official FRED commercial paper series endpoints",
+      4,
+      { catalogRoot: dir },
+    );
+    assert.ok(hit.bestScore >= 10, `expected strong score, got ${hit.bestScore}`);
+    assert.ok(hit.hitCount >= 1);
+    assert.ok(isStrongLocalCatalogHit(hit));
+    assert.match(hit.notes, /FRED|stlouisfed/i);
+  });
+
+  it("tryLocalFirstCatalog returns hit for agency query and null for unrelated", () => {
+    const ok = tryLocalFirstCatalog(
+      "literature review of BIS statistics APIs and SDMX credit data",
+      dir,
+    );
+    assert.ok(ok);
+    assert.ok(ok!.bestScore >= 10);
+    const no = tryLocalFirstCatalog(
+      "Refactor pure TypeScript utility for string padding",
+      dir,
+    );
+    assert.equal(no, null);
   });
 
   it("clearLocalCatalogCache drops cached indexes", () => {

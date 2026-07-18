@@ -206,6 +206,7 @@ export function applyStatusSnapshotToStore(
     };
     cycleIntegrity?: SwarmStore["cycleIntegrity"];
     applyIntegrity?: SwarmStore["applyIntegrity"];
+    researchIntegrity?: SwarmStore["researchIntegrity"];
     earlyStopDetail?: string;
     pipelinePhase?: {
       index: number;
@@ -231,6 +232,7 @@ export function applyStatusSnapshotToStore(
     healthSnap.progressHeartbeat ||
     healthSnap.cycleIntegrity ||
     healthSnap.applyIntegrity ||
+    healthSnap.researchIntegrity ||
     earlyStopDetail ||
     healthSnap.pipelinePhase
   ) {
@@ -247,6 +249,9 @@ export function applyStatusSnapshotToStore(
         : {}),
       ...(healthSnap.applyIntegrity
         ? { applyIntegrity: healthSnap.applyIntegrity }
+        : {}),
+      ...(healthSnap.researchIntegrity
+        ? { researchIntegrity: healthSnap.researchIntegrity }
         : {}),
       ...(healthSnap.pipelinePhase
         ? { pipelinePhase: healthSnap.pipelinePhase }

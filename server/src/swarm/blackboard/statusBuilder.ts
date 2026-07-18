@@ -11,6 +11,7 @@ import { config } from "../../config.js";
 import { snapshotProgressHeartbeat } from "../progressHeartbeat.js";
 import { snapshotCycleIntegrityForRun } from "../cycleIntegrityStats.js";
 import { snapshotApplyIntegrityForRun } from "../applyIntegrityStats.js";
+import { snapshotResearchIntegrity } from "../research/researchBudget.js";
 import { listActiveHelpers } from "../brainOs/helperActivity.js";
 
 export interface StatusContext {
@@ -152,6 +153,10 @@ export function status(ctx: StatusContext): SwarmStatus {
     ...(() => {
       const applyIntegrity = snapshotApplyIntegrityForRun(ctx.active?.runId);
       return applyIntegrity ? { applyIntegrity } : {};
+    })(),
+    ...(() => {
+      const researchIntegrity = snapshotResearchIntegrity(ctx.active?.runId);
+      return researchIntegrity ? { researchIntegrity } : {};
     })(),
     round: ctx.round,
     repoUrl: ctx.active?.repoUrl,

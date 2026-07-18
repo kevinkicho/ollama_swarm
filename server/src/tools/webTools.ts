@@ -251,6 +251,33 @@ export async function webSearchTool(
   if (!query) return { ok: false, error: "web_search: query required" };
   if (query.length > 500) return { ok: false, error: "web_search: query too long" };
 
+  const cloneRoot =
+    opts?.cloneRoot ??
+    (typeof args.cloneRoot === "string" ? args.cloneRoot : undefined);
+
+  // RR-C local-first: strong offline catalog hit → skip DDG/API thrash.
+  if (cloneRoot) {
+    try {
+      const { tryLocalFirstCatalog } = await import(
+        "../swarm/research/localCatalogIndex.js"
+      );
+      const local = tryLocalFirstCatalog(query, cloneRoot);
+      if (local) {
+        return {
+          ok: true,
+          output:
+            `Local catalog (local-first, score=${local.bestScore}, hits=${local.hitCount}) for: ${query}\n` +
+            `(no web backends queried — clone docs were sufficient)\n\n` +
+            `${local.notes}\n\n` +
+            `Tip: Prefer these official URLs. Use web_fetch only if you need a live page. ` +
+            `Do not invent your-org / file:// placeholders.`,
+        };
+      }
+    } catch {
+      /* best-effort — fall through to web adapters */
+    }
+  }
+
   if (!opts?.skipRateLimit) {
     await applyWebRateLimit();
   }
@@ -265,9 +292,6 @@ export async function webSearchTool(
     return formatSearchResults(query, result.links, result.backend);
   }
 
-  const cloneRoot =
-    opts?.cloneRoot ??
-    (typeof args.cloneRoot === "string" ? args.cloneRoot : undefined);
   const catalogNotes = await localCatalogFailNotes(query, cloneRoot);
 
   // Hard error (not soft-ok): consecutive identical failures trip toolLoopStuck

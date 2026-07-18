@@ -124,6 +124,8 @@ export interface SwarmStatus {
   cycleIntegrity?: import("@ollama-swarm/shared/cycleIntegrityReport").CycleIntegrityReport;
   /** RR-D: live apply/repair integrity (attempts, misses, repairs). */
   applyIntegrity?: import("@ollama-swarm/shared/applyIntegrityReport").ApplyIntegrityReport;
+  /** RR-C: live literature/search blackout + budget integrity. */
+  researchIntegrity?: import("../swarm/research/researchBudget.js").ResearchIntegrityReport;
   /** Blackboard planning pipeline step (seeding / contract / todos). */
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   /** Live think-guard referee budget (resolved defaults + usage). */

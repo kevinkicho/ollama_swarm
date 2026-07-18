@@ -915,6 +915,8 @@ export interface SwarmStatusSnapshot {
   cycleIntegrity?: RunSummary["cycleIntegrity"];
   /** Live apply/repair integrity (mirrors summary.applyIntegrity). */
   applyIntegrity?: RunSummary["applyIntegrity"];
+  /** Live research blackout/budget (mirrors summary.researchIntegrity). */
+  researchIntegrity?: RunSummary["researchIntegrity"];
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   thinkGuardReferee?: ResolvedThinkGuardRefereeBudget;
   pipelinePhase?: {

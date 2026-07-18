@@ -67,14 +67,29 @@ export async function runWorkerLiteratureResearch(
     forAgentId: agent.id,
   });
   const litDirective = litExtras.effectiveDirective ?? cfg.userDirective;
-  // RR-C local-first: inject catalog before web when offline docs hit.
-  const localFirst = localCatalogNotesOnResearchFail(todo.description, clonePath);
-  if (localFirst && localFirst.length >= 200) {
-    noteCatalogInject(runId);
-    ctx.appendSystem(
-      `[${agent.id}] Local catalog (local-first): injected ${localFirst.length} chars — skipping web literature pre-pass.`,
-    );
-    return localFirst.length > 8000 ? `${localFirst.slice(0, 8000)}…` : localFirst;
+  // Soft notes for prompt context (any hit); strong score skips web entirely.
+  let localFirst =
+    localCatalogNotesOnResearchFail(todo.description, clonePath) || "";
+  // RR-C local-first: score-gated catalog hit (agency/panel alias) before web.
+  try {
+    const { tryLocalFirstCatalog } = await import("../research/localCatalogIndex.js");
+    const hit = tryLocalFirstCatalog(todo.description, clonePath);
+    if (hit) {
+      noteCatalogInject(runId);
+      ctx.appendSystem(
+        `[${agent.id}] Local catalog (local-first score=${hit.bestScore}): ` +
+          `injected ${hit.notes.length} chars — skipping web literature pre-pass.`,
+      );
+      return hit.notes.length > 8000 ? `${hit.notes.slice(0, 8000)}…` : hit.notes;
+    }
+  } catch {
+    if (localFirst.length >= 200) {
+      noteCatalogInject(runId);
+      ctx.appendSystem(
+        `[${agent.id}] Local catalog (local-first): injected ${localFirst.length} chars — skipping web literature pre-pass.`,
+      );
+      return localFirst.length > 8000 ? `${localFirst.slice(0, 8000)}…` : localFirst;
+    }
   }
 
   // RR-C: shared blackout with council (process/run-scoped budget).

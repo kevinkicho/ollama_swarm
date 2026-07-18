@@ -65,19 +65,35 @@ export async function runCouncilLiteratureResearch(
   });
   const runId = cfg.runId;
 
-  // RR-C local-first (parity with blackboard workerLiteratureResearch):
-  // inject catalog before web when offline docs hit ≥200 chars. Live eee6718f
-  // burned tool loops on panel/API todos that already had GOVERNMENT_API_CATALOG.
-  const localFirst = localCatalogNotesOnResearchFail(todo.description, state.clonePath);
-  if (localFirst && localFirst.length >= 200) {
-    noteCatalogInject(runId);
-    appendSystem(
-      `[${agent.id}] Local catalog (local-first): injected ${localFirst.length} chars — skipping web literature pre-pass.`,
-    );
-    const capped =
-      localFirst.length > 8000 ? `${localFirst.slice(0, 8000)}…` : localFirst;
-    cache.set(todo.id, capped);
-    return capped;
+  // RR-C local-first (parity with blackboard): score-gated catalog before web.
+  // Live eee6718f burned tool loops on panel/API todos that already had catalogs.
+  let localFirst =
+    localCatalogNotesOnResearchFail(todo.description, state.clonePath) || "";
+  try {
+    const { tryLocalFirstCatalog } = await import("./research/localCatalogIndex.js");
+    const hit = tryLocalFirstCatalog(todo.description, state.clonePath);
+    if (hit) {
+      noteCatalogInject(runId);
+      appendSystem(
+        `[${agent.id}] Local catalog (local-first score=${hit.bestScore}): ` +
+          `injected ${hit.notes.length} chars — skipping web literature pre-pass.`,
+      );
+      const capped =
+        hit.notes.length > 8000 ? `${hit.notes.slice(0, 8000)}…` : hit.notes;
+      cache.set(todo.id, capped);
+      return capped;
+    }
+  } catch {
+    if (localFirst.length >= 200) {
+      noteCatalogInject(runId);
+      appendSystem(
+        `[${agent.id}] Local catalog (local-first): injected ${localFirst.length} chars — skipping web literature pre-pass.`,
+      );
+      const capped =
+        localFirst.length > 8000 ? `${localFirst.slice(0, 8000)}…` : localFirst;
+      cache.set(todo.id, capped);
+      return capped;
+    }
   }
 
   // Single source of truth: researchBudget (legacy blackout field is mirror only).

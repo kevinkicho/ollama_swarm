@@ -327,30 +327,70 @@ export function lookupLocalCatalog(
   maxSnippets: number = DEFAULT_MAX_SNIPPETS,
   opts?: LocalCatalogLookupOpts,
 ): string {
+  return lookupLocalCatalogRanked(todoDescription, maxSnippets, opts).notes;
+}
+
+export interface LocalCatalogRankedHit {
+  /** Prompt-ready notes (empty if no hits). */
+  notes: string;
+  /** Best snippet score (0 if none). */
+  bestScore: number;
+  /** How many snippets ranked > 0. */
+  hitCount: number;
+}
+
+/**
+ * Same as lookupLocalCatalog but exposes scores for local-first gates.
+ * Zero network.
+ */
+export function lookupLocalCatalogRanked(
+  todoDescription: string,
+  maxSnippets: number = DEFAULT_MAX_SNIPPETS,
+  opts?: LocalCatalogLookupOpts,
+): LocalCatalogRankedHit {
+  const empty: LocalCatalogRankedHit = { notes: "", bestScore: 0, hitCount: 0 };
   const root = resolveRoot(opts);
-  if (!root) return "";
-  if (!todoDescription || !todoDescription.trim()) return "";
+  if (!root) return empty;
+  if (!todoDescription || !todoDescription.trim()) return empty;
 
   let snippets: CatalogSnippet[];
   try {
     snippets = getLocalCatalogIndex(root);
   } catch {
-    return "";
+    return empty;
   }
-  if (snippets.length === 0) return "";
+  if (snippets.length === 0) return empty;
 
   const queryTerms = expandQueryTerms(todoDescription);
-  if (queryTerms.size === 0) return "";
+  if (queryTerms.size === 0) return empty;
 
   const k = Math.max(1, Math.min(maxSnippets, 12));
   const ranked = snippets
     .map((snippet) => ({ snippet, score: scoreSnippet(snippet, queryTerms) }))
     .filter((r) => r.score > 0)
-    .sort((a, b) => b.score - a.score || a.snippet.source.localeCompare(b.snippet.source))
-    .slice(0, k);
+    .sort((a, b) => b.score - a.score || a.snippet.source.localeCompare(b.snippet.source));
 
-  if (ranked.length === 0) return "";
-  return formatSnippets(ranked);
+  if (ranked.length === 0) return empty;
+  const top = ranked.slice(0, k);
+  return {
+    notes: formatSnippets(top),
+    bestScore: top[0]!.score,
+    hitCount: ranked.length,
+  };
+}
+
+/**
+ * RR-C local-first: agency/panel alias hit (+10) or strong multi-term match.
+ * Used by literature pre-pass and web_search tool to skip DDG when docs suffice.
+ */
+export const LOCAL_FIRST_MIN_SCORE = 10;
+export const LOCAL_FIRST_MIN_CHARS = 150;
+
+export function isStrongLocalCatalogHit(hit: LocalCatalogRankedHit): boolean {
+  return (
+    hit.bestScore >= LOCAL_FIRST_MIN_SCORE
+    && hit.notes.length >= LOCAL_FIRST_MIN_CHARS
+  );
 }
 
 /**
@@ -364,4 +404,18 @@ export function localCatalogNotesOnResearchFail(
 ): string {
   if (!cloneRoot) return "";
   return lookupLocalCatalog(todoDescription, maxSnippets, { cloneRoot });
+}
+
+/**
+ * Local-first gate for literature pre-pass and web_search.
+ * Returns notes when catalog score is strong enough to skip web.
+ */
+export function tryLocalFirstCatalog(
+  query: string,
+  cloneRoot: string | undefined,
+  maxSnippets: number = DEFAULT_MAX_SNIPPETS,
+): LocalCatalogRankedHit | null {
+  if (!cloneRoot) return null;
+  const hit = lookupLocalCatalogRanked(query, maxSnippets, { cloneRoot });
+  return isStrongLocalCatalogHit(hit) ? hit : null;
 }

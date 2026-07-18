@@ -223,6 +223,19 @@ export interface SwarmStore {
     missRecoveredLlm?: number;
     missTerminal?: number;
   };
+  /** RR-C: live research blackout / budget integrity from /status. */
+  researchIntegrity?: {
+    searchAttempts: number;
+    searchSuccesses: number;
+    failByBackend: Record<string, number>;
+    http403Count: number;
+    catalogInjects: number;
+    blackoutActive: boolean;
+    usableBriefs: number;
+    unusableBriefs: number;
+    budgetExhausted: boolean;
+    consecutiveFailures?: number;
+  };
   earlyStopDetail?: string;
   /** Active composite pipeline sub-phase (from /status). */
   pipelinePhase?: {
@@ -254,6 +267,7 @@ export interface SwarmStore {
     progressHeartbeat?: SwarmStore["progressHeartbeat"] | null;
     cycleIntegrity?: SwarmStore["cycleIntegrity"] | null;
     applyIntegrity?: SwarmStore["applyIntegrity"] | null;
+    researchIntegrity?: SwarmStore["researchIntegrity"] | null;
   }) => void;
   upsertAgent: (a: AgentState) => void;
   /** Replace entire agent roster (pipeline handoff / killAll). */
