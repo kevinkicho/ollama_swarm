@@ -13,7 +13,7 @@ import { defaultBrainDispatchBudget } from "@ollama-swarm/shared/brainOs";
 import { chatOnce } from "../chatOnce.js";
 
 export interface BrainOsRunHooks {
-  appendSystem: (text: string) => void;
+  appendSystem: (text: string, summary?: import("../../types.js").TranscriptEntrySummary) => void;
   completeTodo?: (todoId: string, reason: string) => void;
   skipTodo?: (todoId: string, reason: string) => void;
   reopenTodo?: (todoId: string, reason?: string) => void;
@@ -118,6 +118,10 @@ export async function dispatchBrainOsConflict(
           clonePath: c.clonePath,
           webToolsConfig: { autoApprove: true, webTools: true },
           signal: c.signal,
+          activity: {
+            kind: "brain-os",
+            label: `helper ${c.agentId}`,
+          },
         });
         const parts = result?.data?.parts ?? [];
         return parts
@@ -125,8 +129,9 @@ export async function dispatchBrainOsConflict(
           .map((p) => p.text)
           .join("\n");
       },
+      log: (msg, summary) => hooks.appendSystem(msg, summary),
       effectDeps: {
-        appendSystem: hooks.appendSystem,
+        appendSystem: (t) => hooks.appendSystem(t),
         completeTodo: hooks.completeTodo,
         skipTodo: hooks.skipTodo,
         reopenTodo: hooks.reopenTodo,

@@ -89,8 +89,8 @@ export const TOOL_SCHEMAS: Record<
   },
   run: {
     description:
-      "Preferred host shell in the clone directory (Windows: cmd.exe; Unix: sh). " +
-      "Use for npm/node/npx/git/pwsh. Prefer write/edit/git_status/git_diff for file edits. " +
+      "Preferred host shell in the clone (Windows: PowerShell when available, else cmd; Unix: sh). " +
+      "Use for npm/node/npx/git. Prefer write/edit/git_status/git_diff for file edits. " +
       "Do not invent Unix-only CLIs (grep/sed/awk) on Windows — use swarm read/grep/glob tools. Bounded timeout.",
     input_schema: {
       type: "object",

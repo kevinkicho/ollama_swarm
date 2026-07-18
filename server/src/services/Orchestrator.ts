@@ -36,6 +36,7 @@ import {
 } from "./knownParents.js";
 import { statusForRun as statusForRunExtracted } from "./statusForRun.js";
 import { buildSwarmStatusRunConfig } from "./orchestratorRunConfig.js";
+import { activeHelperCount } from "../swarm/brainOs/helperActivity.js";
 import {
   buildRunner as buildRunnerExtracted,
   type BuildRunnerContext,
@@ -463,6 +464,8 @@ export class Orchestrator {
     phase?: string;
     earlyStopDetail?: string;
     drainEligible?: boolean;
+    /** Live Brain OS helper count (ephemeral recruits). */
+    brainOsHelpers?: number;
   }> {
     const out: Array<{
       runId: string;
@@ -475,6 +478,7 @@ export class Orchestrator {
       phase?: string;
       earlyStopDetail?: string;
       drainEligible?: boolean;
+      brainOsHelpers?: number;
     }> = [];
     for (const r of this.runs.values()) {
       if (!r.runner.isRunning()) continue; // only truly active runs
@@ -493,6 +497,7 @@ export class Orchestrator {
       } catch {
         /* status() best-effort — list still works */
       }
+      const helpers = activeHelperCount(r.runId);
       out.push({
         runId: r.runId,
         runConfig: r.runConfig,
@@ -504,6 +509,7 @@ export class Orchestrator {
         phase,
         earlyStopDetail,
         drainEligible,
+        ...(helpers > 0 ? { brainOsHelpers: helpers } : {}),
       } as any);
     }
     return out;

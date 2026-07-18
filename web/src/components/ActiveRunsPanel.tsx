@@ -35,6 +35,8 @@ interface ActiveRun {
   currentAgentIndex?: number;
   brainInitiated?: boolean;
   brainProposalId?: string;
+  /** Live Brain OS helper count (ephemeral mid-run recruits). */
+  brainOsHelpers?: number;
 }
 
 /** Full roster size for UI — never undercount dedicated auditor on blackboard. */
@@ -129,13 +131,15 @@ const ActiveRunRow = memo(function ActiveRunRow({
   const phase = run.phase ?? (run.isRunning ? "running" : "terminated");
   const rosterN = displayAgentRosterCount(run.runConfig);
   const progress =
-    run.earlyStopDetail
-      ? run.earlyStopDetail.length > 40
-        ? `${run.earlyStopDetail.slice(0, 38)}…`
-        : run.earlyStopDetail
-      : run.currentAgentIndex != null
-        ? `agent ${run.currentAgentIndex}/${rosterN ?? "?"}`
-        : "—";
+    (run.brainOsHelpers ?? 0) > 0
+      ? `brain-os helpers×${run.brainOsHelpers}`
+      : run.earlyStopDetail
+        ? run.earlyStopDetail.length > 40
+          ? `${run.earlyStopDetail.slice(0, 38)}…`
+          : run.earlyStopDetail
+        : run.currentAgentIndex != null
+          ? `agent ${run.currentAgentIndex}/${rosterN ?? "?"}`
+          : "—";
 
   return (
     <tr className="border-t border-ink-700/60">
@@ -144,6 +148,14 @@ const ActiveRunRow = memo(function ActiveRunRow({
         {run.brainInitiated ? (
           <span className="ml-1 text-[9px] px-1 rounded bg-violet-900/70 text-violet-200">
             Brain
+          </span>
+        ) : null}
+        {(run.brainOsHelpers ?? 0) > 0 ? (
+          <span
+            className="ml-1 text-[9px] px-1 rounded bg-fuchsia-900/70 text-fuchsia-200"
+            title={`${run.brainOsHelpers} Brain OS helper(s) active`}
+          >
+            OS×{run.brainOsHelpers}
           </span>
         ) : null}
       </td>

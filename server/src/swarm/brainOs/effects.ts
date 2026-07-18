@@ -13,7 +13,7 @@ export interface BrainEffectApplicatorDeps {
   ) => void;
   proposeHunks?: (todoId: string, hunks: unknown[], files: string[]) => void;
   requestApply?: (todoId?: string) => Promise<void> | void;
-  appendSystem: (text: string) => void;
+  appendSystem: (text: string, summary?: unknown) => void;
   recommendDrain?: () => void;
   recommendStop?: (reason: string) => void;
   privilege: HelperPrivilege;

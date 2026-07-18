@@ -3,7 +3,9 @@
  */
 
 import type { BrainDispatchRequest, HelperPrivilege } from "@ollama-swarm/shared/brainOs";
+import type { TranscriptEntrySummary } from "../../types.js";
 import { ToolDispatcher, type ProfileName } from "../../tools/ToolDispatcher.js";
+import { noteHelperEnded, noteHelperStarted } from "./helperActivity.js";
 
 export interface HelperSessionDeps {
   /** Low-level model chat: system+user → text. Uses run's provider stack. */
@@ -17,7 +19,7 @@ export interface HelperSessionDeps {
     agentId: string;
     signal?: AbortSignal;
   }) => Promise<string>;
-  log?: (msg: string) => void;
+  log?: (msg: string, summary?: TranscriptEntrySummary) => void;
 }
 
 function profileForPrivilege(p: HelperPrivilege): ProfileName {
@@ -51,7 +53,7 @@ function buildSystemPrompt(privileges: HelperPrivilege): string {
     "}",
     "Do not invent long-term product criteria. Stay inside the clone path.",
     "Prefer git working-tree reality (git status / git diff / write|edit|run tools) over inventing search-replace hunks when files are already dirty.",
-    "On Windows prefer the `run` tool (host cmd) for npm/node/git — not Unix-only bash binaries.",
+    "On Windows prefer the `run` tool (PowerShell/cmd host shell) for npm/node/git — not Unix-only bash binaries.",
   ].join("\n");
 }
 
@@ -96,6 +98,29 @@ export async function runHelperSession(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), req.budget.maxWallMs);
 
+  noteHelperStarted({
+    helperId: agentId,
+    runId: req.runId,
+    kind: req.kind,
+    privilege: req.privileges,
+    depth: req.depth,
+    model,
+    startedAt: Date.now(),
+    phase: req.context.phase,
+  });
+  deps.log?.(
+    `[brain-os] helper ${agentId} recruited kind=${req.kind} privilege=${req.privileges} model=${model}`,
+    {
+      kind: "brain_os_dispatch",
+      phase: "recruit",
+      conflictKind: req.kind,
+      helperId: agentId,
+      privilege: req.privileges,
+      depth: req.depth,
+      model,
+    },
+  );
+
   try {
     return await deps.chat({
       model,
@@ -109,6 +134,16 @@ export async function runHelperSession(
     });
   } finally {
     clearTimeout(timer);
+    noteHelperEnded(req.runId, agentId);
+    deps.log?.(`[brain-os] helper ${agentId} released`, {
+      kind: "brain_os_dispatch",
+      phase: "release",
+      conflictKind: req.kind,
+      helperId: agentId,
+      privilege: req.privileges,
+      depth: req.depth,
+      model,
+    });
     void dispatcher;
   }
 }

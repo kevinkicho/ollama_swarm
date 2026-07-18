@@ -10,6 +10,7 @@ import { startProgressHeartbeat } from "../progressHeartbeat.js";
 import { resetAgentSessionGuards } from "../runTelemetryCleanup.js";
 import { startBrainOsMetrics } from "../brainOs/metricsRegistry.js";
 import { resetToolBlockDispatchFires } from "../brainOs/toolBlockDispatch.js";
+import { resetHelperActivity } from "../brainOs/helperActivity.js";
 
 /**
  * Clear all prior-run mutable fields so start() begins from a clean slate.
@@ -69,6 +70,7 @@ export function resetLifecycleStateForStart(ctx: LifecycleContext, cfg: import("
   startProgressHeartbeat(cfg.runId);
   startBrainOsMetrics(cfg.runId);
   resetToolBlockDispatchFires();
+  resetHelperActivity(cfg.runId);
   {
     const plannerModel = cfg.plannerModel ?? cfg.model;
     const workerModel = cfg.workerModel ?? cfg.model;

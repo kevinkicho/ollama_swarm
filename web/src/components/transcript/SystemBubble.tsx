@@ -40,6 +40,39 @@ export function SystemBubble({ entry, ts }: { entry: TranscriptEntry; ts: string
     return <CompactPipelineStatusLine entry={entry} ts={ts} />;
   }
 
+  // Brain OS helper lifecycle (recruit / release).
+  if (entry.summary?.kind === "brain_os_dispatch") {
+    const s = entry.summary;
+    const isRecruit = s.phase === "recruit";
+    return (
+      <div
+        className={`rounded-md border px-3 py-2 text-xs space-y-0.5 ${
+          isRecruit
+            ? "border-violet-700/60 bg-violet-950/30"
+            : "border-ink-600 bg-ink-800/40"
+        }`}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-block font-mono uppercase tracking-wider px-1.5 py-0.5 rounded bg-violet-900/70 text-violet-200">
+            Brain OS · {s.phase}
+          </span>
+          <span className="text-ink-400 font-mono text-[10px]">{s.helperId}</span>
+          <span className="text-ink-500 text-[10px]">{ts}</span>
+        </div>
+        <div className="text-ink-300 font-mono text-[11px]">
+          {s.conflictKind}
+          {s.privilege ? ` · ${s.privilege}` : ""}
+          {s.depth > 0 ? ` · depth ${s.depth}` : ""}
+          {s.model ? ` · ${s.model}` : ""}
+          {s.status ? ` · ${s.status}` : ""}
+        </div>
+        {entry.text && !entry.text.startsWith("[brain-os]") ? (
+          <div className="text-ink-400 text-[11px] break-words">{entry.text.slice(0, 240)}</div>
+        ) : null}
+      </div>
+    );
+  }
+
   // Task #72: dedicated grid renderers for structured system entries.
   if (entry.summary?.kind === "run_finished") {
     return <RunFinishedGrid summary={entry.summary} ts={entry.ts} />;

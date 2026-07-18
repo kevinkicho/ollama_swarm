@@ -352,12 +352,12 @@ Brain OS helpers inherit the same tool layer. Separately (can land in parallel P
   `parse_fail` (cascade exhausted), batch apply/verify/commit fail → `apply_miss` landed.
 - Child dispatches (depth 1, shared budget) + `summary.brainOs` metrics (+ UI chips) landed.
 
-### Phase 4 — Substrate honesty — **landed (partial)**
+### Phase 4 — Substrate honesty — **landed**
 
 - **Git-native working tree:** write/edit/git_status/git_diff tools; workers finish with
   `{workingTree:true}`; orchestrator commits disk reality (no re-apply no-op).
-- Host **`run`** tool (preferred name; `bash` alias) + more Unix→in-process rewrites on win32.
-- Further pwsh-first shell policy optional.
+- Host **`run`** tool (preferred name; `bash` alias); Windows prefers **PowerShell** when
+  available (`SWARM_HOST_SHELL=cmd` to force cmd); Unix rewrites include mkdir/touch/rm.
 
 ### Phase 5 — Default on for trusted local runs — **landed**
 
@@ -384,7 +384,7 @@ Brain OS helpers inherit the same tool layer. Separately (can land in parallel P
 2. **Should helpers share the same session store as run agents** or isolated sessions only?
 3. **Board lock granularity:** whole run vs per-todo vs per-file?
 4. **Memory:** write lessons mid-run or only on release?
-5. **UI:** show helper agents in Active Runs roster or only as system bubbles?
+5. **UI:** helpers as structured `brain_os_dispatch` transcript bubbles + Active Runs `OS×N` badge (not full AgentManager roster).
 
 ---
 

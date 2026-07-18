@@ -484,6 +484,60 @@ async function tryFulfillUnixBashViaTools(
     return gitDiffTool(clone, { staged, path: pathM?.[1] });
   }
 
+  // mkdir -p PATH → ensure directory exists (cross-platform)
+  const mkdirM = /^mkdir(?:\s+-p)?\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
+  if (mkdirM) {
+    const p = mkdirM[1] ?? mkdirM[2] ?? mkdirM[3] ?? "";
+    if (p) {
+      try {
+        const abs = await resolveSafe(clone, p);
+        await fs.mkdir(abs, { recursive: true });
+        return { ok: true, output: `created directory ${p}` };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+  }
+
+  // touch FILE → create empty file if missing
+  const touchM = /^touch\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
+  if (touchM) {
+    const p = touchM[1] ?? touchM[2] ?? touchM[3] ?? "";
+    if (p) {
+      try {
+        const abs = await resolveSafe(clone, p);
+        await fs.mkdir(path.dirname(abs), { recursive: true });
+        try {
+          await fs.access(abs);
+          const now = new Date();
+          await fs.utimes(abs, now, now);
+        } catch {
+          await fs.writeFile(abs, "", "utf8");
+        }
+        return { ok: true, output: `touched ${p}` };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+  }
+
+  // rm -rf PATH / rm -r PATH → delete under clone (bounded, not shell)
+  const rmM =
+    /^rm\s+(?:-[rRf]+\s+)+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed)
+    || /^rm\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
+  if (rmM) {
+    const p = rmM[1] ?? rmM[2] ?? rmM[3] ?? "";
+    if (p && p !== "." && p !== ".." && !p.startsWith("..")) {
+      try {
+        const abs = await resolveSafe(clone, p);
+        await fs.rm(abs, { recursive: true, force: true });
+        return { ok: true, output: `removed ${p}` };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+  }
+
   // cd PATH && rest — only rewrite rest if pure (cd alone is no-op list)
   const cdOnly = /^cd\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$/i.exec(trimmed);
   if (cdOnly) {
@@ -509,8 +563,8 @@ function windowsUnixBashHint(binary: string): string {
   };
   const tip = map[binary] ?? "prefer swarm read/grep/glob/list tools";
   return (
-    `bash: \`${binary}\` is not available as a Windows shell command. ${tip}. ` +
-    `Do not shell out to Unix utilities on this host.`
+    `run: \`${binary}\` is not available as a Windows shell command. ${tip}. ` +
+    `Do not shell out to Unix utilities on this host. Prefer the \`run\` tool for npm/node/git/pwsh.`
   );
 }
 
@@ -544,25 +598,36 @@ export async function bashTool(
   }
 
   const timeoutMs = opts?.timeoutMs ?? BASH_TIMEOUT_MS;
+  const { resolveHostShell } = await import("./hostShell.js");
+  const hostShell = resolveHostShell();
 
   try {
     // Validate cwd so we don't get opaque "The system cannot find the path specified."
     try {
       await fs.access(clone);
     } catch {
-      return { ok: false, error: `bash: clone cwd not found: ${clone}` };
+      return { ok: false, error: `run: clone cwd not found: ${clone}` };
     }
 
     const out = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-      // shell:true so agents can use `cd … && …`, pipes, etc.
-      // Explicit stdio pipes — never inherit (avoids cmd.exe noise on the server console).
-      const child = spawn(command, [], {
-        cwd: clone,
-        shell: true,
-        windowsHide: true,
-        env: process.env,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      // Windows: prefer pwsh argv when available; else shell:true (cmd).
+      // Explicit stdio pipes — never inherit (avoids console noise).
+      const child =
+        hostShell.mode === "argv" && hostShell.file
+          ? spawn(hostShell.file, [...(hostShell.prefixArgs ?? []), command], {
+              cwd: clone,
+              shell: false,
+              windowsHide: true,
+              env: process.env,
+              stdio: ["ignore", "pipe", "pipe"],
+            })
+          : spawn(command, [], {
+              cwd: clone,
+              shell: true,
+              windowsHide: true,
+              env: process.env,
+              stdio: ["ignore", "pipe", "pipe"],
+            });
       let stdout = "";
       let stderr = "";
       let killed = false;
@@ -604,7 +669,9 @@ export async function bashTool(
         resolve({ stdout, stderr });
       });
     });
-    const combined = (out.stdout ?? "") + (out.stderr ? `\n[stderr]\n${out.stderr}` : "");
+    const shellNote = hostShell.kind !== "sh" ? `[host shell: ${hostShell.label}]\n` : "";
+    const combined =
+      shellNote + (out.stdout ?? "") + (out.stderr ? `\n[stderr]\n${out.stderr}` : "");
     return {
       ok: true,
       output:
@@ -617,15 +684,17 @@ export async function bashTool(
     const stdout = (e.stdout ?? "").toString();
     const stderr = (e.stderr ?? "").toString();
     let detail = stderr.trim() || stdout.trim() || (e.message ?? "exec failed");
-    // Windows cmd noise → clearer agent-facing message
-    if (/not recognized as an internal or external command/i.test(detail)) {
+    // Windows cmd / pwsh noise → clearer agent-facing message
+    if (/not recognized as an internal or external command/i.test(detail)
+      || /CommandNotFoundException/i.test(detail)
+      || /is not recognized as a name of a cmdlet/i.test(detail)) {
       const bin = firstShellBinary(command);
       if (UNIX_SHELL_BINARIES.has(bin)) {
         detail = windowsUnixBashHint(bin);
       } else {
         detail =
-          `Command not found on this Windows host (${bin || "unknown"}). ` +
-          `Prefer swarm tools (read/grep/glob/list) or a Windows-available binary. Original: ${detail.slice(0, 200)}`;
+          `Command not found on this host (${bin || "unknown"}; shell=${hostShell.label}). ` +
+          `Prefer swarm tools (read/grep/glob/list/write/edit) or npm/node/git/pwsh. Original: ${detail.slice(0, 200)}`;
       }
     } else if (/The system cannot find the path specified/i.test(detail)) {
       detail =
@@ -635,10 +704,10 @@ export async function bashTool(
     if (e.killed) {
       return {
         ok: false,
-        error: `bash killed after ${Math.round(timeoutMs / 1000)}s timeout: ${detail.slice(-500)}`,
+        error: `run killed after ${Math.round(timeoutMs / 1000)}s timeout: ${detail.slice(-500)}`,
       };
     }
-    return { ok: false, error: `bash exited non-zero: ${detail.slice(-700)}` };
+    return { ok: false, error: `run exited non-zero (${hostShell.label}): ${detail.slice(-700)}` };
   }
 }
 

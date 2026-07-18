@@ -9,6 +9,17 @@
 // the server-side tagger (per-runner) + the web-side bubble branch.
 
 export type TranscriptEntrySummary =
+  /** Brain OS helper recruit/release (ephemeral mid-run agents). */
+  | {
+      kind: "brain_os_dispatch";
+      phase: "recruit" | "release" | "done";
+      conflictKind: string;
+      helperId: string;
+      privilege: string;
+      depth: number;
+      model?: string;
+      status?: string;
+    }
   | {
       kind: "worker_hunks";
       hunkCount: number;

@@ -9,3 +9,10 @@ export {
   snapshotBrainOsMetrics,
 } from "./metricsRegistry.js";
 export { maybeDispatchToolBlock, resetToolBlockDispatchFires } from "./toolBlockDispatch.js";
+export {
+  noteHelperStarted,
+  noteHelperEnded,
+  listActiveHelpers,
+  activeHelperCount,
+  resetHelperActivity,
+} from "./helperActivity.js";
