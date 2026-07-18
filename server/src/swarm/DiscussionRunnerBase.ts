@@ -34,6 +34,7 @@ import type { ToolResultHook } from "../tools/ToolDispatcher.js";
 import { runDiscussionAgentCore } from "./discussionRunAgent.js";
 import { snapshotProgressHeartbeat } from "./progressHeartbeat.js";
 import { snapshotCycleIntegrityForRun } from "./cycleIntegrityStats.js";
+import { snapshotApplyIntegrityForRun } from "./applyIntegrityStats.js";
 import {
   initCloneAndSpawn as initCloneAndSpawnExtracted,
   type CloneSpawnOpts,
@@ -198,6 +199,10 @@ export abstract class DiscussionRunnerBase {
       ...(() => {
         const cycleIntegrity = snapshotCycleIntegrityForRun(this.active?.runId);
         return cycleIntegrity ? { cycleIntegrity } : {};
+      })(),
+      ...(() => {
+        const applyIntegrity = snapshotApplyIntegrityForRun(this.active?.runId);
+        return applyIntegrity ? { applyIntegrity } : {};
       })(),
     };
   }

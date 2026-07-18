@@ -46,6 +46,7 @@ export function RunHealthChip() {
   const caps = useSwarm((s) => s.capsRemaining);
   const progressHb = useSwarm((s) => s.progressHeartbeat);
   const cycleIntegrity = useSwarm((s) => s.cycleIntegrity);
+  const applyIntegrity = useSwarm((s) => s.applyIntegrity);
   const early = useSwarm((s) => s.earlyStopDetail);
   const drainEligible = useSwarm((s) => s.drainEligible);
   const drainReason = useSwarm((s) => s.drainIneligibleReason);
@@ -106,6 +107,14 @@ export function RunHealthChip() {
       parts.push(topBucket ? `fails ${fails} (${topBucket})` : `fails ${fails}`);
     }
   }
+  if (applyIntegrity && live && applyIntegrity.attempts > 0) {
+    parts.push(`apply ${applyIntegrity.applied}/${applyIntegrity.attempts}`);
+    const topMiss = topCycleFailBucket(applyIntegrity.missByKind);
+    if (topMiss) parts.push(`miss ${topMiss}`);
+    if ((applyIntegrity.missTerminal ?? 0) > 0) {
+      parts.push(`term ${applyIntegrity.missTerminal}`);
+    }
+  }
   if (early) {
     // Surface a short reason in the chip itself (not only the tooltip).
     const short =
@@ -145,6 +154,23 @@ export function RunHealthChip() {
           .filter(Boolean)
           .join(" · ")
       : null,
+    applyIntegrity && applyIntegrity.attempts > 0
+      ? [
+          `Apply integrity: ${applyIntegrity.applied}/${applyIntegrity.attempts} applied`,
+          applyIntegrity.repairSuccesses > 0
+            ? `repair✓${applyIntegrity.repairSuccesses}`
+            : null,
+          applyIntegrity.repairFailures > 0
+            ? `repair✗${applyIntegrity.repairFailures}`
+            : null,
+          (applyIntegrity.missTerminal ?? 0) > 0
+            ? `terminal ${applyIntegrity.missTerminal}`
+            : null,
+          formatFailBuckets(applyIntegrity.missByKind),
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : null,
     drainEligible === false ? `Drain: ${drainReason ?? "not eligible"}` : null,
     drainEligible === true ? "Drain: soft-stop available" : null,
     early ? `Early stop / guard: ${early}` : null,
@@ -158,9 +184,16 @@ export function RunHealthChip() {
     && live
     && ((cycleIntegrity.lastEmptyStreak ?? 0) >= 2
       || (cycleIntegrity.todosFailed ?? 0) >= 3);
+  const applyStressed =
+    !!applyIntegrity
+    && live
+    && applyIntegrity.attempts > 0
+    && ((applyIntegrity.missTerminal ?? 0) >= 2
+      || (applyIntegrity.applied < applyIntegrity.attempts
+        && applyIntegrity.attempts - applyIntegrity.applied >= 3));
   const tone = early
     ? "border-amber-700/50 bg-amber-950/40 text-amber-200"
-    : cycleStressed
+    : cycleStressed || applyStressed
       ? "border-amber-800/40 bg-amber-950/25 text-amber-100"
       : "border-ink-600 bg-ink-800/80 text-ink-300";
 

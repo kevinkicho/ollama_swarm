@@ -121,7 +121,18 @@ export const EXPLORE_MAX_LITERATURE_TOOL_TURNS = 100;
 /** Literature pre-pass profile — call sites pass web-only tools (no repo tour). */
 export const LITERATURE_RESEARCH_PROFILE: ToolProfileId = "swarm-research";
 
-export const LITERATURE_RESEARCH_TOOLS = ["web_search", "web_fetch"] as const;
+/**
+ * Literature pre-pass tools: local-first (read/grep/list/glob) then web.
+ * RR-C D3 — catalog files are useless if the model cannot open them.
+ */
+export const LITERATURE_RESEARCH_TOOLS = [
+  "read",
+  "grep",
+  "list",
+  "glob",
+  "web_search",
+  "web_fetch",
+] as const;
 
 export const LITERATURE_RESEARCH_NUDGE_TURN = 25;
 

@@ -212,6 +212,17 @@ export interface SwarmStore {
     lastEmptyStreak: number;
     maxEmptyStreak: number;
   };
+  /** RR-D: live apply/repair integrity from /status. */
+  applyIntegrity?: {
+    attempts: number;
+    applied: number;
+    missByKind: Record<string, number>;
+    repairSuccesses: number;
+    repairFailures: number;
+    missRecoveredDet?: number;
+    missRecoveredLlm?: number;
+    missTerminal?: number;
+  };
   earlyStopDetail?: string;
   /** Active composite pipeline sub-phase (from /status). */
   pipelinePhase?: {
@@ -242,6 +253,7 @@ export interface SwarmStore {
     pipelinePhase?: SwarmStore["pipelinePhase"] | null;
     progressHeartbeat?: SwarmStore["progressHeartbeat"] | null;
     cycleIntegrity?: SwarmStore["cycleIntegrity"] | null;
+    applyIntegrity?: SwarmStore["applyIntegrity"] | null;
   }) => void;
   upsertAgent: (a: AgentState) => void;
   /** Replace entire agent roster (pipeline handoff / killAll). */

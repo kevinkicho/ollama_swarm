@@ -21,8 +21,8 @@ test("councilWorkerRunner — literature research + web tools profile", () => {
   assert.match(SRC, /runCouncilLiteratureResearch|councilWorkerLiterature/, "must use literature pre-pass module");
   assert.match(ALL, /runCouncilLiteratureResearch/, "must define literature pre-pass");
   assert.match(LIT, /isLiteratureTodo/, "must detect literature todos");
-  assert.match(LIT, /LITERATURE_RESEARCH_PROFILE/, "must use web-only literature profile");
-  assert.match(LIT, /LITERATURE_RESEARCH_TOOLS/, "must restrict literature tools to web only");
+  assert.match(LIT, /LITERATURE_RESEARCH_PROFILE/, "must use literature research profile");
+  assert.match(LIT, /LITERATURE_RESEARCH_TOOLS/, "must use literature tool allowlist (local+web)");
   assert.match(LIT, /LITERATURE_RESEARCH_NUDGE_TURN/, "must nudge at turn 25 to emit prose");
   assert.match(LIT, /isUsableResearchBrief/, "must reject JSON hunks and intent-only stubs");
   assert.match(ATTEMPT, /activity: \{ kind: "worker"/, "must label worker todo prompts");

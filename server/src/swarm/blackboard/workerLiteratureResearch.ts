@@ -120,13 +120,7 @@ export async function runWorkerLiteratureResearch(
     mcpServers: cfg.mcpServers,
     maxToolTurns: EXPLORE_MAX_LITERATURE_TOOL_TURNS,
     // RR-C: allow read/grep/list so local-first is executable.
-    toolsOverride: [
-      "read",
-      "grep",
-      "list",
-      "glob",
-      ...LITERATURE_RESEARCH_TOOLS,
-    ] as const,
+    toolsOverride: [...LITERATURE_RESEARCH_TOOLS] as const,
     toolLoopNudge: {
       atTurn: LITERATURE_RESEARCH_NUDGE_TURN,
       message: LITERATURE_RESEARCH_NUDGE_MESSAGE,

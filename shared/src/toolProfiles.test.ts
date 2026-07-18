@@ -15,6 +15,7 @@ import {
   resolveMaxToolTurnsForProfile,
   resolveToolProfileId,
   toolingMatrix,
+  LITERATURE_RESEARCH_TOOLS,
 } from "./toolProfiles.js";
 
 describe("toolProfiles", () => {
@@ -48,6 +49,15 @@ describe("toolProfiles", () => {
     const rows = toolingMatrix({ webTools: true });
     assert.equal(rows.length, 4);
     assert.ok(rows.some((r) => r.role === "Worker" && r.tools.includes("web_search")));
+  });
+
+  it("LITERATURE_RESEARCH_TOOLS is local-first then web (RR-C D3)", () => {
+    assert.ok(LITERATURE_RESEARCH_TOOLS.includes("read"));
+    assert.ok(LITERATURE_RESEARCH_TOOLS.includes("grep"));
+    assert.ok(LITERATURE_RESEARCH_TOOLS.includes("list"));
+    assert.ok(LITERATURE_RESEARCH_TOOLS.includes("glob"));
+    assert.ok(LITERATURE_RESEARCH_TOOLS.includes("web_search"));
+    assert.ok(LITERATURE_RESEARCH_TOOLS.includes("web_fetch"));
   });
 
   it("effectiveToolProfileId upgrades swarm-read when web tools on", () => {

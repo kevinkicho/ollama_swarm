@@ -122,6 +122,8 @@ export interface SwarmStatus {
   };
   /** RR-D: live cycle fail taxonomy (empty cycles, apply/json/tool buckets). */
   cycleIntegrity?: import("@ollama-swarm/shared/cycleIntegrityReport").CycleIntegrityReport;
+  /** RR-D: live apply/repair integrity (attempts, misses, repairs). */
+  applyIntegrity?: import("@ollama-swarm/shared/applyIntegrityReport").ApplyIntegrityReport;
   /** Blackboard planning pipeline step (seeding / contract / todos). */
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   /** Live think-guard referee budget (resolved defaults + usage). */

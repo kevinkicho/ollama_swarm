@@ -913,6 +913,8 @@ export interface SwarmStatusSnapshot {
   };
   /** Live cycle fail taxonomy (mirrors summary.cycleIntegrity). */
   cycleIntegrity?: RunSummary["cycleIntegrity"];
+  /** Live apply/repair integrity (mirrors summary.applyIntegrity). */
+  applyIntegrity?: RunSummary["applyIntegrity"];
   planningSubphase?: import("@ollama-swarm/shared/planningSubphase").PlanningSubphase;
   thinkGuardReferee?: ResolvedThinkGuardRefereeBudget;
   pipelinePhase?: {

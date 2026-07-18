@@ -141,7 +141,7 @@ export async function runCouncilLiteratureResearch(
       manager: state.manager as any,
       activity: { kind: "worker", label: "literature research" },
       maxToolTurns: litToolTurns,
-      toolsOverride: ["read", "grep", "list", "glob", ...LITERATURE_RESEARCH_TOOLS] as const,
+      toolsOverride: [...LITERATURE_RESEARCH_TOOLS] as const,
       toolLoopNudge: {
         atTurn: Math.min(LITERATURE_RESEARCH_NUDGE_TURN, 4),
         message: LITERATURE_RESEARCH_NUDGE_MESSAGE,
