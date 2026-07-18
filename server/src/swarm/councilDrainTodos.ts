@@ -14,6 +14,7 @@ import {
   createSettlementBook,
   cycleExecutionSettled,
   maxAttemptsForCycle,
+  recordFileSuccess,
   recordSettlementAttempt,
   requeueUnresolvedCouncilTodos,
   summarizeUnresolved,
@@ -162,7 +163,10 @@ export async function drainCouncilTodos(
                 info.todoId,
                 agentId,
                 info.detail,
+                info.expectedFiles,
               );
+            } else if (info.outcome === "completed" && info.expectedFiles?.length) {
+              recordFileSuccess(settlementBook, info.expectedFiles);
             }
             host.recordTodoSettled(cycle, {
               description: info.description,
@@ -171,6 +175,7 @@ export async function drainCouncilTodos(
               detail: info.detail,
             });
           },
+          getFileFailStreak: () => settlementBook.fileFailStreak,
           stopping: () => host.isStopping(),
           draining: () => host.isDraining(),
           promptSignal: host.promptSignal(),

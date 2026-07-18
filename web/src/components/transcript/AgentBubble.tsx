@@ -407,12 +407,29 @@ export function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string 
     }
     if (entry.summary.kind === "worker_skip") {
       const s = entry.summary;
-      // Transcript UI fix: render worker skips more subtly (compact, low-contrast)
-      // so repetitive "already present / no-op" messages don't dominate the view.
+      // Three visual classes: justified permanent / exhausted / soft-requeue (skipClassify).
+      const r = (s.reason || "").toLowerCase();
+      const isPermanent =
+        /^permanent:/.test(r)
+        || (/\balready\b/.test(r) && /\b(done|fixed|present|applied|verified)\b/.test(r));
+      const isExhausted = /attempts-exhausted|noop-exhausted|exhausted/.test(r);
+      const chip =
+        isExhausted
+          ? { label: "exhausted", cls: "bg-rose-900/40 text-rose-300 border-rose-800/50" }
+          : isPermanent
+            ? { label: "justified", cls: "bg-emerald-900/40 text-emerald-300 border-emerald-800/50" }
+            : { label: "soft", cls: "bg-amber-900/40 text-amber-300 border-amber-800/50" };
       return (
-        <div className="rounded px-2 py-1 text-[11px] text-ink-500 border-l-2 border-amber-900/40 bg-amber-950/10 ml-2">
+        <div className="rounded px-2 py-1 text-[11px] text-ink-400 border-l-2 border-amber-900/40 bg-amber-950/10 ml-2">
           {header}
-          <span className="font-mono">⏭ skip:</span> {s.reason}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span
+              className={`inline-block px-1.5 py-px rounded border text-[9px] uppercase tracking-wide font-semibold ${chip.cls}`}
+            >
+              skip · {chip.label}
+            </span>
+            <span className="text-ink-300">{s.reason}</span>
+          </div>
         </div>
       );
     }

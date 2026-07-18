@@ -207,11 +207,25 @@ export function postCouncilTodoBatch(
   return prepared.length;
 }
 
+/**
+ * How many consecutive terminal fails on a basename before we deprioritize
+ * (not ban) that file in dequeue. Soft penalty — other work still preferred.
+ */
+export const HOTSPOT_FAIL_STREAK_SOFT = 2;
+/** At this streak, only schedule if no non-hotspot pending work remains. */
+export const HOTSPOT_FAIL_STREAK_HARD = 4;
+
 /** Dequeue score: higher = sooner. Returns NEGATIVE_INFINITY when deferred. */
 export function scoreCouncilTodoForDequeue(
   todo: { kind?: "hunks" | "build"; description: string; expectedFiles: readonly string[] },
   inProgress: readonly { expectedFiles: readonly string[] }[],
   hasPendingOrActiveNonBuild: boolean,
+  opts?: {
+    /** basename → fail streak this cycle (from settlement book) */
+    fileFailStreak?: ReadonlyMap<string, number>;
+    /** True when some other pending todo is not on a hard-hotspot file */
+    hasNonHotspotPending?: boolean;
+  },
 ): number {
   if (todo.kind === "build" && hasPendingOrActiveNonBuild) {
     return Number.NEGATIVE_INFINITY;
@@ -231,5 +245,23 @@ export function scoreCouncilTodoForDequeue(
   }
 
   const tier = councilExecutionTier(todo.description, todo.expectedFiles);
-  return 100 - TIER_RANK[tier] * 10;
+  let score = 100 - TIER_RANK[tier] * 10;
+
+  // Hotspot soft/hard deprioritize — does not ban agents; prefers fresher work.
+  const streakMap = opts?.fileFailStreak;
+  if (streakMap && todo.expectedFiles.length > 0) {
+    let maxStreak = 0;
+    for (const p of todo.expectedFiles) {
+      const base = fileBasenameLower(p);
+      maxStreak = Math.max(maxStreak, streakMap.get(base) ?? 0);
+    }
+    if (maxStreak >= HOTSPOT_FAIL_STREAK_HARD && opts?.hasNonHotspotPending) {
+      return Number.NEGATIVE_INFINITY;
+    }
+    if (maxStreak >= HOTSPOT_FAIL_STREAK_SOFT) {
+      score -= 15 * Math.min(maxStreak, 6);
+    }
+  }
+
+  return score;
 }

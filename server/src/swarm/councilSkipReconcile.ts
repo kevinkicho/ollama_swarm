@@ -299,7 +299,14 @@ export function filterAuditTodosAgainstPermanentSkips<
               === normalizeDescKey(t.description).slice(0, 48),
         ));
 
-    if (sameShape || sameCriterion || createTestRemint || createWireRemint) {
+    // Broad hotspot remint: any permanent-skip with file overlap (not only
+    // create-test/wire shapes) — 120b re-flooded search_not_found files.
+    const pureFileRemint =
+      t.expectedFiles.length > 0
+      && fileOverlap
+      && permanentSkips.some((s) => isExhaustedPermanentSkipReason(s.reason));
+
+    if (sameShape || sameCriterion || createTestRemint || createWireRemint || pureFileRemint) {
       dropped.push(t);
     } else {
       kept.push(t);

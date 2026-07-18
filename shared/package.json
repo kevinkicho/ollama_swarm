@@ -34,6 +34,7 @@
     "./streamIntegrityReport": "./src/streamIntegrityReport.ts",
     "./applyIntegrityReport": "./src/applyIntegrityReport.ts",
     "./skipClassify": "./src/skipClassify.ts",
+    "./workerAttemptOutcome": "./src/workerAttemptOutcome.ts",
     "./cycleIntegrityReport": "./src/cycleIntegrityReport.ts",
     "./jsonFormatSniff": "./src/jsonFormatSniff.ts",
     "./thinkGuardBudget": "./src/thinkGuardBudget.ts",

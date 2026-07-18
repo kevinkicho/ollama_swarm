@@ -13,6 +13,7 @@ import { readExpectedFiles } from "./sharedFileUtils.js";
 import { windowFileForWorker } from "./blackboard/windowFile.js";
 import type { PermanentSkipEvidence, SkipEvidenceTodo } from "./councilSkipReconcile.js";
 import {
+  filterAuditTodosAgainstPermanentSkips,
   filterAuditTodosAgainstSkips,
   promoteCriteriaFromSkipEvidence,
   refuseMetFromExhaustedPermanentSkips,
@@ -107,6 +108,7 @@ function applyAuditorVerdicts(
   updatedCriteria: ExitCriterion[];
   newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }>;
   demotedIds: string[];
+  remintDropped: number;
 } {
   const criteriaById = new Map(contract.criteria.map((c) => [c.id, c]));
   let newTodos: Array<{ description: string; expectedFiles: string[]; criterionId?: string }> = [];
@@ -134,10 +136,25 @@ function applyAuditorVerdicts(
   );
   updatedCriteria = refused.criteria;
   newTodos = filterAuditTodosAgainstSkips(newTodos, skipEvidence);
+  // Permanent-skip remint suppress (attempts/noop exhausted) — was only on
+  // create-test shapes in filter helper; wire it into the LLM audit path
+  // so audit cannot re-flood the same hotspot todos (120b thrash).
+  // Always suppress re-mint of permanent-skipped shapes (even after prior
+  // commits). Durable progress is reflected in MET criteria, not by allowing
+  // the same exhausted todo fingerprint back onto the queue.
+  const remint = filterAuditTodosAgainstPermanentSkips(newTodos, permanentSkips, {
+    hadDurableProgress: false,
+  });
+  newTodos = remint.kept;
   const metIds = new Set(updatedCriteria.filter((c) => c.status === "met").map((c) => c.id));
   newTodos = newTodos.filter((t) => !t.criterionId || !metIds.has(t.criterionId));
 
-  return { updatedCriteria, newTodos, demotedIds: refused.demotedIds };
+  return {
+    updatedCriteria,
+    newTodos,
+    demotedIds: refused.demotedIds,
+    remintDropped: remint.dropped.length,
+  };
 }
 
 export async function runCouncilLlmAudit(
@@ -279,7 +296,7 @@ Return ONLY a JSON object:
         return fallbackAudit(cfg, contract, skipEvidence, ledger);
       }
 
-      const { updatedCriteria, newTodos, demotedIds } = applyAuditorVerdicts(
+      const { updatedCriteria, newTodos, demotedIds, remintDropped } = applyAuditorVerdicts(
         contract,
         parsed,
         skipEvidence,
@@ -291,6 +308,11 @@ Return ONLY a JSON object:
       if (demotedIds.length > 0) {
         ctx.appendSystem(
           `[audit] Demoted ${demotedIds.length} criterion(s) still unmet after permanent-skip exhaustion: ${demotedIds.join(", ")}.`,
+        );
+      }
+      if (remintDropped > 0) {
+        ctx.appendSystem(
+          `[audit] Suppressed ${remintDropped} re-minted todo(s) matching permanent-skip fingerprints.`,
         );
       }
 

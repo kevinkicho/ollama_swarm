@@ -96,8 +96,9 @@ test("councilWorkerRunner — stage-3 failover uses providerFailover chain", () 
 
 test("councilWorkerRunner — file-scoped dequeue defers overlapping writers", () => {
   assert.match(SRC, /dequeueCouncilTodo/, "must use council dequeue with file deferral");
-  assert.match(SRC, /scoreCouncilTodoForDequeue/, "must score todos for overlap and build-last");
+  assert.match(SRC, /councilWorkerDequeue/, "dequeue extracted for LOC hygiene + hotspot scoring");
   assert.match(SRC, /WORKER_DEFER_POLL_MS/, "must poll when todos are deferred but still pending");
+  assert.match(SRC, /getFileFailStreak/, "must pass hotspot streak into dequeue");
 });
 
 test("councilWorkerRunner — reports settle agent id for cycle settlement", () => {

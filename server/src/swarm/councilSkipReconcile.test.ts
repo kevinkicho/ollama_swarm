@@ -276,6 +276,26 @@ test("refuseMetFromExhaustedPermanentSkips — keeps met when commit covers file
   assert.equal(out[0]!.status, "met");
 });
 
+test("filterAuditTodosAgainstPermanentSkips — drops pure file-overlap remint on exhausted permanent", () => {
+  const { kept, dropped } = filterAuditTodosAgainstPermanentSkips(
+    [
+      {
+        description: "Tweak the panel registry layout again",
+        expectedFiles: ["src/data/panelRegistry.js"],
+      },
+    ],
+    [
+      {
+        description: "Earlier failed panel work",
+        expectedFiles: ["src/data/panelRegistry.js"],
+        reason: "permanent:attempts-exhausted: 2 attempts",
+      },
+    ],
+  );
+  assert.equal(kept.length, 0);
+  assert.equal(dropped.length, 1);
+});
+
 test("filterAuditTodosAgainstPermanentSkips — drops create/wire panel remint", () => {
   const { kept, dropped } = filterAuditTodosAgainstPermanentSkips(
     [

@@ -58,10 +58,54 @@ export interface SettlementAttemptBook {
   attempts: Map<string, Set<string>>;
   /** todoId → recent fail/skip reason strings (for noop-exhausted detection) */
   failReasons: Map<string, string[]>;
+  /**
+   * Basename → consecutive terminal apply/skip fails this cycle.
+   * Used to deprioritize hotspot files in dequeue (not a hard ban).
+   */
+  fileFailStreak: Map<string, number>;
 }
 
 export function createSettlementBook(): SettlementAttemptBook {
-  return { attempts: new Map(), failReasons: new Map() };
+  return {
+    attempts: new Map(),
+    failReasons: new Map(),
+    fileFailStreak: new Map(),
+  };
+}
+
+function fileBasenameLower(p: string): string {
+  const n = p.replace(/\\/g, "/");
+  return (n.split("/").pop() ?? n).toLowerCase();
+}
+
+/** Record terminal miss/fail for expected files (hotspot scoring). */
+export function recordFileTerminalFails(
+  book: SettlementAttemptBook,
+  expectedFiles: readonly string[],
+  reason?: string,
+): void {
+  if (!reason) return;
+  // Only apply-class / permanent / noop thrash — not soft justified skips.
+  const counts =
+    /search|start|end|not found|not unique|apply|noop|exhausted|permanent|invalid json|parse|no hunks/i.test(
+      reason,
+    );
+  if (!counts) return;
+  for (const f of expectedFiles) {
+    const b = fileBasenameLower(f);
+    if (!b) continue;
+    book.fileFailStreak.set(b, (book.fileFailStreak.get(b) ?? 0) + 1);
+  }
+}
+
+/** Clear streak when a file path succeeds (basename). */
+export function recordFileSuccess(
+  book: SettlementAttemptBook,
+  expectedFiles: readonly string[],
+): void {
+  for (const f of expectedFiles) {
+    book.fileFailStreak.delete(fileBasenameLower(f));
+  }
 }
 
 export function recordSettlementAttempt(
@@ -69,6 +113,7 @@ export function recordSettlementAttempt(
   todoId: string,
   workerId: string,
   reason?: string,
+  expectedFiles?: readonly string[],
 ): void {
   let set = book.attempts.get(todoId);
   if (!set) {
@@ -85,6 +130,9 @@ export function recordSettlementAttempt(
     reasons.push(reason);
     // Cap history
     if (reasons.length > 12) reasons.splice(0, reasons.length - 12);
+    if (expectedFiles && expectedFiles.length > 0) {
+      recordFileTerminalFails(book, expectedFiles, reason);
+    }
   }
 }
 

@@ -42,9 +42,9 @@ import {
   summarizeWorkerFailureReason,
 } from "./councilWorkerFallback.js";
 import { TodoQueue, type QueuedTodo } from "./blackboard/TodoQueue.js";
-import { scoreCouncilTodoForDequeue } from "./councilTodoPlan.js";
 import type { CouncilAdapterState } from "./councilAdapter.js";
 import { wrapProgressContextForPrompt } from "./councilProgressLedger.js";
+import { dequeueCouncilTodo } from "./councilWorkerDequeue.js";
 import {
   noteMissRecoveredDet,
   noteMissRecoveredLlm,
@@ -58,6 +58,9 @@ import {
 } from "./cycleIntegrityStats.js";
 import { classifyCycleFailReason } from "@ollama-swarm/shared/cycleIntegrityReport";
 import { classifyWorkerSkip } from "@ollama-swarm/shared/skipClassify";
+import {
+  formatWorkerAttemptOutcomeLine,
+} from "@ollama-swarm/shared/workerAttemptOutcome";
 import {
   BARE_TEST_RUNNERS,
   shouldDemoteBuildToHunks,
@@ -112,6 +115,8 @@ export interface WorkerRunnerContext {
   getSwarmControl?: () => SwarmControlCenter;
   getCoachAgent?: () => Agent | undefined;
   emit?: (e: SwarmEvent) => void;
+  /** Hotspot basename → fail streak (settlement book); soft dequeue deprioritize. */
+  getFileFailStreak?: () => ReadonlyMap<string, number> | undefined;
 }
 
 function wrapCouncilPromptWithControlHints(
@@ -153,30 +158,6 @@ function buildCouncilToolCoachHook(
 
 const WORKER_COOLDOWN_MS = 5_000;
 const WORKER_DEFER_POLL_MS = 750;
-
-/** Dequeue with file-scoped deferral: at most one in-flight writer per expectedFiles path. */
-function dequeueCouncilTodo(queue: TodoQueue, workerId: string): QueuedTodo | null {
-  const all = queue.list();
-  const inProgress = all.filter((t) => t.status === "in-progress");
-  const hasPendingOrActiveNonBuild = all.some(
-    (t) => (t.status === "pending" || t.status === "in-progress") && t.kind !== "build",
-  );
-
-  let best: (typeof all)[number] | undefined;
-  let bestScore = Number.NEGATIVE_INFINITY;
-  for (const t of all) {
-    if (t.status !== "pending") continue;
-    const score = scoreCouncilTodoForDequeue(t, inProgress, hasPendingOrActiveNonBuild);
-    if (score > bestScore) {
-      bestScore = score;
-      best = t;
-    }
-  }
-  if (!best || bestScore === Number.NEGATIVE_INFINITY) return null;
-  return queue.dequeueByScore(workerId, (t) =>
-    scoreCouncilTodoForDequeue(t, inProgress, hasPendingOrActiveNonBuild),
-  );
-}
 
 type TodoExecuteResult =
   | { outcome: "completed" }
@@ -399,7 +380,11 @@ async function runCouncilWorker(
 
   while (!ctx.stopping()) {
     if (ctx.draining?.()) break;
-    const todo = dequeueCouncilTodo(state.todoQueue, agent.id);
+    const todo = dequeueCouncilTodo(
+      state.todoQueue,
+      agent.id,
+      ctx.getFileFailStreak?.(),
+    );
     if (todo) {
       emitCouncilTodoClaimed(state.emit, todo);
     }
@@ -423,6 +408,15 @@ async function runCouncilWorker(
       emitCouncilTodoCommitted(state.emit, todo.id);
       completed++;
       recordCycleTodoSuccess(state.cfg.runId);
+      ctx.appendSystem(
+        formatWorkerAttemptOutcomeLine({
+          todoId: todo.id,
+          agentId: agent.id,
+          stage: "settled",
+          terminal: "completed",
+          file: todo.expectedFiles[0],
+        }),
+      );
       const settled = {
         todoId: todo.id,
         description: todo.description,
@@ -445,6 +439,18 @@ async function runCouncilWorker(
       state.todoQueue.skip(todo.id, result.reason);
       emitCouncilTodoSkipped(state.emit, state.todoQueue, todo.id);
       skipped++;
+      const skipClass = classifyWorkerSkip(result.reason);
+      ctx.appendSystem(
+        formatWorkerAttemptOutcomeLine({
+          todoId: todo.id,
+          agentId: agent.id,
+          stage: "settled",
+          terminal: "skipped",
+          skipCode: skipClass.ok ? skipClass.code : "garbage",
+          detail: result.reason.slice(0, 100),
+          file: todo.expectedFiles[0],
+        }),
+      );
       // Skip is not a hard fail bucket unless permanent/noop-ish.
       if (/permanent|noop|exhausted|wont-do|won't do/i.test(result.reason)) {
         recordCycleFail(result.reason, state.cfg.runId, todo.id);
@@ -463,6 +469,17 @@ async function runCouncilWorker(
       emitCouncilTodoFailed(state.emit, state.todoQueue, todo.id);
       failed++;
       recordCycleFail(result.error, state.cfg.runId, todo.id);
+      ctx.appendSystem(
+        formatWorkerAttemptOutcomeLine({
+          todoId: todo.id,
+          agentId: agent.id,
+          stage: "settled",
+          terminal: "failed",
+          bucket: classifyCycleFailReason(result.error),
+          detail: result.error.slice(0, 100),
+          file: todo.expectedFiles[0],
+        }),
+      );
       ctx.recordFailure?.(todo.id, todo.description, result.error.slice(0, 200));
       ctx.onTodoSettled?.(settled);
     }
