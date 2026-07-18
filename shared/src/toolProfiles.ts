@@ -20,6 +20,7 @@ export type ToolProfileId =
   | "swarm-builder"
   | "swarm-builder-research"
   | "swarm-research"
+  | "swarm-write"
   | "swarm-auto";
 
 export function isWebToolsEnabled(cfg?: WebToolsConfig | null): boolean {
@@ -43,12 +44,16 @@ export function resolveToolProfileId(
       // Planner always gets the full read/web/bash toolkit — not gated on run config.
       return "swarm-planner";
     case "worker":
-      // Hunk workers always get read/grep/glob/list — todos routinely reference
-      // files beyond the windowed excerpt and workers must verify anchors.
-      return web ? "swarm-research" : "swarm-read";
+      // Git-native collaboration: workers mutate the working tree via write/edit
+      // (+ git_status/git_diff/run), then finish with {workingTree:true}.
+      // Read-only hunk-only profiles blocked real multi-agent git work.
+      return web ? "swarm-builder-research" : "swarm-write";
     case "worker-build":
       return web ? "swarm-builder-research" : "swarm-builder";
     case "auditor":
+      // Auditor reviews git reality (status/diff) + optional web; no write by default
+      // (mutations still go through propose→approve). autoApprove elevates above.
+      return web ? "swarm-research" : "swarm-read";
     case "read":
       return web ? "swarm-research" : "swarm-read";
   }
@@ -71,6 +76,7 @@ const KNOWN_PROFILES: ReadonlySet<string> = new Set([
   "swarm-builder",
   "swarm-builder-research",
   "swarm-research",
+  "swarm-write",
   "swarm-auto",
 ]);
 
@@ -126,7 +132,8 @@ export const LITERATURE_RESEARCH_NUDGE_MESSAGE =
 export const WORKER_JSON_NUDGE_TURN = 15;
 
 export const WORKER_JSON_NUDGE_MESSAGE =
-  "Stop exploring. Emit your JSON hunk array now (or {\"skip\":true} if out of scope). No more tool calls.";
+  "Stop exploring. Prefer finishing with {\"workingTree\":true,\"files\":[...],\"message\":\"...\"} after write/edit tools, " +
+  "or emit a JSON hunk array (or {\"skip\":true} if out of scope). No more tool calls.";
 
 /**
  * Council / discussion draft rounds tool budget.
@@ -177,6 +184,7 @@ export function workerJsonNudgeForProfile(
   if (
     profile === "swarm-builder"
     || profile === "swarm-builder-research"
+    || profile === "swarm-write"
     || profile === "swarm-auto"
   ) {
     return { atTurn: WORKER_JSON_NUDGE_TURN, message: WORKER_JSON_NUDGE_MESSAGE };
@@ -259,6 +267,8 @@ export function allowsUnboundedToolTurns(profile: ToolProfileId): boolean {
     profile === "swarm-read"
     || profile === "swarm-planner"
     || profile === "swarm-research"
+    || profile === "swarm-write"
+    || profile === "swarm-builder"
     || profile === "swarm-builder-research"
     || profile === "swarm-auto"
   );
@@ -269,24 +279,57 @@ export function resolveMaxToolTurnsForProfile(profile: ToolProfileId): number | 
   if (!allowsUnboundedToolTurns(profile)) return undefined;
   if (profile === "swarm-auto") return EXPLORE_MAX_BUILDER_RESEARCH_TOOL_TURNS;
   if (profile === "swarm-builder-research") return EXPLORE_MAX_BUILDER_RESEARCH_TOOL_TURNS;
+  if (profile === "swarm-write" || profile === "swarm-builder") {
+    return EXPLORE_MAX_BUILDER_RESEARCH_TOOL_TURNS;
+  }
   if (profile === "swarm-research") return EXPLORE_MAX_RESEARCH_TOOL_TURNS;
   return EXPLORE_MAX_TOOL_TURNS;
 }
 
 export const PROFILE_TOOLS: Record<ToolProfileId, readonly string[]> = {
   swarm: [],
-  "swarm-read": ["read", "grep", "glob", "list"],
-  "swarm-planner": ["read", "grep", "glob", "list", "bash", "web_search", "web_fetch"],
-  "swarm-builder": ["read", "grep", "glob", "list", "bash", "propose_hunks"],
+  "swarm-read": ["read", "grep", "glob", "list", "git_status", "git_diff"],
+  "swarm-planner": ["read", "grep", "glob", "list", "bash", "run", "git_status", "git_diff", "web_search", "web_fetch"],
+  "swarm-write": [
+    "read",
+    "grep",
+    "glob",
+    "list",
+    "bash",
+    "run",
+    "write",
+    "edit",
+    "propose_hunks",
+    "git_status",
+    "git_diff",
+  ],
+  "swarm-builder": [
+    "read",
+    "grep",
+    "glob",
+    "list",
+    "bash",
+    "run",
+    "write",
+    "edit",
+    "propose_hunks",
+    "git_status",
+    "git_diff",
+  ],
   "swarm-builder-research": [
     "read",
     "grep",
     "glob",
     "list",
     "bash",
+    "run",
+    "write",
+    "edit",
     "web_search",
     "web_fetch",
     "propose_hunks",
+    "git_status",
+    "git_diff",
   ],
   /** Auto-approve / high-trust: max toolkit for every role. */
   "swarm-auto": [
@@ -295,11 +338,16 @@ export const PROFILE_TOOLS: Record<ToolProfileId, readonly string[]> = {
     "glob",
     "list",
     "bash",
+    "run",
+    "write",
+    "edit",
     "web_search",
     "web_fetch",
     "propose_hunks",
+    "git_status",
+    "git_diff",
   ],
-  "swarm-research": ["read", "grep", "glob", "list", "web_search", "web_fetch"],
+  "swarm-research": ["read", "grep", "glob", "list", "git_status", "git_diff", "web_search", "web_fetch"],
 };
 
 export interface ToolingMatrixRow {

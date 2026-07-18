@@ -484,6 +484,9 @@ export function buildBaselinePrompt(input: BaselinePromptInput): string {
   );
   parts.push("");
   parts.push("Output schema:");
+  parts.push("Prefer git-native work: use write/edit tools on disk, then finish with:");
+  parts.push('  {"workingTree":true,"message":"short subject","files":["path/to/file.ts"]}');
+  parts.push("Or small anchor patches:");
   parts.push('  {"hunks": [ ...search/replace hunks ]}');
   parts.push(
     'Each hunk: {"op": "replace"|"create"|"append", "file": "<path>", "search": "...", "replace": "..."} or {"op":"create"|"append", "file": "...", "content": "..."}.',

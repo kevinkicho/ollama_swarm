@@ -47,6 +47,10 @@ This is the structured index of all relevant, tracked documentation for the olla
   working-tree collaboration. Companion:
   [`brain-os-dispatch-api-sketch.md`](./design/brain-os-dispatch-api-sketch.md).
 
+- **docs/design/git-native-agent-collaboration.md**  
+  Multi-agent collaboration via git working tree (not hunk-passing); freer tools
+  with contestable denials and peer/master review (OpenCode SDK removed E3).
+
 ## Operational & Historical
 
 - **docs/decisions.md**  

@@ -51,6 +51,8 @@ export class ToolDispatcher {
   private mcpToolToClient: Map<string, string> = new Map(); // toolName -> clientKey
   /** Resolves when MCP spawn/connect finishes (or immediately if MCP disabled). */
   private readonly mcpReady: Promise<void>;
+  /** Optional run id for contestable denials + one-shot allows. */
+  private runId?: string;
 
   constructor(
     private readonly profile: ProfileName,
@@ -58,7 +60,9 @@ export class ToolDispatcher {
     mcpServers?: string,
     private readonly agentId?: string,
     private readonly onToolResult?: ToolResultHook,
+    runId?: string,
   ) {
+    this.runId = runId;
     if (
       mcpServers
       && config.SWARM_ALLOW_MCP_SERVERS
@@ -177,6 +181,11 @@ export class ToolDispatcher {
     });
   }
 
+  /** Bind run id after construct (callers that create dispatcher early). */
+  setRunId(runId: string | undefined): void {
+    this.runId = runId;
+  }
+
   async dispatch(call: ToolCall): Promise<ToolResult> {
     // Ensure MCP servers finished connecting before first tool dispatch.
     await this.mcpReady;
@@ -184,6 +193,16 @@ export class ToolDispatcher {
     const profilePerms = PROFILES[this.profile] as Record<ToolName, Permission>;
     const perm = profilePerms[call.tool];
     if (perm !== "allow") {
+      // One-shot allow after peer/master approved a contest.
+      const {
+        consumeToolAllowOnce,
+        openToolContest,
+        formatContestableDenial,
+        recordDenialDeliberation,
+      } = await import("./toolContest.js");
+      if (consumeToolAllowOnce(this.runId, this.agentId, call.tool)) {
+        // fall through to execute as if allowed
+      } else {
       // Check if it's an MCP tool (namespaced or direct)
       const mcpKey = this.mcpToolToClient.get(call.tool) || this.mcpToolToClient.get(`${call.tool}`);
       if (mcpKey && this.mcpClients.has(mcpKey)) {
@@ -191,12 +210,37 @@ export class ToolDispatcher {
         this.notifyToolResult(call.tool, result);
         return result;
       }
+      // Contestable denial (profile leash) — not path sandbox.
+      let denyError = `tool "${call.tool}" denied by profile "${this.profile}"`;
+      if (this.runId && this.agentId) {
+        const contest = openToolContest({
+          runId: this.runId,
+          agentId: this.agentId,
+          tool: call.tool,
+          profile: this.profile,
+          denyReason: denyError,
+        });
+        denyError = formatContestableDenial({
+          tool: call.tool,
+          profile: this.profile,
+          contestId: contest.id,
+        });
+        try {
+          recordDenialDeliberation(contest, {
+            runId: this.runId,
+            clonePath: this.clonePath,
+          });
+        } catch {
+          /* best-effort */
+        }
+      }
       const denied: ToolResult = {
         ok: false,
-        error: `tool "${call.tool}" denied by profile "${this.profile}"`,
+        error: denyError,
       };
       this.notifyToolResult(call.tool, denied);
       return denied;
+      }
     }
     switch (call.tool) {
       case "read":

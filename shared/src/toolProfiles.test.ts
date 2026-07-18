@@ -26,8 +26,8 @@ describe("toolProfiles", () => {
   });
 
   it("resolveToolProfileId gates web tools per role", () => {
-    assert.equal(resolveToolProfileId("worker", { webTools: false }), "swarm-read");
-    assert.equal(resolveToolProfileId("worker", { webTools: true }), "swarm-research");
+    assert.equal(resolveToolProfileId("worker", { webTools: false }), "swarm-write");
+    assert.equal(resolveToolProfileId("worker", { webTools: true }), "swarm-builder-research");
     assert.equal(resolveToolProfileId("auditor", { webTools: true }), "swarm-research");
     assert.equal(resolveToolProfileId("auditor", {}), "swarm-read");
     assert.equal(resolveToolProfileId("planner", { webTools: true }), "swarm-planner");

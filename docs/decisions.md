@@ -2,6 +2,24 @@
 
 This document records major architectural and product decisions with their rationale and status.
 
+## 2026-07-18: Git-native collaboration + contestable tool denials
+
+**Decision:** Agents collaborate primarily via the **git working tree**
+(`write`/`edit`/`run`/`git_*` + `{workingTree:true}`), not by exchanging invented
+search/replace hunks. Workers default to write-capable tool profiles. Profile
+tool denials are **contestable** (peer/master approve → one-shot allow); only
+clone path sandbox remains hard-deny. OpenCode SDK permission UI is **not** the
+runtime (removed E3); contests use ToolDispatcher + deliberation.
+
+**Rationale:** Hunk-passing is brittle under concurrency; git is already the
+durable substrate. Maximal tool freedom within the clone matches “let them cook”
+without silent leashes.
+
+**Status:** First slice shipped (profiles, contest module, design doc).
+**Detail:** `docs/design/git-native-agent-collaboration.md`
+
+---
+
 ## 2026-07-18: Control plane rebranded as run resilience (not “governance”)
 
 **Decision:** The IdentityStrip chip formerly labeled **Governance** is the run’s

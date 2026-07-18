@@ -141,7 +141,8 @@ export function buildSynthesizerMissRepromptBlock(
   }
   lines.push(
     "",
-    "Re-read the listed files and emit replace/replace_between hunks whose search/start text exists EXACTLY once in the current file contents. Prefer uniqueCandidates when listed. Do not invent anchors.",
+    "Prefer git-native recovery: re-read files, use write/edit tools on disk, finish with {workingTree:true,files:[...],message:\"...\"}.",
+    "Or emit replace/replace_between hunks whose search/start exists EXACTLY once. Prefer uniqueCandidates when listed. Do not invent anchors.",
     "",
   );
   return lines.join("\n");

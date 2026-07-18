@@ -88,7 +88,7 @@ export async function runHelperSession(
   const model = req.helperModel ?? "deepseek-v4-flash:cloud";
   const agentId = `brain-os-helper-${req.depth}-${Date.now().toString(36)}`;
   const profile = profileForPrivilege(req.privileges);
-  const dispatcher = new ToolDispatcher(profile, req.clonePath, undefined, agentId);
+  const dispatcher = new ToolDispatcher(profile, req.clonePath, undefined, agentId, undefined, req.runId);
   await dispatcher.whenMcpReady();
 
   // Tools list from profile — ToolDispatcher enforces permissions.

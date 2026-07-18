@@ -166,7 +166,7 @@ async function chatOnceOnce(
           : [];
     const mcp = opts.mcpServers || undefined;
     const dispatcher = clonePath && profileForTools && tools.length > 0
-      ? new ToolDispatcher(profileForTools, clonePath, mcp, agent.id)
+      ? new ToolDispatcher(profileForTools, clonePath, mcp, agent.id, undefined, opts.runId)
       : undefined;
     const exploreToolCap = opts.maxToolTurns ?? (profileForTools
       ? resolveMaxToolTurnsForProfile(
