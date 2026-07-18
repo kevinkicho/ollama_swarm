@@ -5,7 +5,6 @@ import { RunQueuePanel } from "./RunQueuePanel";
 import { MetricsOverviewPanel } from "./MetricsOverviewPanel";
 import { BrainActivityPanel } from "./BrainActivityPanel";
 import { BrainProposalsPanel } from "./BrainProposalsPanel";
-import { QuickNavPanel } from "./QuickNavPanel";
 import { useSwarm } from "../state/store";
 // Phase 10: brain always available (unless other config).
 import { RunHistoryDropdown } from "./runHistory";
@@ -50,7 +49,6 @@ export function SystemWrapper({
   const [systemHealthy, setSystemHealthy] = useState(true);
   const [brainHealth, setBrainHealth] = useState<BrainHealth | undefined>();
   const [brainActivities, setBrainActivities] = useState<BrainActivity[]>([]);
-  const [historyOpenSignal, setHistoryOpenSignal] = useState(0);
 
   // Phase 10: brain always enabled for active runs.
 
@@ -71,31 +69,7 @@ export function SystemWrapper({
 
   const navigate = useNavigate();
 
-  const handleSwitchRun = (id: string) => {
-    if (id === "history") {
-      setHistoryOpenSignal((n) => n + 1);
-    } else if (id) {
-      // treat as runId to view
-      navigate(`/runs/${encodeURIComponent(id)}`);
-    }
-  };
-
-  const handleNewRun = () => {
-    navigate("/");
-  };
-
   const activeRuns = runs.filter((r) => runQueueIsActive(r)).length;
-  const focusedRunDigest = activeRunId
-    ? runs.find((r) => r.runId === activeRunId)
-    : undefined;
-  const focusedRunLive = !!activeRunId && (
-    focusedRunDigest
-      ? runQueueIsActive(focusedRunDigest)
-      : isActiveSwarmPhase(phase)
-  );
-  const focusedRunStatus =
-    focusedRunDigest?.stopReason ??
-    (isActiveSwarmPhase(phase) ? undefined : phase !== "idle" ? phase : undefined);
   const totalRuns = runs.length;
   const completedRuns = runs.filter((r) => !r.isActive && r.stopReason === "completed").length;
   const terminalRuns = runs.filter((r) => !r.isActive).length;
@@ -307,7 +281,7 @@ export function SystemWrapper({
 
           <div className="flex items-center gap-1.5 shrink-0 pl-1 border-l border-ink-700/60">
             <UsageWidget />
-            <RunHistoryDropdown parentPath={parentPath} forceOpenSignal={historyOpenSignal} />
+            <RunHistoryDropdown parentPath={parentPath} />
             <EventLogPanel />
           </div>
         </div>
@@ -346,16 +320,6 @@ export function SystemWrapper({
               <MetricsOverviewPanel parentPath={parentPath} />
               <BrainActivityPanel brainHealth={brainHealth} activities={brainActivities} />
               <BrainProposalsPanel clonePath={clonePathForNav || parentPath} />
-              <QuickNavPanel
-                focusedRunId={activeRunId}
-                focusedRunLive={focusedRunLive}
-                focusedRunStatus={focusedRunStatus}
-                phase={phase}
-                parentPath={parentPath}
-                clonePath={clonePathForNav}
-                onSwitchRun={handleSwitchRun}
-                onNewRun={handleNewRun}
-              />
               <NotificationPreferences />
             </div>
           )}
