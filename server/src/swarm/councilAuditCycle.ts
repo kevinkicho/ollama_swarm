@@ -369,7 +369,7 @@ export async function runCouncilAuditCycle(
    * (commits / durable met flips / tier promotion). New todos alone
    * no longer reset the streak (prevents stretch/audit spin).
    */
-  const maybeStopNoProgress = (
+  const maybeStopNoProgress = async (
     signals: {
       metFlips: number;
       commitsThisCycle: number;
@@ -377,29 +377,122 @@ export async function runCouncilAuditCycle(
       tierPromoted?: boolean;
       skipOnlyMetFlips?: number;
     },
-  ): "stop" | null => {
+  ): Promise<"stop" | "retry" | null> => {
     if (!isAutonomous) {
       if (isDurableProgress(signals)) host.setZeroProgressStreak(0);
       return null;
     }
     const durable = isDurableProgress(signals);
+    const {
+      effectiveZeroProgressLimit,
+      tryBrainOsProgressUnstick,
+      wantEarlyUnstick,
+    } = await import("./progressBrainOs.js");
+    const runId = host.getActiveRunId() || cfg.runId;
+    const { limit: zpLimit, rollup } = effectiveZeroProgressLimit(
+      runId,
+      DEFAULT_ZERO_PROGRESS_LIMIT,
+    );
     const { streak, shouldStop } = updateZeroProgressStreak(
       host.getZeroProgressStreak(),
       durable,
-      DEFAULT_ZERO_PROGRESS_LIMIT,
+      zpLimit,
     );
     host.setZeroProgressStreak(streak);
+    const wire = host.state.todoQueue.counts();
+    const openWork =
+      (wire.pending ?? 0) + (wire.inProgress ?? 0) + (wire.failed ?? 0) > 0
+      || (host.state.contract?.criteria.some((c) => c.status === "unmet") ?? false);
+    const boardSnap = {
+      pending: wire.pending ?? 0,
+      inProgress: wire.inProgress ?? 0,
+      pendingCommit: wire.pendingCommit ?? 0,
+      completed: wire.completed ?? 0,
+      skipped: wire.skipped ?? 0,
+    };
+
     if (!shouldStop) {
       if (streak > 0) {
         host.appendSystem(
-          `[audit] Zero durable progress streak ${streak}/${DEFAULT_ZERO_PROGRESS_LIMIT}`
+          `[audit] Zero durable progress streak ${streak}/${zpLimit}`
+            + (zpLimit !== DEFAULT_ZERO_PROGRESS_LIMIT
+              ? ` (resilience=${rollup.label})`
+              : "")
             + ` (commits+${signals.commitsThisCycle}, met+${signals.metFlips}`
             + `, todos+${signals.newTodos}${signals.tierPromoted ? ", tier↑" : ""}).`,
         );
       }
+      // Early Brain OS when fragile/stressed (before hard stop).
+      if (openWork && wantEarlyUnstick(streak, zpLimit, rollup)) {
+        try {
+          const earlyReason =
+            `resilience=${rollup.label} (${rollup.score}) zero-progress ${streak}/${zpLimit} — early Brain OS`;
+          const ok = await tryBrainOsProgressUnstick(
+            {
+              runId,
+              localPath: cfg.localPath,
+              autoApprove: cfg.autoApprove,
+              brainOs: (cfg as { brainOs?: boolean | object }).brainOs,
+              auditorModel: cfg.auditorModel,
+              model: cfg.model,
+            },
+            {
+              reason: earlyReason,
+              board: boardSnap,
+              openWork,
+              phase: "progress_early_resilience",
+            },
+            {
+              appendSystem: (t) => host.appendSystem(t),
+              emit: (e) => host.emit(e as SwarmEvent),
+              setZeroProgressStreak: (n) => host.setZeroProgressStreak(n),
+            },
+          );
+          if (ok) return "retry";
+        } catch (err) {
+          host.appendSystem(
+            `[audit] early Brain OS failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
       return null;
     }
-    const reason = formatNoProductiveProgressReason(streak);
+
+    const reason =
+      formatNoProductiveProgressReason(streak)
+      + (zpLimit !== DEFAULT_ZERO_PROGRESS_LIMIT
+        ? ` (limit ${zpLimit} via resilience=${rollup.label})`
+        : "");
+    // Brain OS unstick before autonomous hard-stop (parity with blackboard).
+    try {
+      const ok = await tryBrainOsProgressUnstick(
+        {
+          runId,
+          localPath: cfg.localPath,
+          autoApprove: cfg.autoApprove,
+          brainOs: (cfg as { brainOs?: boolean | object }).brainOs,
+          auditorModel: cfg.auditorModel,
+          model: cfg.model,
+        },
+        {
+          reason,
+          board: boardSnap,
+          openWork,
+          phase: "progress_stuck",
+        },
+        {
+          appendSystem: (t) => host.appendSystem(t),
+          emit: (e) => host.emit(e as SwarmEvent),
+          setZeroProgressStreak: (n) => host.setZeroProgressStreak(n),
+        },
+      );
+      if (ok) return "retry";
+    } catch (err) {
+      host.appendSystem(
+        `[audit] Brain OS unstick failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
     host.setEarlyStopDetail(reason);
     host.appendSystem(`[audit] ${reason} — stopping autonomous run.`);
     host.logDiag?.({
@@ -781,7 +874,7 @@ export async function runCouncilAuditCycle(
         // Empty planner + empty stretch + empty criterion-progress:
         // only stop via durable-progress streak (do not hard-kill early while
         // wall-clock autonomous work may still resume next cycle).
-        const emptyStop = maybeStopNoProgress({
+        const emptyStop = await maybeStopNoProgress({
           metFlips,
           commitsThisCycle,
           newTodos: 0,
@@ -816,7 +909,7 @@ export async function runCouncilAuditCycle(
 
   // Todos enqueued → retry, but only durable signals reset the streak.
   if (auditEnqueued > 0) {
-    const todoOnlyStop = maybeStopNoProgress({
+    const todoOnlyStop = await maybeStopNoProgress({
       metFlips,
       commitsThisCycle,
       newTodos: auditEnqueued,
@@ -825,7 +918,7 @@ export async function runCouncilAuditCycle(
     if (todoOnlyStop) return todoOnlyStop;
     return "retry";
   }
-  const noWorkStop = maybeStopNoProgress({
+  const noWorkStop = await maybeStopNoProgress({
     metFlips,
     commitsThisCycle,
     newTodos: auditEnqueued,

@@ -19,6 +19,7 @@ import {
   LegacyRunBody,
   SayBody,
   ReconfigBody,
+  ToolContestResolveBody,
 } from "./schemas.js";
 import { resolveLegacyActiveRunId } from "./legacyRunResolve.js";
 import type { Orchestrator } from "../services/Orchestrator.js";
@@ -131,6 +132,55 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
     res.json(status);
   });
+
+  // Contestable tool denials: list open contests for peer/master review.
+  r.get("/runs/:runId/tool-contests", (req: Request, res: Response) => {
+    const runId = String(req.params.runId);
+    if (!orch.statusForRun(runId)) {
+      res.status(404).json({ error: "runId not found" });
+      return;
+    }
+    void import("../tools/toolContest.js").then(({ listOpenContests }) => {
+      res.json({ runId, contests: listOpenContests(runId) });
+    });
+  });
+
+  // Approve/deny a contestable tool denial (one-shot allow on approve).
+  r.post(
+    "/runs/:runId/tool-contests/resolve",
+    validate(ToolContestResolveBody, "body"),
+    (req: Request, res: Response) => {
+      const runId = String(req.params.runId);
+      if (!orch.statusForRun(runId)) {
+        res.status(404).json({ error: "runId not found" });
+        return;
+      }
+      const body = req.body as z.infer<typeof ToolContestResolveBody>;
+      void import("../tools/toolContest.js").then(
+        ({ resolveToolContest, recordContestResolutionDeliberation }) => {
+          const resolved = resolveToolContest({
+            runId,
+            contestId: body.contestId,
+            approve: body.approve,
+            resolver: body.resolver ?? "operator",
+          });
+          if (!resolved) {
+            res.status(404).json({ error: "contest not found or already resolved" });
+            return;
+          }
+          try {
+            recordContestResolutionDeliberation(resolved, {
+              runId,
+              clonePath: orch.statusForRun(runId)?.localPath,
+            });
+          } catch {
+            /* best-effort */
+          }
+          res.json({ ok: true, contest: resolved });
+        },
+      );
+    },
+  );
 
   // Cascade stats: stale reasons, commit tiers, hunk/parse quality.
   // Aggregated from TodoQueue entries for the live run.

@@ -48,6 +48,18 @@ export const CheckpointsParams = z.object({
   runId: z.string().min(1).max(100),
 });
 
+/** Peer/master resolve a contestable tool denial. */
+export const ToolContestResolveBody = z.object({
+  contestId: z.string().min(1).max(80),
+  approve: z.boolean(),
+  /** Who resolved (auditor, agent-0, operator, …). */
+  resolver: z.string().min(1).max(80).optional().default("operator"),
+});
+
+export const ToolContestListQuery = z.object({
+  runId: z.string().min(1).max(100).optional(),
+});
+
 export const CheckpointFileParams = z.object({
   runId: z.string().min(1).max(100),
   fileName: z

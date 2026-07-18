@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSwarm } from "../state/store";
 import { isActiveSwarmPhase } from "../lib/swarmPhase";
+import { apiFetch } from "../lib/apiFetch";
 import type { DeliberationAdvice, SwarmControlAdvice } from "../state/swarmStoreTypes";
 import { computeResilienceRollup } from "@ollama-swarm/shared/swarmControl/controlAdvice";
 
@@ -25,6 +26,21 @@ const VERDICT_STYLE: Record<string, string> = {
   abstain: "text-ink-400",
   claim: "text-ink-300",
 };
+
+/** Open contestable tool denial from GET /api/swarm/runs/:id/tool-contests. */
+interface ToolContestRow {
+  id: string;
+  runId: string;
+  agentId: string;
+  tool: string;
+  profile: string;
+  denyReason: string;
+  contestReason?: string;
+  status: "open" | "approved" | "denied";
+  createdAt: number;
+  resolvedAt?: number;
+  resolver?: string;
+}
 
 function adviceKey(a: SwarmControlAdvice): string {
   return `${a.ts}|${a.kind}|${a.agentId ?? ""}|${a.tool ?? ""}|${a.action ?? ""}|${a.rationale.slice(0, 24)}`;
@@ -64,13 +80,60 @@ export function SwarmControlPanel() {
   const panelRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-  const [tab, setTab] = useState<"control" | "deliberation">("control");
+  const [tab, setTab] = useState<"control" | "deliberation" | "contests">("control");
+  const [contests, setContests] = useState<ToolContestRow[]>([]);
+  const [contestBusy, setContestBusy] = useState<string | null>(null);
+  const [contestError, setContestError] = useState<string | null>(null);
 
   const live = isActiveSwarmPhase(phase);
   const recent = advice.slice(-12).reverse();
   const recentDelib = deliberation.slice(-16).reverse();
 
   const rollup = computeResilienceRollup(advice, deliberation);
+
+  const refreshContests = useCallback(async () => {
+    if (!runId) return;
+    try {
+      const r = await apiFetch(`/api/swarm/runs/${encodeURIComponent(runId)}/tool-contests`);
+      if (!r.ok) {
+        setContestError(r.status === 404 ? null : `contests ${r.status}`);
+        return;
+      }
+      const data = (await r.json()) as { contests?: ToolContestRow[] };
+      setContests(Array.isArray(data.contests) ? data.contests : []);
+      setContestError(null);
+    } catch (err) {
+      setContestError(err instanceof Error ? err.message : "failed to load contests");
+    }
+  }, [runId]);
+
+  const resolveContest = useCallback(
+    async (contestId: string, approve: boolean) => {
+      if (!runId) return;
+      setContestBusy(contestId);
+      setContestError(null);
+      try {
+        const r = await apiFetch(
+          `/api/swarm/runs/${encodeURIComponent(runId)}/tool-contests/resolve`,
+          {
+            method: "POST",
+            body: JSON.stringify({ contestId, approve, resolver: "operator" }),
+          },
+        );
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          setContestError(body.error ?? `resolve failed (${r.status})`);
+          return;
+        }
+        setContests((prev) => prev.filter((c) => c.id !== contestId));
+      } catch (err) {
+        setContestError(err instanceof Error ? err.message : "resolve failed");
+      } finally {
+        setContestBusy(null);
+      }
+    },
+    [runId],
+  );
 
   const syncPanelPosition = () => {
     if (!triggerRef.current) return;
@@ -114,6 +177,15 @@ export function SwarmControlPanel() {
     };
   }, [open]);
 
+  // Poll open tool contests while the panel is open (and on tab switch).
+  useEffect(() => {
+    if (!open || !runId) return;
+    void refreshContests();
+    if (!live) return;
+    const id = window.setInterval(() => void refreshContests(), 4000);
+    return () => window.clearInterval(id);
+  }, [open, runId, live, refreshContests, tab]);
+
   if (!runId) return null;
 
   const totalEvents = advice.length + deliberation.length;
@@ -146,6 +218,7 @@ export function SwarmControlPanel() {
     "• Thrash brakes: tool-coach after repeated tool failures",
     "• Quality gates: auditor approve/deny commits (bad patches don't ship)",
     "• Brain OS: recruits helpers on apply_miss / parse_fail / tool_block / stuck progress",
+    "• Tool contests: peer/operator approve one-shot allows after profile denials",
     "Not abstract policy — this is the run's performance & recovery control plane.",
   ].join("\n");
 
@@ -198,7 +271,7 @@ export function SwarmControlPanel() {
                 </div>
               </div>
 
-              <div className="flex gap-1 mb-2">
+              <div className="flex flex-wrap gap-1 mb-2">
                 <button
                   type="button"
                   onClick={() => setTab("control")}
@@ -221,7 +294,24 @@ export function SwarmControlPanel() {
                 >
                   quality gates ({deliberation.length})
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setTab("contests")}
+                  className={`px-2 py-0.5 rounded text-[10px] uppercase font-semibold border ${
+                    tab === "contests"
+                      ? "border-amber-700 bg-amber-950/40 text-amber-200"
+                      : contests.length > 0
+                        ? "border-amber-800/60 text-amber-300 hover:text-amber-200"
+                        : "border-ink-700 text-ink-400 hover:text-ink-200"
+                  }`}
+                >
+                  contests ({contests.length})
+                </button>
               </div>
+
+              {contestError && tab === "contests" ? (
+                <p className="mb-2 text-[10px] text-rose-300 leading-snug">{contestError}</p>
+              ) : null}
 
               {tab === "control" ? (
                 recent.length === 0 ? (
@@ -274,49 +364,107 @@ export function SwarmControlPanel() {
                     ))}
                   </ul>
                 )
-              ) : recentDelib.length === 0 ? (
+              ) : tab === "deliberation" ? (
+                recentDelib.length === 0 ? (
+                  <p className="text-ink-400 leading-relaxed">
+                    No quality-gate transactions yet. Auditor approve/deny on commits, peer challenges,
+                    and control votes land here and in{" "}
+                    <span className="font-mono text-ink-300">logs/&lt;runId&gt;/deliberation.jsonl</span>
+                    {" "}— blocking fragile patches from becoming durable git history.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {recentDelib.map((d, i) => (
+                      <li
+                        key={delibKey(d, i)}
+                        className="rounded border border-ink-700 bg-ink-900 px-2.5 py-2 shadow-inner"
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                          <span className="text-[10px] uppercase tracking-wide text-violet-300 font-semibold">
+                            {d.layer}
+                          </span>
+                          <span
+                            className={`text-[10px] font-semibold uppercase ${
+                              VERDICT_STYLE[d.verdict] ?? "text-ink-200"
+                            }`}
+                          >
+                            {d.verdict}
+                          </span>
+                          {d.proposer ? (
+                            <span className="text-[10px] text-ink-400 font-mono">{d.proposer}</span>
+                          ) : null}
+                          {d.validator ? (
+                            <span className="text-[10px] text-ink-500">→ {d.validator}</span>
+                          ) : null}
+                          <span className="text-[10px] text-ink-500 ml-auto tabular-nums">
+                            {new Date(d.ts).toLocaleTimeString()}
+                          </span>
+                        </div>
+                        <p className="text-ink-100 leading-snug break-words">
+                          {d.subject}
+                        </p>
+                        {(d.validationReason || d.claim) ? (
+                          <p className="mt-1 text-ink-300 text-[10px] leading-snug whitespace-pre-wrap break-words max-h-20 overflow-y-auto">
+                            {formatControlText(d.validationReason || d.claim)}
+                          </p>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )
+              ) : contests.length === 0 ? (
                 <p className="text-ink-400 leading-relaxed">
-                  No quality-gate transactions yet. Auditor approve/deny on commits, peer challenges,
-                  and control votes land here and in{" "}
-                  <span className="font-mono text-ink-300">logs/&lt;runId&gt;/deliberation.jsonl</span>
-                  {" "}— blocking fragile patches from becoming durable git history.
+                  No open tool contests. When a freer profile still denies a tool, the agent gets a
+                  contestable denial — approve here for a one-shot allow (path sandbox denials stay
+                  non-contestable).
                 </p>
               ) : (
                 <ul className="space-y-2">
-                  {recentDelib.map((d, i) => (
+                  {contests.map((c) => (
                     <li
-                      key={delibKey(d, i)}
-                      className="rounded border border-ink-700 bg-ink-900 px-2.5 py-2 shadow-inner"
+                      key={c.id}
+                      className="rounded border border-amber-900/50 bg-ink-900 px-2.5 py-2 shadow-inner"
                     >
                       <div className="flex flex-wrap items-center gap-1.5 mb-1">
-                        <span className="text-[10px] uppercase tracking-wide text-violet-300 font-semibold">
-                          {d.layer}
+                        <span className="text-[10px] uppercase tracking-wide text-amber-300 font-semibold">
+                          tool denial
                         </span>
-                        <span
-                          className={`text-[10px] font-semibold uppercase ${
-                            VERDICT_STYLE[d.verdict] ?? "text-ink-200"
-                          }`}
-                        >
-                          {d.verdict}
-                        </span>
-                        {d.proposer ? (
-                          <span className="text-[10px] text-ink-400 font-mono">{d.proposer}</span>
-                        ) : null}
-                        {d.validator ? (
-                          <span className="text-[10px] text-ink-500">→ {d.validator}</span>
-                        ) : null}
+                        <span className="text-[10px] text-ink-200 font-mono">{c.tool}</span>
+                        <span className="text-[10px] text-ink-500">profile {c.profile}</span>
+                        <span className="text-[10px] text-ink-400 font-mono">{c.agentId}</span>
                         <span className="text-[10px] text-ink-500 ml-auto tabular-nums">
-                          {new Date(d.ts).toLocaleTimeString()}
+                          {new Date(c.createdAt).toLocaleTimeString()}
                         </span>
                       </div>
-                      <p className="text-ink-100 leading-snug break-words">
-                        {d.subject}
+                      <p className="text-ink-100 leading-snug break-words text-[10px]">
+                        {formatControlText(c.denyReason)}
                       </p>
-                      {(d.validationReason || d.claim) ? (
-                        <p className="mt-1 text-ink-300 text-[10px] leading-snug whitespace-pre-wrap break-words max-h-20 overflow-y-auto">
-                          {formatControlText(d.validationReason || d.claim)}
+                      {c.contestReason ? (
+                        <p className="mt-1 text-amber-100/90 text-[10px] leading-snug whitespace-pre-wrap break-words">
+                          <span className="text-ink-400">contest:</span> {formatControlText(c.contestReason)}
                         </p>
                       ) : null}
+                      <p className="mt-1 text-[9px] text-ink-500 font-mono truncate" title={c.id}>
+                        id={c.id}
+                      </p>
+                      <div className="mt-2 flex gap-1.5">
+                        <button
+                          type="button"
+                          disabled={contestBusy === c.id}
+                          onClick={() => void resolveContest(c.id, true)}
+                          className="px-2 py-0.5 rounded border border-emerald-800 bg-emerald-950/50 text-emerald-200 text-[10px] font-semibold uppercase disabled:opacity-50"
+                        >
+                          {contestBusy === c.id ? "…" : "approve once"}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={contestBusy === c.id}
+                          onClick={() => void resolveContest(c.id, false)}
+                          className="px-2 py-0.5 rounded border border-rose-900/60 bg-rose-950/40 text-rose-200 text-[10px] font-semibold uppercase disabled:opacity-50"
+                        >
+                          deny
+                        </button>
+                      </div>
                     </li>
                   ))}
                 </ul>
