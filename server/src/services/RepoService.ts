@@ -318,6 +318,8 @@ export class RepoService {
       "# Direction 1 + 6: outcome history + checkpoints",
       ".swarm-data/",
       ".swarm-checkpoints/",
+      "# Multi-attempt baseline sandboxes (worktree/copy isolation)",
+      ".swarm-baseline-attempts/",
     ];
     let existing = "";
     try {
