@@ -40,12 +40,18 @@ export function parseMcpServerSpecs(mcpServers: string): McpServerSpec[] {
   return out;
 }
 
-/** Env overlay for known MCP packages that need stdio-only mode. */
+/**
+ * Env overlay for known MCP packages that need stdio-only mode.
+ * Returns a clean string map for StdioClientTransport (no undefined values).
+ */
 export function mcpSpawnEnvForCmd(
   rawCmd: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
-): NodeJS.ProcessEnv {
-  const env = { ...baseEnv };
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(baseEnv)) {
+    if (typeof v === "string") env[k] = v;
+  }
   // open-websearch defaults to MODE=both (HTTP+stdio). Stdio MCP clients
   // need pure stdio or the process may bind HTTP / print noise on stdout.
   if (/open-websearch/i.test(rawCmd) && !env.MODE) {

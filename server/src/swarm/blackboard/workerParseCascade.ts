@@ -205,6 +205,8 @@ export async function runWorkerParseCascade(
   }
 
   if (!parsed.ok) {
+    // Capture before the sibling callback — TS loses narrowing across reassignment.
+    const parseFailReason = parsed.reason;
     let stopAborted = false;
     await withSiblingRetry(
       {
@@ -225,7 +227,7 @@ export async function runWorkerParseCascade(
         const siblingResponse = await ctx.promptAgent(
           agent,
           `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerUserPrompt(seed)}\n\n` +
-            `Previous parse failed: ${parsed.reason}. Emit valid {"hunks":[...]} JSON only. No tools.`,
+            `Previous parse failed: ${parseFailReason}. Emit valid {"hunks":[...]} JSON only. No tools.`,
           EMIT_ONLY_PROFILE_ID as ProfileName,
           "json",
           WORKER_HUNKS_JSON_SCHEMA,
