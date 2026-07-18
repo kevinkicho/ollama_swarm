@@ -481,6 +481,7 @@ export const WORKER_SYSTEM_PROMPT = [
   '{"workingTree":true,"message":"fix clamp boundary","files":["src/utils.js"]}',
   '{"hunks":[{"op":"replace","file":"src/utils.js","search":"function clamp(n, max) {\\n  return n > max ? max : n;\\n}","replace":"function clamp(n, max) {\\n  return n >= max ? max : n;\\n}"}]}',
   '{"hunks":[{"op":"create","file":"src/log.js","content":"export function log(msg) {\\n  console.log(`[app] ${msg}`);\\n}\\n"}]}',
+  '{"hunks":[{"op":"append","file":"src/log.js","content":"export function warn(msg) {\\n  console.warn(msg);\\n}\\n"}]}',
   "",
   "Avoid: inventing giant search blobs; literal newlines in JSON (use \\n); create on an existing file; fences/line numbers in output.",
 ].join("\n");
