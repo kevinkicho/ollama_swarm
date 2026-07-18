@@ -14,8 +14,9 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(__dirname, "Orchestrator.ts"), "utf8");
 const EMIT_SRC = readFileSync(join(__dirname, "orchestratorEmit.ts"), "utf8");
+const BUILD_RUNNER_SRC = readFileSync(join(__dirname, "orchestratorBuildRunner.ts"), "utf8");
 const ACTIVE_RUN_SRC = readFileSync(join(__dirname, "ActiveRun.ts"), "utf8");
-const ALL_ORCH_SRC = [SRC, EMIT_SRC].join("\n");
+const ALL_ORCH_SRC = [SRC, EMIT_SRC, BUILD_RUNNER_SRC].join("\n");
 
 test("Orchestrator: ActiveRun class declared with required fields", () => {
   // Structural: keeps refactor honest if a future edit drops a field.
@@ -157,7 +158,8 @@ test("Orchestrator: per-run hub + AgentManager share one RunEventHub", () => {
 });
 
 test("Orchestrator: wrappedEmit binds runId + persister at build time", () => {
-  assert.match(SRC, /interface BuildRunnerContext/);
+  // BuildRunnerContext lives in orchestratorBuildRunner after extract.
+  assert.match(ALL_ORCH_SRC, /interface BuildRunnerContext|export interface BuildRunnerContext/);
   // Stamp lives in orchestratorEmit.ts after extract; still must not use this.runId.
   assert.match(
     ALL_ORCH_SRC,
@@ -167,7 +169,10 @@ test("Orchestrator: wrappedEmit binds runId + persister at build time", () => {
     ALL_ORCH_SRC,
     /e\.runId === undefined && this\.runId \? \{ \.\.\.e, runId: this\.runId \}/,
   );
-  assert.match(SRC, /createWrappedEmitExtracted|createWrappedEmit\(/);
+  assert.match(
+    ALL_ORCH_SRC,
+    /createWrappedEmitExtracted|createWrappedEmit\(/,
+  );
 });
 
 test("Orchestrator: amendments close on stopRun; start finally only clears gate", () => {

@@ -21,10 +21,11 @@ const SELF_CONSISTENCY_SRC = readFileSync(
   "utf8",
 );
 const PROMPT_SRC = readFileSync(join(__dirname, "prompts", "worker.ts"), "utf8");
-const COUNCIL_WORKER_SRC = readFileSync(
-  join(__dirname, "..", "councilWorkerRunner.ts"),
-  "utf8",
-);
+// tryWorkerPrompt / applyOrGroundedRepair live in councilWorkerAttempt after extract.
+const COUNCIL_WORKER_SRC = [
+  readFileSync(join(__dirname, "..", "councilWorkerRunner.ts"), "utf8"),
+  readFileSync(join(__dirname, "..", "councilWorkerAttempt.ts"), "utf8"),
+].join("\n");
 
 test("workerRunner — finalizeWorkerHunks is called (repair path entry)", () => {
   assert.ok(

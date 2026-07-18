@@ -526,13 +526,19 @@ test("(role-diff #2) Orchestrator uses selectRoleCatalog for both runner instant
     _join(__dirname, "../services/Orchestrator.ts"),
     "utf8",
   );
+  const buildRunner = _read(
+    _join(__dirname, "../services/orchestratorBuildRunner.ts"),
+    "utf8",
+  );
   // Both the role-name resolution for run_started AND the runner
   // factory must go through selectRoleCatalog so the catalog is
   // chosen consistently (and BUILD_ROLES kicks in when directive set).
-  const matches = orch.match(/selectRoleCatalog\(/g);
+  // Runner factory lives in orchestratorBuildRunner after extract.
+  const combined = `${orch}\n${buildRunner}`;
+  const matches = combined.match(/selectRoleCatalog\(/g);
   assert.ok(
     matches && matches.length >= 2,
-    `expected >= 2 selectRoleCatalog call sites in Orchestrator, got ${matches?.length ?? 0}`,
+    `expected >= 2 selectRoleCatalog call sites in Orchestrator+buildRunner, got ${matches?.length ?? 0}`,
   );
 });
 
