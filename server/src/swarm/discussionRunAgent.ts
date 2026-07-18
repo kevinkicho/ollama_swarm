@@ -98,12 +98,12 @@ function buildFailedDraftBody(msg: string, partialRaw: string): string {
   return `_(draft failed: ${msg.slice(0, 240)})_`;
 }
 
-function pushDiscussionEntry(
+async function pushDiscussionEntry(
   host: DiscussionRunAgentHost,
   agent: Agent,
   opts: RunAgentOpts,
   rawText: string,
-): string {
+): Promise<string> {
   const stripped = finalizeAgentOutput(rawText);
   const anomalyLine = formatFinalizeAnomalyLine(agent.id, stripped.anomalies, stripped.stats);
   if (anomalyLine) {
@@ -136,7 +136,7 @@ function pushDiscussionEntry(
     ...(toolTrace ? { toolTrace } : {}),
   };
 
-  opts.onEntryPushed?.(entry, stripped.finalText);
+  await opts.onEntryPushed?.(entry, stripped.finalText);
   host.transcript.push(entry);
   host.emit({ type: "transcript_append", entry });
   host.manager.markStatus(agent.id, "ready", { lastMessageAt: entry.ts });
@@ -354,7 +354,7 @@ export async function runDiscussionAgentCore(
       appendSystem: (msg) => host.appendSystem(msg),
     });
 
-    const finalText = pushDiscussionEntry(host, agent, opts, text);
+    const finalText = await pushDiscussionEntry(host, agent, opts, text);
 
     // Q3: surface newly emitted mention contracts (cooldown-gated noise).
     if (host.active?.mentionContracts) {
@@ -438,7 +438,7 @@ export async function runDiscussionAgentCore(
       host.appendSystem(
         `[${agent.id}] salvage draft posted (${body.length} chars) after error.`,
       );
-      return pushDiscussionEntry(host, agent, opts, body);
+      return await pushDiscussionEntry(host, agent, opts, body);
     }
 
     host.manager.markStatus(agent.id, "failed", { error: msg });

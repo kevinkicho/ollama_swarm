@@ -40,24 +40,32 @@ export async function moaRunOne(
   host.markStatus(agent.id, "thinking");
   host.emitAgentStatus(agent, "thinking", startedAt);
   try {
-    const proposerAgentName = host.active?.moaProposerTools
-      ? "swarm-read"
-      : "swarm";
+    const { discussionBuilderProfile } = await import("./discussionToolProfile.js");
+    const proposerAgentName = host.multiWriter?.isActive()
+      ? discussionBuilderProfile(host.active)
+      : host.active?.moaProposerTools
+        ? "swarm-read"
+        : "swarm";
     const res = (await promptWithFailoverAuto(agent, prompt, {
       signal: ctrl.signal,
       manager: host.manager,
       formatExpect: "free",
       describeError: (e) => describeSdkError(e),
       agentName: proposerAgentName,
+      ...(host.active?.localPath && host.multiWriter?.isActive()
+        ? { runId: host.active?.runId }
+        : {}),
     })) as { data: { parts: Array<{ type: "text"; text: string }> } };
     const raw = extractText(res) ?? "";
     const stripped = finalizeAgentOutput(raw, { role: "general" });
     const cleaned = stripped.finalText;
     if (host.multiWriter?.isActive()) {
-      const proposalResult = host.multiWriter.addProposal(agent, cleaned);
+      const proposalResult = await host.multiWriter.addProposal(agent, cleaned);
       if (!proposalResult.skipped && proposalResult.hunks.length > 0) {
         host.appendSystem(
-          `[${agent.id}] proposed ${proposalResult.hunks.length} hunk(s) — collected for reconciliation.`,
+          `[${agent.id}] proposed ${proposalResult.hunks.length} hunk(s)` +
+            (proposalResult.fromWorkingTree ? " (workingTree snapshot)" : "") +
+            ` — collected for reconciliation.`,
         );
       }
     }

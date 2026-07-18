@@ -517,7 +517,9 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
         onTokens: ({ promptTokens, responseTokens }) => this.stats.recordTokens(agent.id, promptTokens, responseTokens),
         signal: controller.signal,
         manager: this.opts.manager,
-        agentName: "swarm-read",
+        agentName: this.multiWriter?.isActive()
+          ? (await import("./discussionToolProfile.js")).discussionBuilderProfile(this.active)
+          : "swarm-read",
         // Phase 5b of #243: per-agent addendum from the topology row.
         promptAddendum: getAgentAddendum(this.active?.topology, agent.index),
         describeError: describeSdkError,
@@ -581,10 +583,12 @@ export class OrchestratorWorkerDeepRunner extends DiscussionRunnerBase {
       const stripped = finalizeAgentOutput(text, { role: "general" });
       // Phase 2 (writeMode: multi): collect hunk proposals if multi-writer active
       if (this.multiWriter?.isActive()) {
-        const proposalResult = this.multiWriter.addProposal(agent, stripped.finalText);
+        const proposalResult = await this.multiWriter.addProposal(agent, stripped.finalText);
         if (!proposalResult.skipped && proposalResult.hunks.length > 0) {
           this.appendSystem(
-            `[${agent.id}] proposed ${proposalResult.hunks.length} hunk(s) — collected for reconciliation.`
+            `[${agent.id}] proposed ${proposalResult.hunks.length} hunk(s)` +
+              (proposalResult.fromWorkingTree ? " (workingTree snapshot)" : "") +
+              ` — collected for reconciliation.`,
           );
         }
       }

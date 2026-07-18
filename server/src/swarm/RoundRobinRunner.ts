@@ -505,17 +505,22 @@ export class RoundRobinRunner extends DiscussionRunnerBase {
         modelOverride = mapped.trim();
       }
     }
+    const { discussionProposalProfile } = await import("./discussionToolProfile.js");
     await this.runDiscussionAgent(agent, prompt, {
       runnerName: "round-robin",
       stats: this.stats,
-      agentName: "swarm-read",
+      agentName: discussionProposalProfile(
+        this.multiWriter?.isActive() ? this.active : undefined,
+      ),
       ...(modelOverride ? { modelOverride } : {}),
-      onEntryPushed: (_entry, strippedText) => {
+      onEntryPushed: async (_entry, strippedText) => {
         if (this.multiWriter?.isActive()) {
-          const result = this.multiWriter.addProposal(agent, strippedText);
+          const result = await this.multiWriter.addProposal(agent, strippedText);
           if (!result.skipped && result.hunks.length > 0) {
             this.appendSystem(
-              `[${agent.id}] proposed ${result.hunks.length} hunk(s) — collected for reconciliation.`,
+              `[${agent.id}] proposed ${result.hunks.length} hunk(s)` +
+                (result.fromWorkingTree ? " (workingTree snapshot)" : "") +
+                ` — collected for reconciliation.`,
             );
           }
         }

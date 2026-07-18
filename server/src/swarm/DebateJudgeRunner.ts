@@ -503,10 +503,12 @@ export class DebateJudgeRunner extends DiscussionRunnerBase {
       const enriched = enrichSummary?.(stripped.finalText);
       // Phase 2 (writeMode: multi): collect hunk proposals if multi-writer active
       if (this.multiWriter?.isActive()) {
-        const proposalResult = this.multiWriter.addProposal(agent, stripped.finalText);
+        const proposalResult = await this.multiWriter.addProposal(agent, stripped.finalText);
         if (!proposalResult.skipped && proposalResult.hunks.length > 0) {
           this.appendSystem(
-            `[${agent.id}] proposed ${proposalResult.hunks.length} hunk(s) — collected for reconciliation.`
+            `[${agent.id}] proposed ${proposalResult.hunks.length} hunk(s)` +
+              (proposalResult.fromWorkingTree ? " (workingTree snapshot)" : "") +
+              ` — collected for reconciliation.`,
           );
         }
       }

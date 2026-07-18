@@ -15,7 +15,8 @@ export function deterministicToolCoachHint(tool: string, error: string): string 
     ) {
       return (
         "HOST is Windows-class: do not use bash for Unix utilities (wc, grep, cat, find, head, tail, ls, sed, awk). "
-        + "Use the built-in read, grep, glob, and list tools for inspection; use propose_hunks / final hunk JSON for edits."
+        + "Use the built-in read, grep, glob, and list tools for inspection; use write/edit + workingTree "
+        + "(or propose_hunks / final hunk JSON) for edits."
       );
     }
     if (/timeout|killed after/i.test(e)) {
