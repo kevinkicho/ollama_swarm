@@ -20,17 +20,34 @@ test("buildSynthesizerHunksPrompt — directive and context included", () => {
   assert.ok(prompt.includes("Relevant Files"));
 });
 
-test("buildSynthesizerHunksPrompt — hunks JSON format shown", () => {
+test("buildSynthesizerHunksPrompt — prefers workingTree then hunks fallback", () => {
   const prompt = buildSynthesizerHunksPrompt({
     directive: "Add error handling",
     fileListing: "src/index.ts",
     discussionContext: "Use try-catch pattern",
   });
 
+  assert.ok(prompt.includes("workingTree"));
+  assert.ok(prompt.includes("write/edit"));
   assert.ok(prompt.includes('"hunks"'));
   assert.ok(prompt.includes('"op": "replace"'));
   assert.ok(prompt.includes('"search"'));
   assert.ok(prompt.includes('"replace"'));
+});
+
+test("parseSynthesizerHunks — workingTree envelope", () => {
+  const allowedFiles = new Set(["src/foo.ts"]);
+  const raw = JSON.stringify({
+    workingTree: true,
+    message: "add auth",
+    files: ["src/foo.ts"],
+  });
+  const result = parseSynthesizerHunks(raw, allowedFiles);
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.workingTree, true);
+  assert.deepStrictEqual(result.filesTouched, ["src/foo.ts"]);
+  assert.strictEqual(result.gitMessage, "add auth");
+  assert.strictEqual(result.hunks.length, 0);
 });
 
 test("parseSynthesizerHunks — valid hunks envelope", () => {
