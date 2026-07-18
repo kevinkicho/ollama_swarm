@@ -7,9 +7,12 @@ import {
   createOpenAlexAdapter,
   createSerperAdapter,
   getSearchAdapters,
+  isDdgCircuitOpen,
+  isPaperShapedQuery,
   openAlexAbstractSnippet,
   parseDdgHtml,
   parseDdgLiteHtml,
+  resetDdgCircuitForTests,
   scoreLink,
   searchWithAdapters,
   type FetchLike,
@@ -221,6 +224,44 @@ describe("OpenAlex / Crossref adapters", () => {
     // academic first — ddg should not run first
     assert.ok(order[0] === "arxiv" || order.includes("arxiv"));
     assert.equal(res.backend, "arxiv");
+  });
+
+  it("isPaperShapedQuery covers literature language without panel false positives", () => {
+    assert.equal(isPaperShapedQuery("systematic review of transformer models"), true);
+    assert.equal(isPaperShapedQuery("scientific paper on attention"), true);
+    assert.equal(isPaperShapedQuery("journal article DOI 10.1"), true);
+    assert.equal(isPaperShapedQuery("FRED commercial paper panel endpoints"), false);
+    assert.equal(isPaperShapedQuery("wire BIS credit API into panel"), false);
+  });
+
+  it("DDG 403 opens circuit so getSearchAdapters skips scrapers", async () => {
+    resetDdgCircuitForTests();
+    assert.equal(isDdgCircuitOpen(), false);
+    const adapters: SearchAdapter[] = [
+      {
+        id: "duckduckgo-html",
+        search: async () => ({ ok: false, error: "HTTP 403" }),
+      },
+      {
+        id: "brave",
+        search: async () => ({
+          ok: true,
+          links: [{ title: "x", url: "https://example.org/a", score: 1 }],
+        }),
+      },
+    ];
+    await searchWithAdapters("something", adapters);
+    assert.equal(isDdgCircuitOpen(), true);
+    const next = getSearchAdapters({
+      env: { BRAVE_API_KEY: "k", SEARCH_BACKEND: "" } as NodeJS.ProcessEnv,
+      fetchFn: async () => new Response("{}", { status: 500 }),
+    });
+    assert.ok(
+      !next.some((a) => a.id.startsWith("duckduckgo")),
+      "DDG adapters should be skipped while circuit open",
+    );
+    assert.ok(next.some((a) => a.id === "brave"));
+    resetDdgCircuitForTests();
   });
 });
 

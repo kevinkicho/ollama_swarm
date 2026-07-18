@@ -235,12 +235,36 @@ async function localCatalogFailNotes(
 export interface WebSearchToolOpts {
   /** Clone working tree for optional local catalog notes on total failure. */
   cloneRoot?: string;
+  /** Run id for researchIntegrity / blackout accounting. */
+  runId?: string;
   /** Env bag for optional API-key backends (tests). */
   env?: NodeJS.ProcessEnv;
   /** Injected fetch (tests). */
   fetchFn?: FetchLike;
   /** Skip shared rate limit (tests). */
   skipRateLimit?: boolean;
+}
+
+async function noteResearchBudgetSafe(
+  kind: "attempt" | "success" | "catalog" | "failure",
+  runId: string | undefined,
+  failure?: { reason: string; backend?: string; http403?: boolean },
+): Promise<void> {
+  if (!runId) return;
+  try {
+    const budget = await import("../swarm/research/researchBudget.js");
+    if (kind === "attempt") budget.noteResearchAttempt(runId);
+    else if (kind === "success") budget.noteResearchSuccess(runId);
+    else if (kind === "catalog") budget.noteCatalogInject(runId);
+    else if (kind === "failure" && failure) {
+      budget.noteResearchFailure(failure.reason, runId, {
+        backend: failure.backend,
+        http403: failure.http403,
+      });
+    }
+  } catch {
+    /* best-effort */
+  }
 }
 
 export async function webSearchTool(
@@ -254,6 +278,9 @@ export async function webSearchTool(
   const cloneRoot =
     opts?.cloneRoot ??
     (typeof args.cloneRoot === "string" ? args.cloneRoot : undefined);
+  const runId =
+    opts?.runId
+    ?? (typeof args.runId === "string" ? args.runId : undefined);
 
   // RR-C local-first: strong offline catalog hit → skip DDG/API thrash.
   if (cloneRoot) {
@@ -263,6 +290,7 @@ export async function webSearchTool(
       );
       const local = tryLocalFirstCatalog(query, cloneRoot);
       if (local) {
+        await noteResearchBudgetSafe("catalog", runId);
         return {
           ok: true,
           output:
@@ -282,6 +310,8 @@ export async function webSearchTool(
     await applyWebRateLimit();
   }
 
+  await noteResearchBudgetSafe("attempt", runId);
+
   const adapters = getSearchAdapters({
     env: opts?.env,
     fetchFn: opts?.fetchFn,
@@ -289,10 +319,19 @@ export async function webSearchTool(
 
   const result = await searchWithAdapters(query, adapters);
   if (result.ok) {
+    await noteResearchBudgetSafe("success", runId);
     return formatSearchResults(query, result.links, result.backend);
   }
 
   const catalogNotes = await localCatalogFailNotes(query, cloneRoot);
+  const joined = result.errors.join("; ") || "none";
+  const http403 = /403/.test(joined);
+  const backendMatch = joined.match(/^([a-z0-9-]+):/i);
+  await noteResearchBudgetSafe("failure", runId, {
+    reason: joined.slice(0, 160),
+    backend: backendMatch?.[1],
+    http403,
+  });
 
   // Hard error (not soft-ok): consecutive identical failures trip toolLoopStuck
   // so the agent cannot thrash web_search for minutes (9f449937 literature loop).
@@ -302,7 +341,7 @@ export async function webSearchTool(
     ok: false,
     error:
       `web_search backends unavailable for "${query}". ` +
-      `Tried: ${result.errors.join("; ") || "none"}. ` +
+      `Tried: ${joined}. ` +
       `Do NOT retry the same query. Use read/grep/list on the clone, or web_fetch a known official https URL ` +
       `(bis.org, worldbank.org, imf.org, fred.stlouisfed.org, data.gov). Never invent your-org/file:// placeholders.` +
       catalogNotes,

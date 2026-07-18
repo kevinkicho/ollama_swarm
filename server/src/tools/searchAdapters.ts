@@ -351,9 +351,19 @@ export function resetDdgCircuitForTests(): void {
   ddgSkipUntilMs = 0;
 }
 
+/**
+ * True when the query wants scholarly papers (not panel/API endpoint docs).
+ * Used to lead with arXiv / OpenAlex / Crossref before DDG scrape.
+ */
 export function isPaperShapedQuery(query: string): boolean {
-  return /\b(arxiv|doi|peer[- ]reviewed|pubmed|semantic scholar|openalex|preprint|citation|cite papers?|systematic review)\b/i.test(
-    query,
+  const q = query.trim();
+  if (!q) return false;
+  return (
+    /\b(arxiv|doi|peer[- ]reviewed|pubmed|semantic scholar|openalex|preprint|crossref)\b/i.test(q)
+    || /\b(cite|citation|citations|bibliography|scholarly|academic paper|scientific paper|journal article|research paper|literature review|meta[- ]analysis|systematic review)\b/i.test(
+      q,
+    )
+    || /\b(conference paper|proceedings|whitepaper|thesis|dissertation)\b/i.test(q)
   );
 }
 
