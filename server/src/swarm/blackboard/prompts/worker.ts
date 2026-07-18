@@ -654,6 +654,13 @@ export function isLiteratureTodo(description: string): boolean {
   // "research X" / "research and document" as a primary verb phrase near the start
   if (/^(research|survey|investigate)\b/i.test(d)) return true;
   if (/\b(research (the |and |official |API |endpoints?|sources?))\b/i.test(d)) return true;
+  // RR-C PR5: additive high-precision recall (keep panel anti-regressions green).
+  // Do not reintroduce bare source|paper matches.
+  if (/\bpeer[- ]reviewed\b/i.test(d)) return true;
+  if (/\bdoi:\s*10\.\d/i.test(d)) return true;
+  // Standalone arxiv token (product names like ResearchDashboard stay false above).
+  if (/\barxiv\b/i.test(d)) return true;
+  if (/\bcite\s+(papers?|sources?|literature)\b/i.test(d)) return true;
   return false;
 }
 

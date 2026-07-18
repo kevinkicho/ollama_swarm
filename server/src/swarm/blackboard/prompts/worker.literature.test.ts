@@ -46,4 +46,26 @@ describe("isLiteratureTodo — eee6718f false-positive fix", () => {
     // Product / path names should stay false
     assert.equal(isLiteratureTodo("ResearchDashboardPanel.jsx: fix layout"), false);
   });
+
+  it("RR-C PR5 additive recall: peer-reviewed / doi / arxiv / cite sources", () => {
+    assert.equal(isLiteratureTodo("Summarize peer-reviewed methods for SDMX panels"), true);
+    assert.equal(isLiteratureTodo("Link the finding to doi: 10.1234/example.study"), true);
+    assert.equal(isLiteratureTodo("Pull the latest arxiv preprint on transformer memory"), true);
+    assert.equal(isLiteratureTodo("Cite sources for the OECD housing methodology"), true);
+  });
+
+  it("RR-C PR5 still rejects panel vocabulary (no bare source|paper)", () => {
+    assert.equal(
+      isLiteratureTodo("Wire commercial paper series into FredCommercialPaperRatesPanel"),
+      false,
+    );
+    assert.equal(
+      isLiteratureTodo("Document data source: worldbank gini in panel registry"),
+      false,
+    );
+    assert.equal(
+      isLiteratureTodo("Add paper trade blotter panel for treasury desks"),
+      false,
+    );
+  });
 });
