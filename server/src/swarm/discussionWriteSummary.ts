@@ -146,7 +146,52 @@ export async function discussionWriteSummary(opts: DiscussionWriteSummaryOpts): 
       return researchIntegrity ? { researchIntegrity } : {};
     })(),
   };
-  const summary = buildDiscussionSummary(summaryInput);
+  let summary = buildDiscussionSummary(summaryInput);
+
+  // Attach full start-form snapshot so history "Load params" restores directive,
+  // topology, MCP, flags, caps — not just preset/model.
+  try {
+    const { captureStartConfigFromRunConfig } = await import(
+      "@ollama-swarm/shared/startConfigSnapshot"
+    );
+    const startConfig = captureStartConfigFromRunConfig(opts.cfg as any);
+    summary = {
+      ...summary,
+      startConfig,
+      ...(startConfig.userDirective ? { userDirective: startConfig.userDirective } : {}),
+      ...(startConfig.webTools !== undefined ? { webTools: startConfig.webTools } : {}),
+      ...(startConfig.mcpServers ? { mcpServers: startConfig.mcpServers } : {}),
+      ...(startConfig.autoApprove !== undefined ? { autoApprove: startConfig.autoApprove } : {}),
+      ...(startConfig.writeMode ? { writeMode: startConfig.writeMode } : {}),
+      ...(startConfig.conflictPolicy ? { conflictPolicy: startConfig.conflictPolicy } : {}),
+      ...(startConfig.councilSharedExplore !== undefined
+        ? { councilSharedExplore: startConfig.councilSharedExplore }
+        : {}),
+      ...(startConfig.councilSharedResearch !== undefined
+        ? { councilSharedResearch: startConfig.councilSharedResearch }
+        : {}),
+      ...(startConfig.councilReconcile ? { councilReconcile: startConfig.councilReconcile } : {}),
+      ...(startConfig.verifyCommand ? { verifyCommand: startConfig.verifyCommand } : {}),
+      ...(startConfig.preflightDryRun !== undefined
+        ? { preflightDryRun: startConfig.preflightDryRun }
+        : {}),
+      ...(startConfig.hunkRag !== undefined ? { hunkRag: startConfig.hunkRag } : {}),
+      ...(startConfig.dynamicRolePicker !== undefined
+        ? { dynamicRolePicker: startConfig.dynamicRolePicker }
+        : {}),
+      ...(startConfig.mentionContracts !== undefined
+        ? { mentionContracts: startConfig.mentionContracts }
+        : {}),
+      ...(startConfig.bestOfNTurn != null ? { bestOfNTurn: startConfig.bestOfNTurn } : {}),
+      ...(startConfig.wallClockCapMs != null ? { wallClockCapMs: startConfig.wallClockCapMs } : {}),
+      ...(startConfig.ambitionTiers != null ? { ambitionTiers: startConfig.ambitionTiers } : {}),
+      ...(startConfig.plannerModel ? { plannerModel: startConfig.plannerModel } : {}),
+      ...(startConfig.workerModel ? { workerModel: startConfig.workerModel } : {}),
+      ...(startConfig.auditorModel ? { auditorModel: startConfig.auditorModel } : {}),
+    } as typeof summary;
+  } catch {
+    /* best-effort */
+  }
 
   // Attach deliberation tail for dissemination (peer votes, hierarchy approve/deny).
   try {

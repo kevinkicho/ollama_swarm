@@ -36,6 +36,7 @@
     "./skipClassify": "./src/skipClassify.ts",
     "./workerAttemptOutcome": "./src/workerAttemptOutcome.ts",
     "./cycleIntegrityReport": "./src/cycleIntegrityReport.ts",
+    "./startConfigSnapshot": "./src/startConfigSnapshot.ts",
     "./jsonFormatSniff": "./src/jsonFormatSniff.ts",
     "./thinkGuardBudget": "./src/thinkGuardBudget.ts",
     "./thinkGuardErrors": "./src/thinkGuardErrors.ts",

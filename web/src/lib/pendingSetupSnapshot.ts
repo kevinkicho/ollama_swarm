@@ -3,6 +3,10 @@
  * sessionStorage holds one pending snapshot consumed on Setup mount.
  */
 
+import {
+  extractStartConfigFromSummary,
+  type StartConfigSnapshot,
+} from "@ollama-swarm/shared/startConfigSnapshot";
 import type { RecentRun, RecentRunSnapshotInput } from "../components/setup/RecentRuns";
 import type { RunSummary, RunSummaryDigest } from "../types";
 
@@ -20,6 +24,15 @@ export function stashPendingSetupSnapshot(input: RecentRunSnapshotInput): void {
   }
 }
 
+/** Peek without clearing — used to skip URL preset clobber. */
+export function peekPendingSetupSnapshot(): boolean {
+  try {
+    return !!sessionStorage.getItem(PENDING_SETUP_SNAPSHOT_KEY);
+  } catch {
+    return false;
+  }
+}
+
 /** Read + clear pending snapshot (one-shot). */
 export function consumePendingSetupSnapshot(): RecentRunSnapshotInput | null {
   try {
@@ -34,7 +47,7 @@ export function consumePendingSetupSnapshot(): RecentRunSnapshotInput | null {
   }
 }
 
-/** Parent of a clone path (workspace folder for setup form). */
+/** Parent of a clone path (rarely needed — prefer clone itself as workspace). */
 export function parentOfClonePath(clonePath: string): string {
   const norm = clonePath.replace(/[/\\]+$/, "");
   const idx = Math.max(norm.lastIndexOf("/"), norm.lastIndexOf("\\"));
@@ -42,46 +55,82 @@ export function parentOfClonePath(clonePath: string): string {
   return norm.slice(0, idx);
 }
 
+function startConfigToRecentInput(sc: StartConfigSnapshot): RecentRunSnapshotInput {
+  const directive = (sc.userDirective || sc.directive || "").trim();
+  const workspace =
+    (sc.parentPath || sc.localPath || "").trim();
+  return {
+    repoUrl: sc.repoUrl || "",
+    parentPath: workspace,
+    presetId: sc.presetId || sc.preset || "blackboard",
+    directive,
+    runId: sc.runId,
+    model: sc.model,
+    plannerModel: sc.plannerModel,
+    workerModel: sc.workerModel,
+    auditorModel: sc.auditorModel,
+    agentCount: sc.agentCount,
+    rounds: sc.rounds,
+    topology: sc.topology,
+    webTools: sc.webTools,
+    autoApprove: sc.autoApprove,
+    mcpServers: sc.mcpServers,
+    writeMode: sc.writeMode,
+    conflictPolicy: sc.conflictPolicy,
+    councilSharedExplore: sc.councilSharedExplore,
+    councilSharedResearch: sc.councilSharedResearch,
+    councilReconcile: sc.councilReconcile,
+    verifyCommand: sc.verifyCommand,
+    preflightDryRun: sc.preflightDryRun,
+    hunkRag: sc.hunkRag,
+    dynamicRolePicker: sc.dynamicRolePicker,
+    mentionContracts: sc.mentionContracts,
+    bestOfNTurn: sc.bestOfNTurn,
+    wallClockCapMin:
+      sc.wallClockCapMin
+      ?? (sc.wallClockCapMs != null && sc.wallClockCapMs > 0
+        ? String(Math.max(1, Math.round(sc.wallClockCapMs / 60_000)))
+        : sc.wallClockCapMs === 0
+          ? "0"
+          : undefined),
+    ambitionTiers:
+      sc.ambitionTiers != null ? String(sc.ambitionTiers) : undefined,
+  };
+}
+
 /**
- * Best-effort map from run-summary (+ digest) into a setup refill snapshot.
- * Older summaries omit many fields; callers still get path/preset/model/topology when present.
+ * Map run-summary (+ digest) into a full setup refill snapshot.
+ * Prefers summary.startConfig (new) then top-level legacy fields.
  */
 export function snapshotFromRunSummary(
   digest: RunSummaryDigest,
   summary: RunSummary | null | undefined,
 ): RecentRunSnapshotInput {
-  const s = summary;
-  const localPath = (s?.localPath || digest.clonePath || "").trim();
-  const repoUrl = (s?.repoUrl || "").trim();
-  // If summary has a github URL, parent is clone parent; else use localPath as workspace.
-  const parentPath = repoUrl ? parentOfClonePath(localPath) : localPath || parentOfClonePath(digest.clonePath);
-  const topology = s?.topology ?? digest.topology;
-  const agentCount =
-    s?.agentCount
-    ?? topology?.agents?.length
-    ?? (Array.isArray(s?.agents) ? s!.agents.length : undefined);
-  const wallMs = s?.wallClockMs;
-  const wallClockCapMin =
-    wallMs && wallMs > 0 ? String(Math.max(1, Math.ceil(wallMs / 60_000))) : undefined;
+  const sc = extractStartConfigFromSummary(
+    (summary ?? {
+      localPath: digest.clonePath,
+      preset: digest.preset,
+      model: digest.model,
+      runId: digest.runId,
+      topology: digest.topology,
+      agentCount: digest.agentCount,
+    }) as unknown as Record<string, unknown>,
+  );
+  // Ensure workspace is the clone path used for this run (form "Project folder").
+  if (!sc.parentPath && !sc.localPath) {
+    sc.parentPath = digest.clonePath;
+    sc.localPath = digest.clonePath;
+  }
+  if (!sc.topology && digest.topology) sc.topology = digest.topology;
+  if (!sc.presetId && !sc.preset) {
+    sc.presetId = digest.preset;
+    sc.preset = digest.preset;
+  }
+  if (!sc.model && digest.model) sc.model = digest.model;
+  if (!sc.runId && digest.runId) sc.runId = digest.runId;
+  if (sc.agentCount == null && digest.agentCount != null) sc.agentCount = digest.agentCount;
 
-  return {
-    repoUrl,
-    parentPath,
-    presetId: s?.preset || digest.preset || "blackboard",
-    directive: (s?.userDirective || "").trim(),
-    runId: s?.runId || digest.runId,
-    model: s?.model || digest.model || undefined,
-    agentCount,
-    rounds: s?.rounds,
-    topology,
-    webTools: s?.webTools,
-    mcpServers: s?.mcpServers,
-    wallClockCapMin,
-    ambitionTiers: (() => {
-      const tier = (s as { maxTierReached?: number } | null | undefined)?.maxTierReached;
-      return tier != null && tier > 0 ? String(tier) : undefined;
-    })(),
-  };
+  return startConfigToRecentInput(sc);
 }
 
 /** Convert stash input into RecentRun shape for refillFromRecent. */

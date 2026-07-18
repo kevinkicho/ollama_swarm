@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import type { BrainConfigPatch } from "../components/BrainStartChat";
 import { useSwarm } from "../state/store";
 import { usePreflight } from "../hooks/usePreflight";
@@ -23,6 +23,7 @@ import {
 import { formatReconfigLabel } from "../components/brainChat/chatHelpers";
 import {
   consumePendingSetupSnapshot,
+  peekPendingSetupSnapshot,
   snapshotInputToRecentRun,
 } from "../lib/pendingSetupSnapshot";
 
@@ -78,11 +79,11 @@ export function useSetupForm(navigate: (path: string) => void) {
     setTopology(newTopo);
   }, [plannerModel, workerModel, auditorModel, model]);
 
-  // Apply URL-driven prefill for preset (and related) from "start on clone" links in history.
-  // Runs once after mount. Uses the initialFromUrl captured at first render.
+  // Apply URL-driven prefill for preset from "start on clone" links — but NEVER
+  // when a full history snapshot is pending (that path restores topology itself).
   useEffect(() => {
+    if (peekPendingSetupSnapshot()) return;
     if (initialFromUrl.preset) {
-      // setPresetId will trigger topology/agent count reset for that preset
       setPresetId(initialFromUrl.preset);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -169,9 +170,12 @@ export function useSetupForm(navigate: (path: string) => void) {
   const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0];
   const isActive = preset.status === "active";
 
-  // Preset-aware defaults for caps/tiers
-  // wall-clock cap default 0 (means use server default / no explicit per-run cap)
+  /** When true, skip preset-default side effects that would wipe a restored snapshot. */
+  const restoringSnapshotRef = useRef(false);
+
+  // Preset-aware defaults for caps/tiers — skip while hydrating a full snapshot.
   useEffect(() => {
+    if (restoringSnapshotRef.current) return;
     if (preset.id === "blackboard") {
       if (!wallClockCapMin || wallClockCapMin.trim() === "") {
         setWallClockCapMin("0");
@@ -229,71 +233,96 @@ export function useSetupForm(navigate: (path: string) => void) {
 
   const onTopologyChange = (next: Topology) => setTopology(next);
 
-  /** Full form rehydrate from a recent-run snapshot (list row click). */
-  const refillFromRecent = (r: RecentRun) => {
-    setRepoUrl(r.repoUrl || "");
-    setParentPath(r.parentPath || "");
-    // Apply models first so setPresetId topology seed sees them; then
-    // override topology/agentCount from snapshot if present.
-    if (r.model) setModel(r.model);
-    if (r.provider) setProvider(r.provider as Provider);
-    if (r.plannerModel != null) setPlannerModel(r.plannerModel);
-    if (r.workerModel != null) setWorkerModel(r.workerModel);
-    if (r.auditorModel != null) setAuditorModel(r.auditorModel);
-
-    if (r.presetId) {
-      // Prefer snapshot topology over synthesized defaults from setPresetId.
-      if (r.topology?.agents?.length) {
-        _setPresetId(r.presetId);
-        setTopology(r.topology);
-        if (r.agentCount != null) setAgentCount(r.agentCount);
-        else setAgentCount(r.topology.agents.length);
-      } else {
-        setPresetId(r.presetId);
-        if (r.agentCount != null) setAgentCount(r.agentCount);
+  /**
+   * Full form rehydrate from a recent-run / history snapshot.
+   * Pipes every start field; never uses setPresetId when topology is present
+   * (that would synthesize a fresh topology and drop saved rows).
+   */
+  const refillFromRecent = useCallback((r: RecentRun) => {
+    restoringSnapshotRef.current = true;
+    try {
+      setRepoUrl(r.repoUrl || "");
+      setParentPath(r.parentPath || "");
+      if (r.model) {
+        setModel(r.model);
+        setProvider(detectProvider(r.model));
       }
-    } else if (r.topology?.agents?.length) {
-      setTopology(r.topology);
-      if (r.agentCount != null) setAgentCount(r.agentCount);
-    }
+      if (r.provider) setProvider(r.provider as Provider);
+      if (r.plannerModel != null) setPlannerModel(r.plannerModel);
+      if (r.workerModel != null) setWorkerModel(r.workerModel);
+      if (r.auditorModel != null) setAuditorModel(r.auditorModel);
 
-    setUserDirective(r.directive || r.directiveSnippet || "");
-    if (r.wallClockCapMin != null) setWallClockCapMin(r.wallClockCapMin);
-    if (r.ambitionTiers != null) setAmbitionTiers(r.ambitionTiers);
-    if (r.rounds != null) setRoundsInput(r.rounds);
-    if (r.webTools != null) setWebTools(r.webTools);
-    if (r.autoApprove != null) setAutoApprove(r.autoApprove);
-    if (r.mcpServers != null) setMcpServers(r.mcpServers);
-    if (r.writeMode != null) setWriteMode(r.writeMode);
-    if (r.conflictPolicy != null) setConflictPolicy(r.conflictPolicy);
-    if (r.councilSharedExplore != null) setCouncilSharedExplore(r.councilSharedExplore);
-    if (r.councilSharedResearch != null) setCouncilSharedResearch(r.councilSharedResearch);
-    if (r.councilReconcile != null) setCouncilReconcile(r.councilReconcile);
-    if (r.verifyCommand != null) setVerifyCommand(r.verifyCommand);
-    if (r.preflightDryRun != null) setPreflightDryRun(r.preflightDryRun);
-    if (r.hunkRag != null) setHunkRag(r.hunkRag);
-    if (r.dynamicRolePicker != null) setDynamicRolePicker(r.dynamicRolePicker);
-    if (r.mentionContracts != null) setMentionContracts(r.mentionContracts);
-    if (r.bestOfNTurn != null) setBestOfNTurn(r.bestOfNTurn);
-  };
+      if (r.presetId) {
+        _setPresetId(r.presetId);
+      }
+      if (r.topology?.agents?.length) {
+        setTopology(r.topology);
+        setAgentCount(r.agentCount ?? r.topology.agents.length);
+      } else if (r.agentCount != null) {
+        setAgentCount(r.agentCount);
+        if (r.presetId) {
+          setTopology(
+            topologyForPreset(r.presetId, r.agentCount, {
+              plannerModel: r.plannerModel || r.model,
+              workerModel: r.workerModel || r.model,
+              auditorModel: r.auditorModel || r.model,
+            }),
+          );
+        }
+      }
+
+      // Always set directive (including empty) when restoring from history snapshot
+      // so a prior form value doesn't linger.
+      setUserDirective(r.directive ?? r.directiveSnippet ?? "");
+      if (r.wallClockCapMin != null) setWallClockCapMin(String(r.wallClockCapMin));
+      if (r.ambitionTiers != null) setAmbitionTiers(String(r.ambitionTiers));
+      if (r.rounds != null) setRoundsInput(r.rounds);
+      if (r.webTools != null) setWebTools(!!r.webTools);
+      if (r.autoApprove != null) setAutoApprove(!!r.autoApprove);
+      if (r.mcpServers != null) setMcpServers(r.mcpServers);
+      if (r.writeMode != null) setWriteMode(r.writeMode);
+      if (r.conflictPolicy != null) setConflictPolicy(r.conflictPolicy);
+      if (r.councilSharedExplore != null) setCouncilSharedExplore(!!r.councilSharedExplore);
+      if (r.councilSharedResearch != null) setCouncilSharedResearch(!!r.councilSharedResearch);
+      if (r.councilReconcile != null) setCouncilReconcile(r.councilReconcile);
+      if (r.verifyCommand != null) setVerifyCommand(r.verifyCommand);
+      if (r.preflightDryRun != null) setPreflightDryRun(!!r.preflightDryRun);
+      if (r.hunkRag != null) setHunkRag(!!r.hunkRag);
+      if (r.dynamicRolePicker != null) setDynamicRolePicker(!!r.dynamicRolePicker);
+      if (r.mentionContracts != null) setMentionContracts(!!r.mentionContracts);
+      if (r.bestOfNTurn != null) setBestOfNTurn(r.bestOfNTurn);
+
+      // Re-apply topology + directive after React processes preset defaults.
+      if (r.topology?.agents?.length || r.directive || r.directiveSnippet) {
+        const topo = r.topology;
+        const dir = r.directive ?? r.directiveSnippet ?? "";
+        requestAnimationFrame(() => {
+          if (topo?.agents?.length) setTopology(topo);
+          setUserDirective(dir);
+          if (r.mcpServers != null) setMcpServers(r.mcpServers);
+          if (r.webTools != null) setWebTools(!!r.webTools);
+          if (r.autoApprove != null) setAutoApprove(!!r.autoApprove);
+        });
+      }
+    } finally {
+      // Allow preset-default effects again after paint.
+      setTimeout(() => {
+        restoringSnapshotRef.current = false;
+      }, 100);
+    }
+  }, []);
 
   const removeFromRecent = (r: RecentRun) => {
     const next = removeRecentRun(r.id || r.runId || "");
     setRecentRuns(next);
   };
 
-  // History modal "Load on Start page" stashes a full snapshot in sessionStorage.
-  useEffect(() => {
+  // History modal "Load params" — apply full startConfig snapshot before paint.
+  useLayoutEffect(() => {
     const pending = consumePendingSetupSnapshot();
     if (!pending) return;
-    // Defer one tick so URL-prefill effects don't clobber this restore.
-    const t = setTimeout(() => {
-      refillFromRecent(snapshotInputToRecentRun(pending));
-    }, 0);
-    return () => clearTimeout(t);
-    // one-shot on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    refillFromRecent(snapshotInputToRecentRun(pending));
+  }, [refillFromRecent]);
 
   const startSwarmDirectlyFromBrain = async (cfg: BrainConfigPatch) => {
     setBusy(true);

@@ -327,10 +327,32 @@ export interface RunSummary {
   topology?: import("../../shared/src/topology").Topology;
   deliverables?: Array<{ path: string; status: "created" | "modified" }>;
   startCommand?: string;
+  /**
+   * Full start-form snapshot (directive, topology, MCP, caps, flags).
+   * Preferred source for "Load params on Start page".
+   */
+  startConfig?: import("@ollama-swarm/shared/startConfigSnapshot").StartConfigSnapshot;
   userDirective?: string;
   plannerTools?: boolean;
   webTools?: boolean;
   mcpServers?: string;
+  autoApprove?: boolean;
+  writeMode?: "none" | "single" | "multi";
+  conflictPolicy?: "merge" | "sequential" | "vote" | "judge" | "pick";
+  councilSharedExplore?: boolean;
+  councilSharedResearch?: boolean;
+  councilReconcile?: "revise" | "vote" | "judge";
+  verifyCommand?: string;
+  preflightDryRun?: boolean;
+  hunkRag?: boolean;
+  dynamicRolePicker?: boolean;
+  mentionContracts?: boolean;
+  bestOfNTurn?: number;
+  wallClockCapMs?: number;
+  ambitionTiers?: number | string;
+  plannerModel?: string;
+  workerModel?: string;
+  auditorModel?: string;
   controlAdvice?: Array<{
     ts: number;
     kind: string;
