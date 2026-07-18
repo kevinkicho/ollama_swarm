@@ -140,6 +140,8 @@ export interface RunSummary {
   researchIntegrity?: import("../research/researchBudget.js").ResearchIntegrityReport;
   /** Brain OS agentic dispatch metrics (optional). */
   brainOs?: import("@ollama-swarm/shared/brainOs").BrainOsRunMetrics;
+  /** Run resilience rollup (stall/thrash/Brain OS control plane). */
+  resilience?: import("@ollama-swarm/shared/swarmControl/controlAdvice").ResilienceRollup;
   agents: PerAgentStat[];
   // Task #65 (2026-04-24): persist the in-memory transcript at run-end
   // so the history modal / review view can replay what happened.
@@ -328,6 +330,8 @@ export interface BuildSummaryInput {
   researchIntegrity?: RunSummary["researchIntegrity"];
   /** Brain OS dispatch metrics (optional). */
   brainOs?: RunSummary["brainOs"];
+  /** Resilience rollup (optional). */
+  resilience?: RunSummary["resilience"];
   // V2 Step 3b.2: parallel-track V2 reducer state at run end.
   v2State?: RunSummary["v2State"];
   // V2 Step 5c.1: parallel-track V2 TodoQueue state at run end.

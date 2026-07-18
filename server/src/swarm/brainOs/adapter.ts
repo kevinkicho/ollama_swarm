@@ -22,6 +22,17 @@ export interface BrainOsRunHooks {
   recommendDrain?: () => void;
   recommendStop?: (reason: string) => void;
   getWorkerPool?: () => Agent[];
+  /** WS/event hub — emits swarm_control_advice for the resilience chip. */
+  emit?: (event: {
+    type: "swarm_control_advice";
+    ts: number;
+    kind: "brain_os";
+    source: "brain_os";
+    rationale: string;
+    conflictKind?: string;
+    status?: string;
+    agentId?: string;
+  }) => void;
 }
 
 /** Enable Brain OS for trusted local runs (autoApprove) unless explicitly disabled. */
@@ -142,5 +153,21 @@ export async function dispatchBrainOsConflict(
       },
     },
   );
+
+  // Surface on the resilience control plane (chip + history hydrate).
+  try {
+    hooks.emit?.({
+      type: "swarm_control_advice",
+      ts: Date.now(),
+      kind: "brain_os",
+      source: "brain_os",
+      conflictKind: opts.kind,
+      status: result.status,
+      rationale: result.summary.slice(0, 500),
+    });
+  } catch {
+    /* optional */
+  }
+
   return { status: result.status, summary: result.summary };
 }

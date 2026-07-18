@@ -21,6 +21,7 @@ export interface ToolBlockDispatchOpts {
   error: string;
   count: number;
   appendSystem?: (msg: string) => void;
+  emit?: (event: unknown) => void;
   coachAgent?: Agent;
 }
 
@@ -87,6 +88,13 @@ export async function maybeDispatchToolBlock(opts: ToolBlockDispatchOpts): Promi
       },
       {
         appendSystem: (t) => opts.appendSystem?.(t),
+        emit: opts.emit
+          ? (e) => {
+              try {
+                opts.emit?.(e);
+              } catch { /* */ }
+            }
+          : undefined,
       },
     );
 

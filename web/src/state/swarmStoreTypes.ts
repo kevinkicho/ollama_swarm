@@ -56,16 +56,18 @@ export interface DriftSample {
   windowSimilarities: number[];
 }
 
-/** Live swarm control center advice (stall gates, tool coaches). */
+/** Live run-resilience control plane (stall recovery, thrash brakes, Brain OS). */
 export interface SwarmControlAdvice {
   ts: number;
-  kind: "stall_gate" | "tool_coach";
+  kind: "stall_gate" | "tool_coach" | "brain_os";
   action?: "backoff" | "retry" | "stop";
-  source?: "rule" | "arbitrator";
+  source?: "rule" | "arbitrator" | "brain_os";
   rationale: string;
   plannerHint?: string;
   agentId?: string;
   tool?: string;
+  conflictKind?: string;
+  status?: string;
 }
 
 /** Live peer/hierarchy/control deliberation transactions. */

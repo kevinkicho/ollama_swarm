@@ -4,6 +4,7 @@ import {
   extractControlAdviceFromTranscript,
   extractControlAdviceFromEventRecords,
   mergeControlAdvice,
+  computeResilienceRollup,
 } from "./controlAdvice.js";
 
 describe("controlAdvice hydrate helpers", () => {
@@ -25,6 +26,23 @@ describe("controlAdvice hydrate helpers", () => {
     assert.equal(advice[0]!.action, "backoff");
     assert.equal(advice[1]!.kind, "tool_coach");
     assert.equal(advice[1]!.tool, "bash");
+  });
+
+  it("extracts brain-os lines as resilience events", () => {
+    const advice = extractControlAdviceFromTranscript([
+      {
+        role: "system",
+        text: "[brain-os] done status=resolved effects+1/-0: closed apply miss",
+        ts: 300,
+      },
+      {
+        role: "system",
+        text: "[brain-os] dispatch kind=tool_block privilege=runner depth=0 todo=—",
+        ts: 250,
+      },
+    ]);
+    assert.ok(advice.some((a) => a.kind === "brain_os" && a.status === "resolved"));
+    assert.ok(advice.some((a) => a.kind === "brain_os" && a.conflictKind === "tool_block"));
   });
 
   it("extracts swarm_control_advice from event log records", () => {
@@ -51,5 +69,20 @@ describe("controlAdvice hydrate helpers", () => {
       [{ ts: 2, kind: "tool_coach", rationale: "hint", tool: "bash" }],
     );
     assert.equal(merged.length, 2);
+  });
+
+  it("computeResilienceRollup scores recovery vs hard stops", () => {
+    const healthy = computeResilienceRollup([
+      { ts: 1, kind: "tool_coach", rationale: "use read" },
+      { ts: 2, kind: "brain_os", rationale: "ok", status: "resolved" },
+    ]);
+    assert.ok(healthy.score >= 70);
+    assert.equal(healthy.brainOsEvents, 1);
+    const fragile = computeResilienceRollup([
+      { ts: 1, kind: "stall_gate", action: "stop", rationale: "dead" },
+      { ts: 2, kind: "stall_gate", action: "stop", rationale: "still dead" },
+    ]);
+    assert.ok(fragile.score < healthy.score);
+    assert.equal(fragile.label === "fragile" || fragile.label === "stressed", true);
   });
 });

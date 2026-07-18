@@ -1,14 +1,20 @@
-/** Persisted / hydrated swarm control center advice records. */
+/** Persisted / hydrated swarm control center advice records.
+ *  Operator mental model: **run resilience** — thrash brakes, stall recovery,
+ *  quality gates, and Brain OS helpers that keep runs durable under failure. */
 
 export interface SwarmControlAdviceRecord {
   ts: number;
-  kind: "stall_gate" | "tool_coach";
+  kind: "stall_gate" | "tool_coach" | "brain_os";
   action?: "backoff" | "retry" | "stop";
-  source?: "rule" | "arbitrator";
+  source?: "rule" | "arbitrator" | "brain_os";
   rationale: string;
   plannerHint?: string;
   agentId?: string;
   tool?: string;
+  /** Brain OS conflict kind when kind=brain_os. */
+  conflictKind?: string;
+  /** Brain OS dispatch status when kind=brain_os. */
+  status?: string;
 }
 
 const STALL_GATE_RE =
@@ -16,6 +22,12 @@ const STALL_GATE_RE =
 const TOOL_COACH_RE = /^\[control\] Tool coach \(([^,]+), \d+×\): (.+)$/i;
 const STALL_ARBITRATOR_RE =
   /^\[control\] Stall arbitrator invoked \(\d+\/\d+\) — class=(.+)\.$/i;
+const BRAIN_OS_DONE_RE =
+  /^\[brain-os\] done status=(\w+)\s+effects[^\s]*:\s*(.+)$/i;
+const BRAIN_OS_DISPATCH_RE =
+  /^\[brain-os\] dispatch kind=(\S+)\s+privilege=(\S+)\s+depth=(\d+)/i;
+const BRAIN_OS_HELPER_RE =
+  /^\[brain-os\] helper (\S+) recruited kind=(\S+)/i;
 
 /** Reconstruct advice entries from `[control]` system transcript lines (history fallback). */
 export function extractControlAdviceFromTranscript(
@@ -58,6 +70,41 @@ export function extractControlAdviceFromTranscript(
         source: "arbitrator",
         rationale: `Stall arbitrator invoked (class=${arb[1]})`,
       });
+      continue;
+    }
+
+    const bosDone = text.match(BRAIN_OS_DONE_RE);
+    if (bosDone) {
+      out.push({
+        ts,
+        kind: "brain_os",
+        source: "brain_os",
+        status: bosDone[1],
+        rationale: bosDone[2]!.slice(0, 500),
+      });
+      continue;
+    }
+    const bosDispatch = text.match(BRAIN_OS_DISPATCH_RE);
+    if (bosDispatch) {
+      out.push({
+        ts,
+        kind: "brain_os",
+        source: "brain_os",
+        conflictKind: bosDispatch[1],
+        rationale: `dispatch ${bosDispatch[1]} (privilege=${bosDispatch[2]}, depth=${bosDispatch[3]})`,
+      });
+      continue;
+    }
+    const bosHelper = text.match(BRAIN_OS_HELPER_RE);
+    if (bosHelper) {
+      out.push({
+        ts,
+        kind: "brain_os",
+        source: "brain_os",
+        agentId: bosHelper[1],
+        conflictKind: bosHelper[2],
+        rationale: `helper recruited for ${bosHelper[2]}`,
+      });
     }
   }
   return out;
@@ -80,6 +127,8 @@ export function extractControlAdviceFromEventRecords(
       ...(ev.plannerHint ? { plannerHint: String(ev.plannerHint) } : {}),
       ...(ev.agentId ? { agentId: String(ev.agentId) } : {}),
       ...(ev.tool ? { tool: String(ev.tool) } : {}),
+      ...(ev.conflictKind ? { conflictKind: String(ev.conflictKind) } : {}),
+      ...(ev.status ? { status: String(ev.status) } : {}),
     });
   }
   return out;
@@ -101,4 +150,62 @@ export function mergeControlAdvice(
   }
   out.sort((a, b) => a.ts - b.ts);
   return out.slice(-40);
+}
+
+/** Compact resilience rollup for UI chips + summary.json. */
+export interface ResilienceRollup {
+  stallGates: number;
+  toolCoaches: number;
+  brainOsEvents: number;
+  stopActions: number;
+  backoffActions: number;
+  /** 0–100 heuristic: more recovery actions + fewer hard stops = healthier. */
+  score: number;
+  label: string;
+}
+
+export function computeResilienceRollup(
+  advice: ReadonlyArray<SwarmControlAdviceRecord>,
+  deliberation?: ReadonlyArray<{ verdict?: string }>,
+): ResilienceRollup {
+  let stallGates = 0;
+  let toolCoaches = 0;
+  let brainOsEvents = 0;
+  let stopActions = 0;
+  let backoffActions = 0;
+  for (const a of advice) {
+    if (a.kind === "stall_gate") stallGates += 1;
+    else if (a.kind === "tool_coach") toolCoaches += 1;
+    else if (a.kind === "brain_os") brainOsEvents += 1;
+    if (a.action === "stop") stopActions += 1;
+    if (a.action === "backoff") backoffActions += 1;
+  }
+  const deny = deliberation?.filter((d) => d.verdict === "deny").length ?? 0;
+  const approve = deliberation?.filter((d) => d.verdict === "approve").length ?? 0;
+  // Start healthy; thrash brakes and helpers add confidence; hard stops hurt.
+  let score = 72;
+  score += Math.min(12, toolCoaches * 2);
+  score += Math.min(12, brainOsEvents * 3);
+  score += Math.min(8, backoffActions * 2);
+  score += Math.min(8, Math.floor(approve / 2));
+  score -= Math.min(30, stopActions * 12);
+  score -= Math.min(15, Math.floor(deny / 3));
+  score = Math.max(0, Math.min(100, score));
+  const label =
+    score >= 80
+      ? "durable"
+      : score >= 55
+        ? "stabilizing"
+        : score >= 35
+          ? "stressed"
+          : "fragile";
+  return {
+    stallGates,
+    toolCoaches,
+    brainOsEvents,
+    stopActions,
+    backoffActions,
+    score,
+    label,
+  };
 }

@@ -73,6 +73,8 @@ export interface WorkerSelfConsistencyCtx {
   getSelfConsistencyK: () => number;
   appendSystem: (msg: string) => void;
   appendAgent: (agent: Agent, text: string) => void;
+  /** Optional: emit swarm_control_advice for resilience chip. */
+  emit?: (ev: Record<string, unknown>) => void;
   promptAgent: (
     agent: Agent,
     prompt: string,
@@ -531,6 +533,13 @@ export async function finalizeWorkerHunks(
             },
             {
               appendSystem: (t) => ctx.appendSystem(t),
+              emit: ctx.emit
+                ? (e) => {
+                    try {
+                      ctx.emit?.(e);
+                    } catch { /* */ }
+                  }
+                : undefined,
               skipTodo: (id, reason) => {
                 try {
                   ctx.getWrappers().skipTodoQ(id, reason);

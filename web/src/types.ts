@@ -278,6 +278,16 @@ export interface RunSummary {
     effectsApplied: number;
     effectsRejected: number;
   };
+  /** Run resilience rollup (control plane). */
+  resilience?: {
+    stallGates: number;
+    toolCoaches: number;
+    brainOsEvents: number;
+    stopActions: number;
+    backoffActions: number;
+    score: number;
+    label: string;
+  };
   /** Cycle fail taxonomy + empty-execution streaks (optional, RR-D). */
   cycleIntegrity?: {
     cyclesCompleted: number;
@@ -509,13 +519,15 @@ export type SwarmEvent =
   | {
       type: "swarm_control_advice";
       ts: number;
-      kind: "stall_gate" | "tool_coach";
+      kind: "stall_gate" | "tool_coach" | "brain_os";
       action?: "backoff" | "retry" | "stop";
-      source?: "rule" | "arbitrator";
+      source?: "rule" | "arbitrator" | "brain_os";
       rationale: string;
       plannerHint?: string;
       agentId?: string;
       tool?: string;
+      conflictKind?: string;
+      status?: string;
     }
   | {
       type: "deliberation_transaction";

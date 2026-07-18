@@ -3,10 +3,12 @@ import { createPortal } from "react-dom";
 import { useSwarm } from "../state/store";
 import { isActiveSwarmPhase } from "../lib/swarmPhase";
 import type { DeliberationAdvice, SwarmControlAdvice } from "../state/swarmStoreTypes";
+import { computeResilienceRollup } from "@ollama-swarm/shared/swarmControl/controlAdvice";
 
 const KIND_LABEL: Record<SwarmControlAdvice["kind"], string> = {
-  stall_gate: "stall gate",
-  tool_coach: "tool coach",
+  stall_gate: "stall recovery",
+  tool_coach: "thrash brake",
+  brain_os: "Brain OS",
 };
 
 const ACTION_STYLE: Record<string, string> = {
@@ -25,7 +27,7 @@ const VERDICT_STYLE: Record<string, string> = {
 };
 
 function adviceKey(a: SwarmControlAdvice): string {
-  return `${a.ts}|${a.kind}|${a.agentId ?? ""}|${a.tool ?? ""}|${a.action ?? ""}`;
+  return `${a.ts}|${a.kind}|${a.agentId ?? ""}|${a.tool ?? ""}|${a.action ?? ""}|${a.rationale.slice(0, 24)}`;
 }
 
 function delibKey(d: DeliberationAdvice, i: number): string {
@@ -47,6 +49,11 @@ function formatControlText(raw: string | undefined): string {
   return t || "(empty)";
 }
 
+/**
+ * Run resilience panel (formerly labeled "Governance").
+ * Surfaces the live control plane that keeps runs durable under thrash,
+ * stalls, bad commits, and tool loops — not abstract policy bureaucracy.
+ */
 export function SwarmControlPanel() {
   const runId = useSwarm((s) => s.runId);
   const phase = useSwarm((s) => s.phase);
@@ -62,6 +69,8 @@ export function SwarmControlPanel() {
   const live = isActiveSwarmPhase(phase);
   const recent = advice.slice(-12).reverse();
   const recentDelib = deliberation.slice(-16).reverse();
+
+  const rollup = computeResilienceRollup(advice, deliberation);
 
   const syncPanelPosition = () => {
     if (!triggerRef.current) return;
@@ -107,26 +116,38 @@ export function SwarmControlPanel() {
 
   if (!runId) return null;
 
-  const stallCount = advice.filter((a) => a.kind === "stall_gate").length;
-  const coachCount = advice.filter((a) => a.kind === "tool_coach").length;
-  const delibCount = deliberation.length;
-  const approveN = deliberation.filter((d) => d.verdict === "approve").length;
-  const denyN = deliberation.filter((d) => d.verdict === "deny").length;
+  const totalEvents = advice.length + deliberation.length;
+  const scoreColor =
+    rollup.score >= 80
+      ? "text-emerald-300"
+      : rollup.score >= 55
+        ? "text-sky-300"
+        : rollup.score >= 35
+          ? "text-amber-300"
+          : "text-rose-300";
 
-  const totalEvents = advice.length + delibCount;
   const chipStyle =
     totalEvents === 0
       ? "bg-ink-800/60 text-ink-500 border-ink-700/50"
       : live
-        ? "bg-cyan-900/35 text-cyan-300 border-cyan-800/50"
+        ? rollup.score < 45
+          ? "bg-amber-900/40 text-amber-200 border-amber-800/50"
+          : "bg-cyan-900/35 text-cyan-300 border-cyan-800/50"
         : "bg-ink-800/80 text-ink-400 border-ink-700/50";
 
   const chipLabel =
     totalEvents === 0
-      ? "control idle"
-      : delibCount > 0
-        ? `gov ${stallCount}g/${coachCount}c · ${approveN}✓/${denyN}✗`
-        : `control ${stallCount}g/${coachCount}c`;
+      ? "resilience idle"
+      : `res ${rollup.score} · ${rollup.stallGates}s/${rollup.toolCoaches}t/${rollup.brainOsEvents}os`;
+
+  const tooltip = [
+    "Run resilience — keeps the swarm durable under failure.",
+    "• Stall recovery: backoff/retry/stop when the board stops advancing",
+    "• Thrash brakes: tool-coach after repeated tool failures",
+    "• Quality gates: auditor approve/deny commits (bad patches don't ship)",
+    "• Brain OS: recruits helpers on apply_miss / parse_fail / tool_block / stuck progress",
+    "Not abstract policy — this is the run's performance & recovery control plane.",
+  ].join("\n");
 
   return (
     <>
@@ -134,7 +155,7 @@ export function SwarmControlPanel() {
         ref={triggerRef}
         type="button"
         onClick={() => (open ? closePanel() : openPanel())}
-        title="Governance — stall gates, tool coaches, peer/hierarchy approve·deny"
+        title={tooltip}
         className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold uppercase tracking-wide ${chipStyle}`}
       >
         {chipLabel}
@@ -143,15 +164,40 @@ export function SwarmControlPanel() {
         ? createPortal(
             <div
               ref={panelRef}
-              className="fixed z-[9999] w-[min(460px,calc(100vw-16px))] max-h-[min(440px,65vh)] overflow-y-auto rounded-lg border border-ink-600 bg-ink-950 shadow-2xl shadow-black/60 p-3 text-[11px] text-ink-100"
+              className="fixed z-[9999] w-[min(480px,calc(100vw-16px))] max-h-[min(460px,70vh)] overflow-y-auto rounded-lg border border-ink-600 bg-ink-950 shadow-2xl shadow-black/60 p-3 text-[11px] text-ink-100"
               style={{ top: pos.top, left: pos.left, backgroundColor: "#0b1220" }}
             >
-              <div className="flex items-center justify-between mb-2 gap-2">
-                <span className="text-ink-50 font-semibold">Governance</span>
+              <div className="flex items-center justify-between mb-1 gap-2">
+                <span className="text-ink-50 font-semibold">Run resilience</span>
                 <span className="text-ink-400 text-[10px] shrink-0">
                   {live ? "live" : "historical"}
                 </span>
               </div>
+              <p className="text-ink-400 text-[10px] leading-snug mb-2">
+                Performance under stress: thrash brakes, stall recovery, commit quality gates,
+                and Brain OS helpers — so runs stay durable instead of spinning or shipping junk.
+              </p>
+
+              {/* Resilience score strip */}
+              <div className="grid grid-cols-4 gap-1.5 mb-2 text-[10px]">
+                <div className="rounded border border-ink-700 bg-ink-900/80 px-1.5 py-1 text-center">
+                  <div className={`font-semibold tabular-nums ${scoreColor}`}>{rollup.score}</div>
+                  <div className="text-ink-500 uppercase tracking-wide">{rollup.label}</div>
+                </div>
+                <div className="rounded border border-ink-700 bg-ink-900/80 px-1.5 py-1 text-center">
+                  <div className="font-semibold tabular-nums text-amber-200">{rollup.stallGates}</div>
+                  <div className="text-ink-500">stalls</div>
+                </div>
+                <div className="rounded border border-ink-700 bg-ink-900/80 px-1.5 py-1 text-center">
+                  <div className="font-semibold tabular-nums text-sky-200">{rollup.toolCoaches}</div>
+                  <div className="text-ink-500">brakes</div>
+                </div>
+                <div className="rounded border border-ink-700 bg-ink-900/80 px-1.5 py-1 text-center">
+                  <div className="font-semibold tabular-nums text-violet-200">{rollup.brainOsEvents}</div>
+                  <div className="text-ink-500">Brain OS</div>
+                </div>
+              </div>
+
               <div className="flex gap-1 mb-2">
                 <button
                   type="button"
@@ -162,7 +208,7 @@ export function SwarmControlPanel() {
                       : "border-ink-700 text-ink-400 hover:text-ink-200"
                   }`}
                 >
-                  control ({advice.length})
+                  recovery ({advice.length})
                 </button>
                 <button
                   type="button"
@@ -173,14 +219,16 @@ export function SwarmControlPanel() {
                       : "border-ink-700 text-ink-400 hover:text-ink-200"
                   }`}
                 >
-                  deliberate ({delibCount})
+                  quality gates ({deliberation.length})
                 </button>
               </div>
 
               {tab === "control" ? (
                 recent.length === 0 ? (
                   <p className="text-ink-400 leading-relaxed">
-                    No control advice yet. Stall gates and tool coaches emit here when rules or bounded AI intervene.
+                    No recovery events yet. When agents thrash tools, the board stalls, or Brain OS
+                    recruits helpers, interventions show here — reducing wasted tokens and avoiding
+                    dead-end loops.
                   </p>
                 ) : (
                   <ul className="space-y-2">
@@ -191,7 +239,7 @@ export function SwarmControlPanel() {
                       >
                         <div className="flex flex-wrap items-center gap-1.5 mb-1">
                           <span className="text-[10px] uppercase tracking-wide text-cyan-300 font-semibold">
-                            {KIND_LABEL[a.kind]}
+                            {KIND_LABEL[a.kind] ?? a.kind}
                           </span>
                           {a.source ? (
                             <span className="text-[10px] text-ink-400">via {a.source}</span>
@@ -204,6 +252,12 @@ export function SwarmControlPanel() {
                           {a.tool ? (
                             <span className="text-[10px] text-ink-400 font-mono">{a.tool}</span>
                           ) : null}
+                          {a.conflictKind ? (
+                            <span className="text-[10px] text-violet-300 font-mono">{a.conflictKind}</span>
+                          ) : null}
+                          {a.status ? (
+                            <span className="text-[10px] text-ink-300">{a.status}</span>
+                          ) : null}
                           <span className="text-[10px] text-ink-500 ml-auto tabular-nums">
                             {new Date(a.ts).toLocaleTimeString()}
                           </span>
@@ -213,7 +267,7 @@ export function SwarmControlPanel() {
                         </p>
                         {a.plannerHint ? (
                           <p className="mt-1.5 text-ink-300 text-[10px] leading-snug border-t border-ink-700 pt-1.5 whitespace-pre-wrap break-words max-h-20 overflow-y-auto">
-                            <span className="text-ink-400">planner:</span> {formatControlText(a.plannerHint)}
+                            <span className="text-ink-400">next action:</span> {formatControlText(a.plannerHint)}
                           </p>
                         ) : null}
                       </li>
@@ -222,8 +276,10 @@ export function SwarmControlPanel() {
                 )
               ) : recentDelib.length === 0 ? (
                 <p className="text-ink-400 leading-relaxed">
-                  No deliberation yet. Peer votes, auditor approve/deny, and control gates log claim→validate→approve/deny
-                  here and to <span className="font-mono text-ink-300">logs/&lt;runId&gt;/deliberation.jsonl</span>.
+                  No quality-gate transactions yet. Auditor approve/deny on commits, peer challenges,
+                  and control votes land here and in{" "}
+                  <span className="font-mono text-ink-300">logs/&lt;runId&gt;/deliberation.jsonl</span>
+                  {" "}— blocking fragile patches from becoming durable git history.
                 </p>
               ) : (
                 <ul className="space-y-2">

@@ -18,6 +18,7 @@ import { config } from "../../config.js";
 import { snapshotApplyIntegrityForRun } from "../applyIntegrityStats.js";
 import { snapshotCycleIntegrityForRun } from "../cycleIntegrityStats.js";
 import { snapshotBrainOsMetrics } from "../brainOs/metricsRegistry.js";
+import { computeResilienceRollup } from "@ollama-swarm/shared/swarmControl/controlAdvice";
 import { snapshotResearchIntegrity } from "../research/researchBudget.js";
 
 export interface PerAgentCounters {
@@ -201,6 +202,26 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
     ...((): { brainOs?: import("@ollama-swarm/shared/brainOs").BrainOsRunMetrics } => {
       const brainOs = snapshotBrainOsMetrics(cfg.runId);
       return brainOs ? { brainOs } : {};
+    })(),
+    ...((): {
+      resilience?: import("@ollama-swarm/shared/swarmControl/controlAdvice").ResilienceRollup;
+    } => {
+      const advice = ctx.controlAdvice ?? [];
+      if (advice.length === 0) return {};
+      return {
+        resilience: computeResilienceRollup(
+          advice.map((a) => ({
+            ts: a.ts,
+            kind: a.kind as "stall_gate" | "tool_coach" | "brain_os",
+            rationale: a.rationale,
+            ...(a.action ? { action: a.action as "backoff" | "retry" | "stop" } : {}),
+            ...(a.source ? { source: a.source as "rule" | "arbitrator" | "brain_os" } : {}),
+            ...(a.agentId ? { agentId: a.agentId } : {}),
+            ...(a.tool ? { tool: a.tool } : {}),
+          })),
+          undefined,
+        ),
+      };
     })(),
   });
 

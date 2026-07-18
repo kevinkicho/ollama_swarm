@@ -510,6 +510,7 @@ export async function executeWorkerTodo(
       getSelfConsistencyK: ctx.getSelfConsistencyK,
       appendSystem: ctx.appendSystem,
       appendAgent: ctx.appendAgent,
+      emit: (ev) => ctx.emit(ev),
       promptAgent: ctx.promptAgent,
       bumpJsonRepairs: ctx.bumpJsonRepairs,
       bumpPromptErrors: ctx.bumpPromptErrors,

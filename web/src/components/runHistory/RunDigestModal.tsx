@@ -423,6 +423,26 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
                   </DataValue>
                 </>
               ) : null}
+              {summary?.resilience ? (
+                <>
+                  <DataLabel>Resilience</DataLabel>
+                  <DataValue>
+                    score {summary.resilience.score} ({summary.resilience.label})
+                    {summary.resilience.stallGates > 0
+                      ? ` · stalls ${summary.resilience.stallGates}`
+                      : ""}
+                    {summary.resilience.toolCoaches > 0
+                      ? ` · thrash brakes ${summary.resilience.toolCoaches}`
+                      : ""}
+                    {summary.resilience.brainOsEvents > 0
+                      ? ` · Brain OS ${summary.resilience.brainOsEvents}`
+                      : ""}
+                    {summary.resilience.stopActions > 0
+                      ? ` · hard stops ${summary.resilience.stopActions}`
+                      : ""}
+                  </DataValue>
+                </>
+              ) : null}
               {summary?.cycleIntegrity ? (
                 <>
                   <DataLabel>Cycle integrity</DataLabel>

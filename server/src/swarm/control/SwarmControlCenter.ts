@@ -344,6 +344,7 @@ export class SwarmControlCenter {
         error,
         count: record.count,
         appendSystem: deps.appendSystem,
+        emit: deps.emit as ((e: unknown) => void) | undefined,
         coachAgent: deps.agent,
       }),
     );

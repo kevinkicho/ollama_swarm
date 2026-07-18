@@ -201,13 +201,15 @@ export type SwarmEventBody =
   | {
       type: "swarm_control_advice";
       ts: number;
-      kind: "stall_gate" | "tool_coach";
+      kind: "stall_gate" | "tool_coach" | "brain_os";
       action?: "backoff" | "retry" | "stop";
-      source?: "rule" | "arbitrator";
+      source?: "rule" | "arbitrator" | "brain_os";
       rationale: string;
       plannerHint?: string;
       agentId?: string;
       tool?: string;
+      conflictKind?: string;
+      status?: string;
     }
   /** Peer/hierarchy reason validation (approve|deny|…) for audit dissemination. */
   | {

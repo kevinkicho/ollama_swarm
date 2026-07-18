@@ -611,6 +611,11 @@ export async function runAuditedExecution(
               },
               {
                 appendSystem: (t) => ctx.appendSystem(t),
+                emit: (e) => {
+                  try {
+                    ctx.emit(e);
+                  } catch { /* */ }
+                },
               },
             );
             if (r.status === "resolved" || r.status === "partial") {

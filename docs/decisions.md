@@ -2,6 +2,20 @@
 
 This document records major architectural and product decisions with their rationale and status.
 
+## 2026-07-18: Control plane rebranded as run resilience (not “governance”)
+
+**Decision:** The IdentityStrip chip formerly labeled **Governance** is the run’s
+**resilience / recovery control plane** — stall recovery, thrash brakes (tool coach),
+commit quality gates (deliberation approve/deny), and Brain OS helper recruitment.
+UI copy, tooltips, and `summary.resilience` score make that job explicit.
+
+**Rationale:** “Governance” reads like abstract policy; operators need a durable-run
+signal that maps to wasted tokens avoided, thrash stopped, and bad commits blocked.
+
+**Status:** Shipped (UI + controlAdvice `brain_os` kind + resilience rollup).
+
+---
+
 ## 2026-07-18: Brain OS agentic dispatch + git-native worker collaboration
 
 **Decision:** Mid-run recovery should **not** be primarily a hard-coded strategy enum

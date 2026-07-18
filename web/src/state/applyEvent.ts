@@ -125,6 +125,8 @@ export function applyEventToStore(ev: SwarmEvent, s: SwarmStore): void {
         ...(ev.plannerHint ? { plannerHint: ev.plannerHint } : {}),
         ...(ev.agentId ? { agentId: ev.agentId } : {}),
         ...(ev.tool ? { tool: ev.tool } : {}),
+        ...(ev.conflictKind ? { conflictKind: String(ev.conflictKind) } : {}),
+        ...(ev.status ? { status: String(ev.status) } : {}),
       });
       break;
     case "deliberation_transaction": {
