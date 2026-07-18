@@ -4,7 +4,6 @@ import { SystemStatusPanel } from "./SystemStatusPanel";
 import { RunQueuePanel } from "./RunQueuePanel";
 import { MetricsOverviewPanel } from "./MetricsOverviewPanel";
 import { BrainActivityPanel } from "./BrainActivityPanel";
-import { BrainProposalsPanel } from "./BrainProposalsPanel";
 import { useSwarm } from "../state/store";
 // Phase 10: brain always available (unless other config).
 import { RunHistoryDropdown } from "./runHistory";
@@ -319,7 +318,6 @@ export function SystemWrapper({
               <RunQueuePanel parentPath={parentPath} onViewRun={handleViewRun} onStopRun={handleStopRun} />
               <MetricsOverviewPanel parentPath={parentPath} />
               <BrainActivityPanel brainHealth={brainHealth} activities={brainActivities} />
-              <BrainProposalsPanel clonePath={clonePathForNav || parentPath} />
               <NotificationPreferences />
             </div>
           )}
