@@ -6,8 +6,10 @@ import type { Topology } from "../../../../shared/src/topology";
 import type { Provider } from "../../../../shared/src/providers";
 
 const STORAGE_KEY = "ollama-swarm:recent-runs";
-/** List view: more room than the old 3-chip strip. */
-export const MAX_RECENT_RUNS = 12;
+/** How many starts we keep in localStorage (newest first). */
+export const MAX_RECENT_RUNS = 30;
+/** Rows per page in the Setup list view. */
+export const RECENT_RUNS_PAGE_SIZE = 5;
 const MAX_DIRECTIVE_PREVIEW = 120;
 
 /** Full start snapshot — enough to rehydrate SetupForm without server round-trip. */

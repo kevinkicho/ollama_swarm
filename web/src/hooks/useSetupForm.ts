@@ -21,6 +21,10 @@ import {
   type DeferredReconfigRecord,
 } from "../lib/deferredReconfig";
 import { formatReconfigLabel } from "../components/brainChat/chatHelpers";
+import {
+  consumePendingSetupSnapshot,
+  snapshotInputToRecentRun,
+} from "../lib/pendingSetupSnapshot";
 
 // Minimal surface to keep the thin SetupForm working.
 // Full logic can be expanded here later.
@@ -277,6 +281,19 @@ export function useSetupForm(navigate: (path: string) => void) {
     const next = removeRecentRun(r.id || r.runId || "");
     setRecentRuns(next);
   };
+
+  // History modal "Load on Start page" stashes a full snapshot in sessionStorage.
+  useEffect(() => {
+    const pending = consumePendingSetupSnapshot();
+    if (!pending) return;
+    // Defer one tick so URL-prefill effects don't clobber this restore.
+    const t = setTimeout(() => {
+      refillFromRecent(snapshotInputToRecentRun(pending));
+    }, 0);
+    return () => clearTimeout(t);
+    // one-shot on mount
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const startSwarmDirectlyFromBrain = async (cfg: BrainConfigPatch) => {
     setBusy(true);

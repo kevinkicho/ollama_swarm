@@ -767,6 +767,10 @@ export interface RunSummaryDigest {
   stopReason?: string;
   commits?: number;
   totalTodos?: number;
+  filesChanged?: number;
+  skippedTodos?: number;
+  staleEvents?: number;
+  agentCount?: number;
   hasContract: boolean;
   isActive: boolean;
   // Task #36: app-level runId (uuid) from the summary.json. Absent on

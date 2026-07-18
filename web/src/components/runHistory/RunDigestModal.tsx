@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import type { PerAgentStat, RunSummary, RunSummaryDigest } from "../../types";
 import { copyText } from "../../utils/copyText";
 import { truncateLeft } from "../IdentityStrip";
@@ -16,6 +16,10 @@ import {
   PresetChip,
   ResultChip,
 } from "./runHistoryFormat";
+import {
+  snapshotFromRunSummary,
+  stashPendingSetupSnapshot,
+} from "../../lib/pendingSetupSnapshot";
 
 export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; onClose: () => void }) {
   const [summary, setSummary] = useState<RunSummary | null>(null);
@@ -97,14 +101,86 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
     endedAt: digest.endedAt,
     wallClockMs: digest.wallClockMs,
     stopReason: (digest.stopReason ?? "") as RunSummary["stopReason"],
-    commits: digest.commits ?? 0,
-    staleEvents: 0,
-    skippedTodos: 0,
-    totalTodos: digest.totalTodos ?? 0,
-    filesChanged: 0,
+    commits: digest.commits,
+    staleEvents: undefined as number | undefined,
+    skippedTodos: undefined as number | undefined,
+    totalTodos: digest.totalTodos,
+    filesChanged: (digest as { filesChanged?: number }).filesChanged,
     finalGitStatus: "",
     finalGitStatusTruncated: false,
     agents: [] as PerAgentStat[],
+  };
+
+  /**
+   * Counters coalesce summary + digest + topology/agentCount/board so the
+   * modal never shows a blank strip when the digest had partial data, and
+   * zeros display as 0 (not "—"). Undefined = field not recorded for this
+   * preset (discussion often omits commits/todos).
+   */
+  const counters = useMemo(() => {
+    const s = summary;
+    const agentsArr = Array.isArray(s?.agents) ? s!.agents : [];
+    const topoLen = s?.topology?.agents?.length ?? digest.topology?.agents?.length;
+    const agentCount =
+      agentsArr.length > 0
+        ? agentsArr.length
+        : s?.agentCount != null
+          ? s.agentCount
+          : topoLen != null
+            ? topoLen
+            : undefined;
+
+    const board = (s as { board?: { committed?: number; skipped?: number; stale?: number; total?: number } } | null)
+      ?.board;
+    const v2q = s?.v2QueueState?.counts;
+
+    const totalTodos =
+      pickNum(s?.totalTodos)
+      ?? pickNum(digest.totalTodos)
+      ?? pickNum(board?.total)
+      ?? pickNum(v2q?.total);
+
+    const skippedTodos =
+      pickNum(s?.skippedTodos)
+      ?? pickNum(board?.skipped)
+      ?? pickNum(v2q?.skipped);
+
+    const staleEvents =
+      pickNum(s?.staleEvents)
+      ?? pickNum(board?.stale);
+
+    const commits =
+      pickNum(s?.commits)
+      ?? pickNum(digest.commits)
+      ?? pickNum(board?.committed)
+      ?? pickNum(v2q?.completed);
+
+    const filesChanged =
+      pickNum(s?.filesChanged)
+      ?? pickNum((digest as { filesChanged?: number }).filesChanged);
+
+    return {
+      commits,
+      filesChanged,
+      totalTodos,
+      skippedTodos,
+      staleEvents,
+      agents: agentCount,
+    };
+  }, [summary, digest]);
+
+  const goToSetupWithParams = (autoStart: boolean) => {
+    const snap = snapshotFromRunSummary(digest, summary);
+    stashPendingSetupSnapshot(snap);
+    const params = new URLSearchParams();
+    if (snap.parentPath) params.set("parentPath", snap.parentPath);
+    if (snap.repoUrl) params.set("repoUrl", snap.repoUrl);
+    if (snap.presetId) params.set("preset", snap.presetId);
+    if (snap.model) params.set("model", snap.model);
+    if (autoStart) params.set("autoStart", "1");
+    // Full snapshot is in sessionStorage; query only helps cold hydrate.
+    window.location.href = `/?${params.toString()}`;
+    onClose();
   };
 
   return (
@@ -320,20 +396,28 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
             </section>
           ) : null}
 
-          {/* Run-level counters */}
-          {summary ? (
-            <section>
-              <SectionLabel>Counters</SectionLabel>
-              <div className="grid grid-cols-3 gap-3">
-                <Stat label="Commits" value={summary.commits} />
-                <Stat label="Files changed" value={summary.filesChanged} />
-                <Stat label="Total todos" value={summary.totalTodos} />
-                <Stat label="Skipped todos" value={summary.skippedTodos} />
-                <Stat label="Stale events" value={summary.staleEvents} />
-                <Stat label="Agents" value={summary.agents.length} />
+          {/* Run-level counters — always shown (digest fallback while loading). */}
+          <section>
+            <SectionLabel>Counters</SectionLabel>
+            <div className="grid grid-cols-3 gap-3">
+              <Stat label="Commits" value={counters.commits} />
+              <Stat label="Files changed" value={counters.filesChanged} />
+              <Stat label="Total todos" value={counters.totalTodos} />
+              <Stat label="Skipped todos" value={counters.skippedTodos} />
+              <Stat label="Stale events" value={counters.staleEvents} />
+              <Stat label="Agents" value={counters.agents} />
+            </div>
+            {!summary && !loading ? (
+              <div className="text-[10px] text-ink-500 mt-1">
+                Showing digest fields only — full summary not on disk.
               </div>
-            </section>
-          ) : null}
+            ) : null}
+            {summary && counters.commits == null && counters.totalTodos == null ? (
+              <div className="text-[10px] text-ink-500 mt-1">
+                Todo/commit counters are often omitted on discussion presets (e.g. council).
+              </div>
+            ) : null}
+          </section>
 
           {/* Deliverables — created/modified file chips */}
           {summary && summary.deliverables && summary.deliverables.length > 0 ? (
@@ -488,27 +572,16 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
             Open folder
           </button>
           <button
-            onClick={() => {
-              const cp = digest.clonePath;
-              const ru = summary?.repoUrl || "";
-              const ps = digest.preset;
-              const md = digest.model || "";
-              const parent = ru
-                ? cp.replace(/[/\\][^/\\]*$/, "")
-                : cp;
-              const params = new URLSearchParams();
-              params.set("parentPath", parent);
-              if (ru) params.set("repoUrl", ru);
-              params.set("preset", ps);
-              if (md) params.set("model", md);
-              params.set("autoStart", "1");
-              // Direct start (with prefill) reusing the clone. The autoStart param triggers
-              // immediate performStart after form hydrate. Server reuses existing clone dir.
-              window.location.href = `/?${params.toString()}`;
-              onClose();
-            }}
+            onClick={() => goToSetupWithParams(false)}
+            className="text-xs px-3 py-1.5 rounded bg-sky-800 hover:bg-sky-700 text-sky-100 border border-sky-600"
+            title="Open Start page and fill form from this run (topology, models, directive, MCP when recorded)"
+          >
+            Load params on Start page
+          </button>
+          <button
+            onClick={() => goToSetupWithParams(true)}
             className="text-xs px-3 py-1.5 rounded bg-emerald-700 hover:bg-emerald-600 text-emerald-100 border border-emerald-600"
-            title="Start a new swarm run reusing this clone's directory and current files"
+            title="Start a new swarm reusing this clone, with form params restored from the summary"
           >
             Start new swarm on this clone
           </button>
@@ -552,17 +625,20 @@ function NumOrDashCell({ value, className }: { value: number | null | undefined;
   return <td className={className}>{value.toLocaleString()}</td>;
 }
 
+/** Prefer a finite number; treat null/undefined/NaN as missing. */
+function pickNum(v: unknown): number | undefined {
+  if (typeof v !== "number" || !Number.isFinite(v)) return undefined;
+  return v;
+}
+
 function Stat({ label, value }: { label: string; value: number | undefined }) {
-  // 2026-04-25: Kevin updated preference — modal Stat tiles show "—"
-  // for blank/zero so the empty state is unambiguous (was blank in
-  // earlier #86 fine-tune). 2026-04-25 v2: opacity-50 on the dash
-  // matches the dropdown table convention.
-  const display = !value ? "—" : value.toLocaleString();
-  const isEmpty = !value;
+  // 0 is a real measurement (e.g. filesChanged: 0). Only undefined/null → "—".
+  const isMissing = value == null || !Number.isFinite(value);
+  const display = isMissing ? "—" : value.toLocaleString();
   return (
     <div className="rounded border border-ink-700 bg-ink-950/40 px-2 py-1.5">
       <div className="text-[9px] uppercase tracking-wider text-ink-500">{label}</div>
-      <div className={`font-mono text-sm min-h-[1.25rem] ${isEmpty ? "text-ink-400 opacity-50" : "text-ink-100"}`}>
+      <div className={`font-mono text-sm min-h-[1.25rem] ${isMissing ? "text-ink-400 opacity-50" : "text-ink-100"}`}>
         {display}
       </div>
     </div>

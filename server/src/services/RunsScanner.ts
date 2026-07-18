@@ -15,6 +15,11 @@ export interface RunSummaryDigest {
   stopReason?: string;
   commits?: number;
   totalTodos?: number;
+  /** Optional counters for history UI (when summary recorded them). */
+  filesChanged?: number;
+  skippedTodos?: number;
+  staleEvents?: number;
+  agentCount?: number;
   hasContract: boolean;
   isActive: boolean;
   runId?: string;
@@ -299,6 +304,11 @@ function parseSummaryToDigest(
   // logs/<runId> subdir). This ensures match.clonePath passed to /run-summary
   // and guard checks is the real clone dir (so per-run /runs/:id views hydrate).
   const effectiveClone = (obj as any).localPath || (obj as any).clonePath || readDir;
+  const agents = Array.isArray((obj as any).agents) ? (obj as any).agents : undefined;
+  const agentCount =
+    typeof (obj as any).agentCount === "number"
+      ? (obj as any).agentCount
+      : topology?.agents?.length ?? agents?.length;
   return {
     name,
     clonePath: effectiveClone,
@@ -308,8 +318,15 @@ function parseSummaryToDigest(
     endedAt: (obj as any).endedAt || 0,
     wallClockMs: (obj as any).wallClockMs || 0,
     stopReason: (obj as any).stopReason,
-    commits: (obj as any).commits,
-    totalTodos: (obj as any).totalTodos,
+    commits: typeof (obj as any).commits === "number" ? (obj as any).commits : undefined,
+    totalTodos: typeof (obj as any).totalTodos === "number" ? (obj as any).totalTodos : undefined,
+    filesChanged:
+      typeof (obj as any).filesChanged === "number" ? (obj as any).filesChanged : undefined,
+    skippedTodos:
+      typeof (obj as any).skippedTodos === "number" ? (obj as any).skippedTodos : undefined,
+    staleEvents:
+      typeof (obj as any).staleEvents === "number" ? (obj as any).staleEvents : undefined,
+    agentCount: typeof agentCount === "number" ? agentCount : undefined,
     hasContract: !!contract,
     isActive: false,
     runId: (obj as any).runId,
