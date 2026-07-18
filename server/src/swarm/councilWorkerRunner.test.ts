@@ -56,10 +56,10 @@ test("councilWorkerRunner — persists worker JSON to transcript via appendAgent
 
 test("councilWorkerRunner — retry messages include real failure reasons", () => {
   assert.doesNotMatch(SRC, /parse failed — trying repair/, "must not use generic parse-failed label");
-  // Stage 2 is class-aware: apply_miss → fresh-disk re-emit; else JSON/envelope repair.
+  // Stage 2 is class-aware: apply_miss → skip same-model re-emit; else JSON/envelope repair.
   assert.match(
     SRC,
-    /primary failed \(\$\{primaryReason\}\) — (?:apply-class: fresh-disk re-emit|trying JSON\/envelope repair prompt)/,
+    /primary failed \(\$\{primaryReason\}\) — (?:apply recovery already tried|trying JSON\/envelope repair prompt)/,
     "stage 2 names primary failure with class-aware recovery",
   );
   assert.match(SRC, /classifyCycleFailReason/, "must branch stage-2 on fail class");
@@ -71,8 +71,15 @@ test("councilWorkerRunner — stage 2 uses buildWorkerRepairPrompt (not duplicat
   assert.match(SRC, /buildWorkerRepairPrompt/, "must import JSON repair prompt builder");
   assert.match(SRC, /repairFrom/, "must pass prior response into repair attempt");
   assert.match(SRC, /repairAndParseJson/, "must lenient-parse before declaring JSON failure");
-  assert.match(SRC, /apply-class: fresh-disk re-emit/, "apply misses skip JSON repair framing");
+  // apply_miss must NOT full re-emit same model (120b thrash); format recovery still uses repairFrom.
+  assert.match(SRC, /skipping same-model re-emit/, "apply misses skip same-model re-emit after grounded recovery");
+  assert.doesNotMatch(SRC, /apply-class: fresh-disk re-emit/, "removed thrashy same-model apply re-emit");
   assert.doesNotMatch(SRC, /tryBrainFallback/i, "worker recovery stays in swarm agents, not in-run brain");
+});
+
+test("councilWorkerRunner — classifies worker skips (garbage → no_hunks retry)", () => {
+  assert.match(SRC, /classifyWorkerSkip/, "must classify free-text skips");
+  assert.match(SRC, /garbage skip/, "must reject placeholder skip reasons");
 });
 
 test("councilWorkerRunner — demotes build→hunks for create-test intent (2964afe8)", () => {

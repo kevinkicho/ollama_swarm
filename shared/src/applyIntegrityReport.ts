@@ -17,6 +17,15 @@ export interface ApplyIntegrityReport {
   repairSuccesses: number;
   /** Grounded hunk-repair attempts that still failed or could not parse. */
   repairFailures: number;
+  /**
+   * First-pass apply misses that later landed via deterministic uniqueCandidates
+   * rewrite (not terminal failure). Optional for older summaries.
+   */
+  missRecoveredDet?: number;
+  /** First-pass misses recovered via LLM grounded repair. */
+  missRecoveredLlm?: number;
+  /** Misses that remained after all recovery in that attempt (terminal). */
+  missTerminal?: number;
 }
 
 /** Mutable run-scoped counters; runners pass this object or use the server registry. */
@@ -26,6 +35,9 @@ export type ApplyIntegrityCounters = {
   missByKind: Record<string, number>;
   repairSuccesses: number;
   repairFailures: number;
+  missRecoveredDet: number;
+  missRecoveredLlm: number;
+  missTerminal: number;
 };
 
 export function createApplyIntegrityCounters(): ApplyIntegrityCounters {
@@ -35,6 +47,9 @@ export function createApplyIntegrityCounters(): ApplyIntegrityCounters {
     missByKind: Object.create(null) as Record<string, number>,
     repairSuccesses: 0,
     repairFailures: 0,
+    missRecoveredDet: 0,
+    missRecoveredLlm: 0,
+    missTerminal: 0,
   };
 }
 
@@ -59,6 +74,18 @@ export function recordRepairFailure(c: ApplyIntegrityCounters): void {
   c.repairFailures += 1;
 }
 
+export function recordMissRecoveredDet(c: ApplyIntegrityCounters): void {
+  c.missRecoveredDet += 1;
+}
+
+export function recordMissRecoveredLlm(c: ApplyIntegrityCounters): void {
+  c.missRecoveredLlm += 1;
+}
+
+export function recordMissTerminal(c: ApplyIntegrityCounters): void {
+  c.missTerminal += 1;
+}
+
 /**
  * Snapshot for summary.json. Returns undefined when nothing happened so the
  * optional field stays absent (back-compat with old consumers / clean runs).
@@ -75,6 +102,9 @@ export function snapshotApplyIntegrity(
     && !hasMiss
     && c.repairSuccesses === 0
     && c.repairFailures === 0
+    && c.missRecoveredDet === 0
+    && c.missRecoveredLlm === 0
+    && c.missTerminal === 0
   ) {
     return undefined;
   }
@@ -89,5 +119,8 @@ export function snapshotApplyIntegrity(
     missByKind,
     repairSuccesses: c.repairSuccesses,
     repairFailures: c.repairFailures,
+    ...(c.missRecoveredDet > 0 ? { missRecoveredDet: c.missRecoveredDet } : {}),
+    ...(c.missRecoveredLlm > 0 ? { missRecoveredLlm: c.missRecoveredLlm } : {}),
+    ...(c.missTerminal > 0 ? { missTerminal: c.missTerminal } : {}),
   };
 }

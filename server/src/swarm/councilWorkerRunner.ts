@@ -45,12 +45,19 @@ import { TodoQueue, type QueuedTodo } from "./blackboard/TodoQueue.js";
 import { scoreCouncilTodoForDequeue } from "./councilTodoPlan.js";
 import type { CouncilAdapterState } from "./councilAdapter.js";
 import { wrapProgressContextForPrompt } from "./councilProgressLedger.js";
-import { noteRepairFailure, noteRepairSuccess } from "./applyIntegrityStats.js";
+import {
+  noteMissRecoveredDet,
+  noteMissRecoveredLlm,
+  noteMissTerminal,
+  noteRepairFailure,
+  noteRepairSuccess,
+} from "./applyIntegrityStats.js";
 import {
   recordCycleFail,
   recordCycleTodoSuccess,
 } from "./cycleIntegrityStats.js";
 import { classifyCycleFailReason } from "@ollama-swarm/shared/cycleIntegrityReport";
+import { classifyWorkerSkip } from "@ollama-swarm/shared/skipClassify";
 import {
   BARE_TEST_RUNNERS,
   shouldDemoteBuildToHunks,
@@ -606,30 +613,26 @@ async function executeTodoWithRetryChain(
 
   const expectedFiles = [...todo.expectedFiles];
 
-  // Stage 1: Primary prompt
+  // Stage 1: Primary prompt (includes apply + det multi-candidate + LLM grounded repair)
   const primaryResult = await tryWorkerPrompt(agent, todo, expectedFiles, state, fsAdapter, gitAdapter, ctx);
   if (!isWorkerRetry(primaryResult)) return primaryResult;
   const primaryReason = summarizeWorkerFailureReason(primaryResult.reason);
   const primaryBucket = classifyCycleFailReason(primaryReason);
 
-  // Stage 2: class-aware recovery (live eee6718f / 9f449937).
-  // Apply misses already got grounded hunk repair inside tryWorkerPrompt —
-  // parse-shaped repairFrom wastes a full attempt. JSON/schema/no_hunks keep
-  // the envelope repair prompt; apply thrash re-emits on fresh disk only.
+  // Stage 2: class-aware recovery.
+  // apply_miss: stage-1 already ran applyOrGroundedRepair (det + LLM). A full
+  // same-model re-emit caused hotspot thrash (120b2044: 45 nested loops) without
+  // making agents more capable. Skip that re-emit; allow one failover model below.
+  // json_parse / no_hunks / schema: envelope repair still helps format recovery.
   let repairResult: WorkerAttemptResult;
   if (primaryBucket === "apply_miss") {
     ctx.appendSystem(
-      `[execution] ${agent.id} primary failed (${primaryReason}) — apply-class: fresh-disk re-emit (skip JSON repair framing).`,
+      `[execution] ${agent.id} primary failed (${primaryReason}) — ` +
+        `apply recovery already tried (deterministic candidates + grounded repair); ` +
+        `skipping same-model re-emit (avoids thrash).`,
     );
-    repairResult = await tryWorkerPrompt(
-      agent,
-      todo,
-      expectedFiles,
-      state,
-      fsAdapter,
-      gitAdapter,
-      ctx,
-    );
+    // missTerminal already recorded inside tryWorkerPrompt when grounded repair failed.
+    repairResult = { outcome: "retry", reason: primaryReason, lastResponse: primaryResult.lastResponse };
   } else {
     ctx.appendSystem(
       `[execution] ${agent.id} primary failed (${primaryReason}) — trying JSON/envelope repair prompt.`,
@@ -653,7 +656,8 @@ async function executeTodoWithRetryChain(
   if (!isWorkerRetry(repairResult)) return repairResult;
   const repairReason = summarizeWorkerFailureReason(repairResult.reason);
 
-  // Stage 3: Failover model retry (providerFailover chain or SIBLING_MODELS)
+  // Stage 3: Failover model once (different model — not same-model double emit).
+  // Still useful for apply_miss when another model anchors better; not a deadloop.
   const modelAtEntry = agent.model;
   const fallbackModel = councilWorkerFallbackModel(modelAtEntry, state.cfg.providerFailover);
   if (!fallbackModel) {
@@ -979,7 +983,8 @@ async function tryWorkerPrompt(
         if (grounded.ok && grounded.hunks) {
           if (grounded.deterministicCandidate) {
             ctx.appendSystem(
-              `[apply-miss] deterministic uniqueCandidates[0] applied (SWARM_APPLY_DETERMINISTIC_CANDIDATE)`,
+              `[apply-miss] recovered via deterministic uniqueCandidates ` +
+                `(SWARM_APPLY_DETERMINISTIC_CANDIDATE) — not a terminal fail`,
             );
           }
           const repairResult = await applyAndCommit({
@@ -995,6 +1000,7 @@ async function tryWorkerPrompt(
           if (repairResult.ok) {
             if (!repairResult.filesWritten || repairResult.filesWritten.length === 0) {
               noteRepairFailure(state.cfg.runId);
+              noteMissTerminal(state.cfg.runId);
               return {
                 outcome: "retry",
                 reason: "hunk repair wrote zero files (no-op) — not a successful commit",
@@ -1002,6 +1008,11 @@ async function tryWorkerPrompt(
               };
             }
             noteRepairSuccess(state.cfg.runId);
+            if (grounded.deterministicCandidate) {
+              noteMissRecoveredDet(state.cfg.runId);
+            } else {
+              noteMissRecoveredLlm(state.cfg.runId);
+            }
             try {
               state.todoQueue.clearLastApplyMiss(todo.id);
             } catch {
@@ -1016,6 +1027,7 @@ async function tryWorkerPrompt(
             return { outcome: "completed" };
           }
           noteRepairFailure(state.cfg.runId);
+          noteMissTerminal(state.cfg.runId);
           if (repairResult.miss) {
             try {
               state.todoQueue.setLastApplyMiss(todo.id, {
@@ -1035,6 +1047,7 @@ async function tryWorkerPrompt(
           }
         } else {
           noteRepairFailure(state.cfg.runId);
+          noteMissTerminal(state.cfg.runId);
           if (grounded.miss) {
             try {
               state.todoQueue.setLastApplyMiss(todo.id, {
@@ -1053,6 +1066,9 @@ async function tryWorkerPrompt(
             }
           }
         }
+      } else {
+        // Unrepairable miss kinds — still terminal for this attempt.
+        noteMissTerminal(state.cfg.runId);
       }
       return {
         outcome: "retry",
@@ -1064,8 +1080,26 @@ async function tryWorkerPrompt(
       return { outcome: "retry", reason: parsed.reason, lastResponse: res };
     }
     if (parsed.ok && parsed.skip) {
-      ctx.appendSystem(`[execution] ${agent.id} skipped: ${parsed.skip}`);
-      return { outcome: "skipped", reason: parsed.skip };
+      // Garbage placeholders ("reason", "none") are not real skips — retry once
+      // as no_hunks so settlement does not thrash on fake soft-skips.
+      const classified = classifyWorkerSkip(parsed.skip);
+      if (!classified.ok) {
+        ctx.appendSystem(
+          `[execution] ${agent.id} rejected garbage skip ${JSON.stringify(parsed.skip)} — treating as no hunks`,
+        );
+        return {
+          outcome: "retry",
+          reason: "worker returned no hunks (garbage skip placeholder)",
+          lastResponse: res,
+        };
+      }
+      const skipReason = classified.permanent
+        ? `permanent:${classified.code.replace(/_/g, "-")}: ${classified.reason}`
+        : classified.reason;
+      ctx.appendSystem(
+        `[execution] ${agent.id} skipped (${classified.code}): ${classified.reason.slice(0, 200)}`,
+      );
+      return { outcome: "skipped", reason: skipReason };
     }
     if (parsed.ok && parsed.hunks.length === 0) {
       return { outcome: "retry", reason: "worker returned no hunks", lastResponse: res };

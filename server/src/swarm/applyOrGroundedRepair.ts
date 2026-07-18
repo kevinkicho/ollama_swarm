@@ -72,13 +72,14 @@ export function isDeterministicCandidateEnabled(
 }
 
 /**
- * Rewrite the failed hunk's search/start to uniqueCandidates[0] when the
- * candidate is unique in fileText. Returns new hunk list or null.
+ * Rewrite the failed hunk's search/start to a unique candidate string.
+ * Pass a single candidate (caller iterates uniqueCandidates).
  */
 export function rewriteHunkWithCandidate(
   hunks: Hunk[],
   miss: ApplyMissReport,
   fileText: string,
+  candidateIndex = 0,
 ): Hunk[] | null {
   if (
     miss.kind !== "search_not_found" &&
@@ -86,7 +87,7 @@ export function rewriteHunkWithCandidate(
   ) {
     return null;
   }
-  const cand = miss.uniqueCandidates[0]?.trim();
+  const cand = miss.uniqueCandidates[candidateIndex]?.trim();
   if (!cand || cand.length < 8) return null;
   if (countOccurrences(fileText, cand) !== 1) return null;
 
@@ -159,7 +160,7 @@ export async function applyOrGroundedRepair(
     return content;
   }
 
-  // RR-B opt-in: deterministic uniqueCandidates[0] before LLM.
+  // RR-B: deterministic uniqueCandidates (try each unique one) before LLM.
   const wantDet =
     input.tryDeterministicCandidate === true ||
     (input.tryDeterministicCandidate !== false &&
@@ -173,9 +174,13 @@ export async function applyOrGroundedRepair(
     isRepairableApplyMiss({ miss: lastMiss, reason: lastError })
   ) {
     const content = await refreshMissFile(lastMiss);
-    if (content != null) {
-      const rewritten = rewriteHunkWithCandidate(hunks, lastMiss, content);
-      if (rewritten) {
+    if (content != null && lastMiss) {
+      const nCands = lastMiss.uniqueCandidates?.length ?? 0;
+      // Try each unique candidate (not only [0]) — 120b HTML thrash often
+      // had a usable later candidate while [0] was wrong.
+      for (let ci = 0; ci < nCands; ci++) {
+        const rewritten = rewriteHunkWithCandidate(hunks, lastMiss, content, ci);
+        if (!rewritten) continue;
         const det = applyHunks(texts, rewritten);
         if (det.ok) {
           return {
@@ -188,8 +193,8 @@ export async function applyOrGroundedRepair(
             deterministicCandidate: true,
           };
         }
-        // Candidate failed — keep going to LLM with original miss
       }
+      // Fall through to LLM with original miss
     }
   }
 

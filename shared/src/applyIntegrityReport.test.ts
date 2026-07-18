@@ -5,6 +5,9 @@ import {
   recordApplyAttempt,
   recordApplyMiss,
   recordApplySuccess,
+  recordMissRecoveredDet,
+  recordMissRecoveredLlm,
+  recordMissTerminal,
   recordRepairFailure,
   recordRepairSuccess,
   snapshotApplyIntegrity,
@@ -55,5 +58,23 @@ describe("applyIntegrityReport", () => {
     const snap = snapshotApplyIntegrity(c);
     assert.ok(snap);
     assert.equal(snap!.missByKind.other, 1);
+  });
+
+  it("tracks recovered vs terminal misses separately from missByKind", () => {
+    const c = createApplyIntegrityCounters();
+    recordApplyAttempt(c);
+    recordApplyMiss(c, "search_not_found");
+    recordMissRecoveredDet(c);
+    recordApplySuccess(c);
+    recordApplyAttempt(c);
+    recordApplyMiss(c, "search_not_found");
+    recordMissTerminal(c);
+    const snap = snapshotApplyIntegrity(c);
+    assert.ok(snap);
+    assert.equal(snap!.missRecoveredDet, 1);
+    assert.equal(snap!.missTerminal, 1);
+    assert.equal(snap!.missByKind.search_not_found, 2);
+    // Delivery still 1 applied of 2 attempts — recovered is not terminal fail.
+    assert.equal(snap!.applied, 1);
   });
 });

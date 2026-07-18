@@ -15,6 +15,9 @@ import {
   recordApplyAttempt,
   recordApplyMiss,
   recordApplySuccess,
+  recordMissRecoveredDet,
+  recordMissRecoveredLlm,
+  recordMissTerminal,
   recordRepairFailure,
   recordRepairSuccess,
   snapshotApplyIntegrity,
@@ -96,6 +99,24 @@ export function noteRepairFailure(runId?: string | null): void {
   const key = resolveWriteKey(runId);
   if (!key) return;
   recordRepairFailure(getApplyIntegrityCounters(key));
+}
+
+export function noteMissRecoveredDet(runId?: string | null): void {
+  const key = resolveWriteKey(runId);
+  if (!key) return;
+  recordMissRecoveredDet(getApplyIntegrityCounters(key));
+}
+
+export function noteMissRecoveredLlm(runId?: string | null): void {
+  const key = resolveWriteKey(runId);
+  if (!key) return;
+  recordMissRecoveredLlm(getApplyIntegrityCounters(key));
+}
+
+export function noteMissTerminal(runId?: string | null): void {
+  const key = resolveWriteKey(runId);
+  if (!key) return;
+  recordMissTerminal(getApplyIntegrityCounters(key));
 }
 
 /** Snapshot for summary assembly; does not clear (reset happens at next start). */

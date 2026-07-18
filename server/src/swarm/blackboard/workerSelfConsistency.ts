@@ -30,6 +30,9 @@ import {
 import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
 import {
   noteApplyMiss,
+  noteMissRecoveredDet,
+  noteMissRecoveredLlm,
+  noteMissTerminal,
   noteRepairFailure,
   noteRepairSuccess,
 } from "../applyIntegrityStats.js";
@@ -380,13 +383,18 @@ export async function finalizeWorkerHunks(
         const originalMissKind = grounded.miss?.kind ?? "other";
         noteApplyMiss(originalMissKind, runIdForStats);
         noteRepairSuccess(runIdForStats);
+        if (grounded.deterministicCandidate) {
+          noteMissRecoveredDet(runIdForStats);
+        } else {
+          noteMissRecoveredLlm(runIdForStats);
+        }
         hunksToCommit = grounded.hunks;
         commitTier = "repair";
         ctx.appendSystem(
           `[${agent.id}] [apply-miss] ` +
             (grounded.deterministicCandidate
-              ? "deterministic uniqueCandidates[0] ok"
-              : "hunk repair dry-run ok") +
+              ? "deterministic uniqueCandidates ok (recovered)"
+              : "hunk repair dry-run ok (recovered)") +
             " — proposing repaired hunks",
         );
       }
@@ -394,6 +402,7 @@ export async function finalizeWorkerHunks(
     } else {
       const originalMissKind = grounded.miss?.kind ?? "other";
       noteApplyMiss(originalMissKind, runIdForStats);
+      noteMissTerminal(runIdForStats);
       if (grounded.repairAttempts > 0) {
         noteRepairFailure(runIdForStats);
       }

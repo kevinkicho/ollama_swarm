@@ -4,6 +4,7 @@
  */
 
 import type { QueuedTodo, TodoQueue } from "./blackboard/TodoQueue.js";
+import { isJustifiedPermanentSkip } from "@ollama-swarm/shared/skipClassify";
 
 /**
  * Structured permanent-skip codes (prefix). Free-text reasons may also
@@ -35,20 +36,16 @@ export function isNoopApplyReason(reason: string | undefined): boolean {
   );
 }
 
-/** Skip reasons that mean "work is done / out of scope" — do not requeue. */
+/**
+ * Skip reasons that mean "work is done / out of scope" — do not requeue.
+ * Uses shared skipClassify for free-text + permanent: prefixes (including
+ * worker-emitted permanent:already-done after classifyWorkerSkip).
+ */
 export function isPermanentSkipReason(reason: string | undefined): boolean {
   if (!reason) return false;
-  if (/^permanent:/i.test(reason)) return true;
-  return (
-    /\balready\b/i.test(reason)
-    && /\b(present|done|exist|fixed|applied|in the file|no changes)\b/i.test(reason)
-  )
-    || /\bno changes needed\b/i.test(reason)
-    || /\bout of scope\b/i.test(reason)
-    || /\bwont-?do\b/i.test(reason)
-    || /\bwon't do\b/i.test(reason)
-    || /\bnot applicable\b/i.test(reason)
-    || /\brun stopping\b/i.test(reason);
+  if (/\brun stopping\b/i.test(reason)) return true;
+  if (/^permanent:(?:noop-exhausted|attempts-exhausted)\b/i.test(reason)) return true;
+  return isJustifiedPermanentSkip(reason);
 }
 
 export function maxAttemptsForCycle(executionAgentCount: number): number {
