@@ -84,6 +84,18 @@ export async function chatWithOllamaToolLoop(
       format: opts.format,
       options: opts.options,
     });
+    if (opts.runId && opts.agentId && single.text) {
+      try {
+        const { registerContestToolsFromText } = await import("../tools/toolContest.js");
+        registerContestToolsFromText({
+          runId: opts.runId,
+          agentId: opts.agentId,
+          text: single.text,
+        });
+      } catch {
+        /* best-effort */
+      }
+    }
     return {
       text: single.text,
       elapsedMs: single.elapsedMs,
@@ -121,6 +133,19 @@ export async function chatWithOllamaToolLoop(
     });
 
     cumulativeText = turnResult.text;
+    // Agent free-text contest protocol (profile denials).
+    if (opts.runId && opts.agentId && (turnResult.text || turnResult.contentOnly)) {
+      try {
+        const { registerContestToolsFromText } = await import("../tools/toolContest.js");
+        registerContestToolsFromText({
+          runId: opts.runId,
+          agentId: opts.agentId,
+          text: `${turnResult.text ?? ""}\n${turnResult.contentOnly ?? ""}`,
+        });
+      } catch {
+        /* best-effort */
+      }
+    }
     // Accumulate per-turn usage — previously left at 0 forever so tool-using
     // Ollama/cloud paths always returned empty ChatResult.usage.
     if (turnResult.usage) {

@@ -177,12 +177,13 @@ export function SwarmControlPanel() {
     };
   }, [open]);
 
-  // Poll open tool contests while the panel is open (and on tab switch).
+  // Poll open tool contests: slow when closed (chip badge), faster when panel open.
   useEffect(() => {
-    if (!open || !runId) return;
+    if (!runId) return;
     void refreshContests();
-    if (!live) return;
-    const id = window.setInterval(() => void refreshContests(), 4000);
+    if (!live && !open) return;
+    const ms = open ? 4000 : 12_000;
+    const id = window.setInterval(() => void refreshContests(), ms);
     return () => window.clearInterval(id);
   }, [open, runId, live, refreshContests, tab]);
 
@@ -199,18 +200,24 @@ export function SwarmControlPanel() {
           : "text-rose-300";
 
   const chipStyle =
-    totalEvents === 0
-      ? "bg-ink-800/60 text-ink-500 border-ink-700/50"
-      : live
-        ? rollup.score < 45
-          ? "bg-amber-900/40 text-amber-200 border-amber-800/50"
-          : "bg-cyan-900/35 text-cyan-300 border-cyan-800/50"
-        : "bg-ink-800/80 text-ink-400 border-ink-700/50";
+    contests.length > 0
+      ? "bg-amber-900/45 text-amber-100 border-amber-700/60"
+      : totalEvents === 0
+        ? "bg-ink-800/60 text-ink-500 border-ink-700/50"
+        : live
+          ? rollup.score < 45
+            ? "bg-amber-900/40 text-amber-200 border-amber-800/50"
+            : "bg-cyan-900/35 text-cyan-300 border-cyan-800/50"
+          : "bg-ink-800/80 text-ink-400 border-ink-700/50";
 
   const chipLabel =
-    totalEvents === 0
-      ? "resilience idle"
-      : `res ${rollup.score} · ${rollup.stallGates}s/${rollup.toolCoaches}t/${rollup.brainOsEvents}os`;
+    contests.length > 0
+      ? totalEvents === 0
+        ? `res · ${contests.length} contest${contests.length === 1 ? "" : "s"}`
+        : `res ${rollup.score} · ${contests.length}c`
+      : totalEvents === 0
+        ? "resilience idle"
+        : `res ${rollup.score} · ${rollup.stallGates}s/${rollup.toolCoaches}t/${rollup.brainOsEvents}os`;
 
   const tooltip = [
     "Run resilience — keeps the swarm durable under failure.",
@@ -219,19 +226,38 @@ export function SwarmControlPanel() {
     "• Quality gates: auditor approve/deny commits (bad patches don't ship)",
     "• Brain OS: recruits helpers on apply_miss / parse_fail / tool_block / stuck progress",
     "• Tool contests: peer/operator approve one-shot allows after profile denials",
+    contests.length > 0
+      ? `• ${contests.length} open contest${contests.length === 1 ? "" : "s"} — open panel → Contests tab`
+      : "",
     "Not abstract policy — this is the run's performance & recovery control plane.",
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <>
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => (open ? closePanel() : openPanel())}
+        onClick={() => {
+          if (open) closePanel();
+          else {
+            if (contests.length > 0) setTab("contests");
+            openPanel();
+          }
+        }}
         title={tooltip}
-        className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold uppercase tracking-wide ${chipStyle}`}
+        className={`relative px-1.5 py-0.5 rounded border text-[10px] font-semibold uppercase tracking-wide ${chipStyle}`}
       >
         {chipLabel}
+        {contests.length > 0 ? (
+          <span
+            className="absolute -top-1 -right-1 min-w-[14px] h-[14px] px-0.5 rounded-full bg-amber-500 text-[9px] leading-[14px] text-ink-950 font-bold tabular-nums"
+            aria-label={`${contests.length} open tool contests`}
+          >
+            {contests.length > 9 ? "9+" : contests.length}
+          </span>
+        ) : null}
       </button>
       {open && pos
         ? createPortal(

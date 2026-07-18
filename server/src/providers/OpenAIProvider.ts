@@ -161,6 +161,18 @@ export class OpenAIProvider implements SessionProvider {
       cumulativeText += turnResult.text;
       cumulativePrompt += turnResult.promptTokens;
       cumulativeResponse += turnResult.responseTokens;
+      if (opts.runId && opts.agentId && turnResult.text) {
+        try {
+          const { registerContestToolsFromText } = await import("../tools/toolContest.js");
+          registerContestToolsFromText({
+            runId: opts.runId,
+            agentId: opts.agentId,
+            text: turnResult.text,
+          });
+        } catch {
+          /* best-effort */
+        }
+      }
 
       if (turnResult.finishReason !== "done") {
         return {

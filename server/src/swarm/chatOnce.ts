@@ -218,6 +218,19 @@ async function chatOnceOnce(
     if (result.finishReason === "aborted") {
       throw new Error("aborted");
     }
+    // Free-text contestTool JSON (profile denials) — belt after tool-loop scans.
+    if (opts.runId && result.text) {
+      try {
+        const { registerContestToolsFromText } = await import("../tools/toolContest.js");
+        registerContestToolsFromText({
+          runId: opts.runId,
+          agentId: agent.id,
+          text: result.text,
+        });
+      } catch {
+        /* best-effort */
+      }
+    }
     return { data: { parts: [{ type: "text", text: result.text }] } };
   }
 }

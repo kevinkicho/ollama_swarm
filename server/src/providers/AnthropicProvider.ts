@@ -322,6 +322,18 @@ export class AnthropicProvider implements SessionProvider {
       for (const b of turnResult.blocks) {
         if (b.type === "text") cumulativeText += b.text;
       }
+      if (opts.runId && opts.agentId && cumulativeText) {
+        try {
+          const { registerContestToolsFromText } = await import("../tools/toolContest.js");
+          registerContestToolsFromText({
+            runId: opts.runId,
+            agentId: opts.agentId,
+            text: cumulativeText,
+          });
+        } catch {
+          /* best-effort */
+        }
+      }
 
       if (turnResult.finishReason !== "done") {
         return {

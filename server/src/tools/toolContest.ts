@@ -103,9 +103,10 @@ export function contestToolDenial(input: {
   let c: ToolContest | undefined;
   if (input.contestId) c = m.get(input.contestId);
   if (!c) {
-    // Latest open contest for this agent+tool
+    // Latest open contest for this agent+tool (tool optional → any open for agent)
     for (const x of [...m.values()].reverse()) {
-      if (x.agentId === input.agentId && x.tool === input.tool && x.status === "open") {
+      if (x.agentId !== input.agentId || x.status !== "open") continue;
+      if (!input.tool || x.tool === input.tool) {
         c = x;
         break;
       }
@@ -114,6 +115,109 @@ export function contestToolDenial(input: {
   if (!c || c.status !== "open") return null;
   c.contestReason = input.reason.slice(0, 500);
   return c;
+}
+
+/** One agent-emitted contestTool JSON payload (see formatContestableDenial). */
+export interface ContestToolEmit {
+  contestId?: string;
+  tool?: string;
+  reason: string;
+}
+
+/**
+ * Extract `{"contestTool":true,...}` objects from free-form assistant text
+ * (prose, fences, multi-object). Brace-matched JSON only.
+ */
+export function extractContestToolRequests(text: string): ContestToolEmit[] {
+  if (!text || !text.includes("contestTool")) return [];
+  const out: ContestToolEmit[] = [];
+  const seen = new Set<string>();
+  let i = 0;
+  while (i < text.length) {
+    const keyIdx = text.indexOf("contestTool", i);
+    if (keyIdx < 0) break;
+    // Walk back to the nearest `{` that could start the object.
+    let start = keyIdx;
+    while (start > 0 && text[start] !== "{") start--;
+    if (text[start] !== "{") {
+      i = keyIdx + 1;
+      continue;
+    }
+    let depth = 0;
+    let end = -1;
+    let inStr = false;
+    let esc = false;
+    for (let j = start; j < text.length; j++) {
+      const ch = text[j];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (ch === "\\") esc = true;
+        else if (ch === "\"") inStr = false;
+        continue;
+      }
+      if (ch === "\"") inStr = true;
+      else if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          end = j;
+          break;
+        }
+      }
+    }
+    if (end < 0) {
+      i = keyIdx + 1;
+      continue;
+    }
+    const slice = text.slice(start, end + 1);
+    i = end + 1;
+    if (seen.has(slice)) continue;
+    seen.add(slice);
+    try {
+      const obj = JSON.parse(slice) as Record<string, unknown>;
+      if (obj.contestTool !== true && obj.contestTool !== "true") continue;
+      const reasonRaw = obj.reason ?? obj.why ?? obj.rationale;
+      const reason =
+        typeof reasonRaw === "string" && reasonRaw.trim()
+          ? reasonRaw.trim()
+          : "agent contested profile denial";
+      const contestId =
+        typeof obj.contestId === "string" && obj.contestId.trim()
+          ? obj.contestId.trim()
+          : undefined;
+      const tool =
+        typeof obj.tool === "string" && obj.tool.trim() ? obj.tool.trim() : undefined;
+      out.push({ contestId, tool, reason: reason.slice(0, 500) });
+    } catch {
+      /* not valid JSON — skip */
+    }
+  }
+  return out;
+}
+
+/**
+ * Scan assistant text for contestTool JSON and attach reasons to open contests.
+ * Does not auto-approve — peer/operator resolve still required.
+ */
+export function registerContestToolsFromText(input: {
+  runId?: string;
+  agentId?: string;
+  text?: string;
+}): ToolContest[] {
+  const { runId, agentId, text } = input;
+  if (!runId || !agentId || !text) return [];
+  const applied: ToolContest[] = [];
+  for (const req of extractContestToolRequests(text)) {
+    const c = contestToolDenial({
+      runId,
+      contestId: req.contestId,
+      agentId,
+      tool: req.tool ?? "",
+      reason: req.reason,
+    });
+    if (c) applied.push(c);
+  }
+  return applied;
 }
 
 export function resolveToolContest(input: {
