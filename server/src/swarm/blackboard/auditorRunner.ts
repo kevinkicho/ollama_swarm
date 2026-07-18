@@ -43,7 +43,8 @@ export interface AuditorContext {
   readExpectedFiles: (paths: string[]) => Promise<Record<string, string | null>>;
   getActive: () => { 
     uiUrl?: string; 
-    model?: string; 
+    model?: string;
+    auditorModel?: string;
     localPath?: string; 
     rounds?: number; 
     debateAudit?: boolean; 
@@ -54,6 +55,8 @@ export interface AuditorContext {
     requireAuditorVerification?: boolean;
     auditorOnlyMutations?: boolean;
     autoApprove?: boolean;
+    /** Brain OS dispatch flag / config. */
+    brainOs?: boolean | { enabled?: boolean; helperModel?: string };
     /** Q11: record successful hunks for few-shot store. */
     hunkRag?: boolean;
     runId?: string;

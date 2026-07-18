@@ -297,6 +297,8 @@ export async function reviewPendingCommits(
     // (handles delete, anchors, verify per item if needed, but we batch the final commit).
     // Git-native working_tree proposals: files already on disk — commit only, no re-apply.
     let batchOk = true;
+    const batchFailReasons: string[] = [];
+    const failedTodoIds: string[] = [];
     const filesWritten: string[] = [];
     const applyFn = ctx.applyHunksAndCommit;
     for (let i = 0; i < approved.length; i++) {
@@ -304,7 +306,10 @@ export async function reviewPendingCommits(
       if (!applyFn) {
         // Fallback should not happen; ctx always provides it
         batchOk = false;
-        ctx.wrappers.rejectCommitQ(item.todo.id, 'no apply fn in auditor ctx');
+        const reason = "no apply fn in auditor ctx";
+        batchFailReasons.push(reason);
+        failedTodoIds.push(item.todo.id);
+        ctx.wrappers.rejectCommitQ(item.todo.id, reason);
         continue;
       }
       try {
@@ -402,26 +407,37 @@ export async function reviewPendingCommits(
         }
         if (!res.ok) {
           batchOk = false;
-          ctx.wrappers.rejectCommitQ(item.todo.id, res.reason || "apply failed in batch");
+          const reason = res.reason || "apply failed in batch";
+          batchFailReasons.push(`${item.todo.id.slice(0, 8)}: ${reason}`);
+          failedTodoIds.push(item.todo.id);
+          ctx.wrappers.rejectCommitQ(item.todo.id, reason);
         } else if (!res.filesWritten || res.filesWritten.length === 0) {
           // Fail-closed symmetry with WorkerPipeline + council workers:
           // never approve a todo that wrote nothing (even if apply said ok).
           batchOk = false;
-          ctx.wrappers.rejectCommitQ(
-            item.todo.id,
-            "apply wrote zero files (no-op) — not a successful commit",
-          );
+          const reason = "apply wrote zero files (no-op) — not a successful commit";
+          batchFailReasons.push(`${item.todo.id.slice(0, 8)}: ${reason}`);
+          failedTodoIds.push(item.todo.id);
+          ctx.wrappers.rejectCommitQ(item.todo.id, reason);
         } else {
           filesWritten.push(...res.filesWritten);
         }
       } catch (e: any) {
         batchOk = false;
-        ctx.wrappers.rejectCommitQ(item.todo.id, e?.message || "apply exception");
+        const reason = e?.message || "apply exception";
+        batchFailReasons.push(`${item.todo.id.slice(0, 8)}: ${reason}`);
+        failedTodoIds.push(item.todo.id);
+        ctx.wrappers.rejectCommitQ(item.todo.id, reason);
       }
     }
 
     if (!batchOk) {
       ctx.appendSystem(`[auditor-gate] ✗ Some applies failed in unified batch path`);
+      await dispatchBatchApplyFailBrainOs(ctx, {
+        failReasons: batchFailReasons,
+        todoIds: failedTodoIds,
+        files: [...allFiles],
+      });
       return;
     }
 
@@ -435,6 +451,12 @@ export async function reviewPendingCommits(
         ctx.wrappers.rejectCommitQ(id, advanceCheck.reason);
       }
       ctx.appendSystem(`[auditor-gate] ✗ Batch rejected: ${advanceCheck.reason}`);
+      await dispatchBatchApplyFailBrainOs(ctx, {
+        failReasons: [advanceCheck.reason],
+        todoIds: [...todoIds],
+        files: [...allFiles],
+        phase: "batch_advance_reject",
+      });
       return;
     }
 
@@ -500,6 +522,12 @@ export async function reviewPendingCommits(
           ctx.wrappers.rejectCommitQ(id, `batch commit failed: ${commitRes.reason}`);
         }
         ctx.appendSystem(`[auditor-gate] ✗ Batch commit failed: ${commitRes.reason}`);
+        await dispatchBatchApplyFailBrainOs(ctx, {
+          failReasons: [`batch commit failed: ${commitRes.reason}`],
+          todoIds: [...todoIds],
+          files: [...allFiles],
+          phase: "batch_commit_fail",
+        });
       }
     } else {
       // Best effort revert would be complex here; rely on previous per-apply or git state.
@@ -507,7 +535,102 @@ export async function reviewPendingCommits(
         ctx.wrappers.rejectCommitQ(id, `verify failed: ${verifyReason}`);
       }
       ctx.appendSystem(`[auditor-gate] ✗ Batch verify failed: ${verifyReason}`);
+      await dispatchBatchApplyFailBrainOs(ctx, {
+        failReasons: [`verify failed: ${verifyReason}`],
+        todoIds: [...todoIds],
+        files: [...allFiles],
+        phase: "batch_verify_fail",
+      });
     }
+  }
+}
+
+/** Brain OS: recruit a helper after auditor batch apply/commit/verify failures. */
+async function dispatchBatchApplyFailBrainOs(
+  ctx: AuditorContext,
+  opts: {
+    failReasons: string[];
+    todoIds: string[];
+    files: string[];
+    phase?: string;
+  },
+): Promise<void> {
+  try {
+    const active = ctx.getActive() as
+      | {
+          autoApprove?: boolean;
+          localPath?: string;
+          runId?: string;
+          brainOs?: boolean | object;
+          auditorModel?: string;
+          model?: string;
+        }
+      | undefined;
+    const { createRunBrainOs, dispatchBrainOsConflict, resolveBrainOsConfig } = await import(
+      "../brainOs/adapter.js"
+    );
+    const bcfg = resolveBrainOsConfig({
+      autoApprove: active?.autoApprove,
+      brainOs: active?.brainOs as boolean | undefined,
+    });
+    if (!bcfg.enabled || !active?.localPath || !active?.runId) return;
+
+    ctx.appendSystem(
+      `[auditor-gate] [brain-os] batch apply fail — recruiting helper (${opts.failReasons.length} reason(s))`,
+    );
+    const bos = createRunBrainOs(
+      {
+        autoApprove: active.autoApprove,
+        brainOs: bcfg,
+        auditorModel: active.auditorModel,
+        model: active.model,
+      },
+      {
+        appendSystem: (t) => ctx.appendSystem(t),
+        proposeHunks: (id, hunks, files) => {
+          try {
+            ctx.wrappers.proposeCommitQ(id, hunks, files);
+          } catch {
+            /* todo may not be in-progress */
+          }
+        },
+        reopenTodo: (id, reason) => {
+          try {
+            // reject already reopened to pending; log only
+            ctx.appendSystem(`[brain-os] reopen requested for ${id.slice(0, 8)}: ${reason ?? ""}`);
+          } catch {
+            /* */
+          }
+        },
+      },
+    );
+    const r = await dispatchBrainOsConflict(
+      bos,
+      {
+        runId: active.runId,
+        kind: "apply_miss",
+        clonePath: active.localPath,
+        privileges: active.autoApprove ? "runner" : "repairer",
+        todoId: opts.todoIds[0],
+        lastErrors: opts.failReasons.slice(0, 12),
+        relevantFiles: opts.files.slice(0, 24),
+        autoApprove: active.autoApprove,
+        helperModel: active.auditorModel ?? active.model,
+        phase: opts.phase ?? "batch_apply_fail",
+      },
+      {
+        appendSystem: (t) => ctx.appendSystem(t),
+      },
+    );
+    ctx.appendSystem(
+      `[auditor-gate] [brain-os] batch apply_miss: ${r.status} — ${r.summary.slice(0, 200)}`,
+    );
+  } catch (err) {
+    ctx.appendSystem(
+      `[auditor-gate] [brain-os] batch fail dispatch error: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
   }
 }
 

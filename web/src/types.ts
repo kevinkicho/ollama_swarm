@@ -263,6 +263,21 @@ export interface RunSummary {
     /** Misses that remained terminal after recovery. */
     missTerminal?: number;
   };
+  /** Brain OS agentic dispatch metrics (optional, newer runs). */
+  brainOs?: {
+    dispatches: number;
+    resolved: number;
+    partial: number;
+    blocked: number;
+    needsHuman: number;
+    helpersSpawned: number;
+    childDispatches: number;
+    tokensIn: number;
+    tokensOut: number;
+    wallMs: number;
+    effectsApplied: number;
+    effectsRejected: number;
+  };
   /** Cycle fail taxonomy + empty-execution streaks (optional, RR-D). */
   cycleIntegrity?: {
     cyclesCompleted: number;

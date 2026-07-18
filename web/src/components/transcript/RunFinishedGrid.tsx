@@ -135,6 +135,27 @@ export function RunFinishedGrid({
           ) : null}
         </div>
       ) : null}
+      {s.brainOs && s.brainOs.dispatches > 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+          <Tile
+            label="Brain OS"
+            value={`${s.brainOs.resolved + s.brainOs.partial}/${s.brainOs.dispatches}`}
+            accent="text-violet-300"
+          />
+          {s.brainOs.helpersSpawned > 0 ? (
+            <Tile label="Helpers" value={s.brainOs.helpersSpawned} accent="text-violet-300" />
+          ) : null}
+          {s.brainOs.childDispatches > 0 ? (
+            <Tile label="Child OS" value={s.brainOs.childDispatches} accent="text-fuchsia-300" />
+          ) : null}
+          {s.brainOs.blocked > 0 ? (
+            <Tile label="OS blocked" value={s.brainOs.blocked} accent="text-amber-300" />
+          ) : null}
+          {s.brainOs.effectsApplied > 0 ? (
+            <Tile label="Effects" value={s.brainOs.effectsApplied} accent="text-emerald-300" />
+          ) : null}
+        </div>
+      ) : null}
       <AgentStatsTable
         label={`Per-agent (${s.agents.length})`}
         rows={rowsFromRunFinishedAgents(s.agents)}

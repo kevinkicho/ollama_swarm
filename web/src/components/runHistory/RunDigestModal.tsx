@@ -401,6 +401,28 @@ export function RunDigestModal({ digest, onClose }: { digest: RunSummaryDigest; 
                   </DataValue>
                 </>
               ) : null}
+              {summary?.brainOs && summary.brainOs.dispatches > 0 ? (
+                <>
+                  <DataLabel>Brain OS</DataLabel>
+                  <DataValue>
+                    {summary.brainOs.resolved}✓/{summary.brainOs.partial}~/
+                    {summary.brainOs.blocked}✗ of {summary.brainOs.dispatches} dispatch
+                    {summary.brainOs.dispatches === 1 ? "" : "es"}
+                    {summary.brainOs.helpersSpawned > 0
+                      ? ` · helpers ${summary.brainOs.helpersSpawned}`
+                      : ""}
+                    {summary.brainOs.childDispatches > 0
+                      ? ` · children ${summary.brainOs.childDispatches}`
+                      : ""}
+                    {summary.brainOs.effectsApplied > 0
+                      ? ` · effects ${summary.brainOs.effectsApplied}`
+                      : ""}
+                    {summary.brainOs.wallMs > 0
+                      ? ` · ${(summary.brainOs.wallMs / 1000).toFixed(1)}s`
+                      : ""}
+                  </DataValue>
+                </>
+              ) : null}
               {summary?.cycleIntegrity ? (
                 <>
                   <DataLabel>Cycle integrity</DataLabel>

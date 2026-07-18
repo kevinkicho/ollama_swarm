@@ -164,6 +164,19 @@ export type TranscriptEntrySummary =
         missRecoveredLlm?: number;
         missTerminal?: number;
       };
+      /** Brain OS agentic dispatch metrics (optional). */
+      brainOs?: {
+        dispatches: number;
+        resolved: number;
+        partial: number;
+        blocked: number;
+        needsHuman: number;
+        helpersSpawned: number;
+        childDispatches: number;
+        effectsApplied: number;
+        effectsRejected: number;
+        wallMs: number;
+      };
       agents: Array<{
         agentIndex: number;
         role: string;

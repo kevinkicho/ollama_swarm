@@ -257,6 +257,104 @@ export async function runWorkerParseCascade(
   }
 
   if (!parsed.ok) {
+    // Brain OS: one agentic chance after parse cascade exhaustion (926054b0 thrash).
+    try {
+      const active = ctx.getActive();
+      const { createRunBrainOs, dispatchBrainOsConflict, resolveBrainOsConfig } = await import(
+        "../brainOs/adapter.js"
+      );
+      const bcfg = resolveBrainOsConfig({
+        autoApprove: active?.autoApprove,
+        brainOs: (active as { brainOs?: boolean | object } | undefined)?.brainOs as
+          | boolean
+          | undefined,
+      });
+      if (bcfg.enabled && active?.localPath && active?.runId) {
+        ctx.appendSystem(
+          `[${agent.id}] [brain-os] parse_fail after cascade — recruiting helper`,
+        );
+        const bos = createRunBrainOs(
+          {
+            autoApprove: active.autoApprove,
+            brainOs: bcfg,
+            auditorModel: active.auditorModel,
+            model: active.model,
+          },
+          {
+            appendSystem: (t) => ctx.appendSystem(t),
+            proposeHunks: (id, hunks, files) => {
+              try {
+                ctx.getWrappers().proposeCommitQ(id, hunks, files);
+              } catch {
+                /* */
+              }
+            },
+            skipTodo: (id, reason) => {
+              try {
+                ctx.getWrappers().skipTodoQ(id, reason);
+              } catch {
+                /* */
+              }
+            },
+          },
+        );
+        const r = await dispatchBrainOsConflict(
+          bos,
+          {
+            runId: active.runId,
+            kind: "parse_fail",
+            clonePath: active.localPath,
+            privileges: active.autoApprove ? "runner" : "repairer",
+            todoId: todo.id,
+            lastErrors: [parsed.reason, `todo: ${todo.description.slice(0, 200)}`],
+            relevantFiles: [...todo.expectedFiles],
+            autoApprove: active.autoApprove,
+            helperModel: active.auditorModel ?? active.model,
+            phase: "worker_parse_cascade",
+          },
+          {
+            appendSystem: (t) => ctx.appendSystem(t),
+            proposeHunks: (id, hunks, files) => {
+              try {
+                ctx.getWrappers().proposeCommitQ(id, hunks, files);
+              } catch {
+                /* */
+              }
+            },
+            skipTodo: (id, reason) => {
+              try {
+                ctx.getWrappers().skipTodoQ(id, reason);
+              } catch {
+                /* */
+              }
+            },
+          },
+        );
+        if (r.status === "resolved" || r.status === "partial") {
+          ctx.appendSystem(
+            `[${agent.id}] [brain-os] parse_fail handled: ${r.summary.slice(0, 200)}`,
+          );
+          // Helper may have skip/complete/propose'd; fail only if still claimable.
+          try {
+            ctx.getWrappers().failTodoQ(
+              todo.id,
+              `[v2] parse cascade exhausted after brain-os (${r.status}): ${parsed.reason}`,
+              "repair",
+            );
+          } catch {
+            /* already settled by effects */
+          }
+          ctx.bumpRejectedAttempts(agent.id);
+          return { ok: false, outcome: "stale" };
+        }
+      }
+    } catch (err) {
+      ctx.appendSystem(
+        `[${agent.id}] [brain-os] parse_fail dispatch error: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
     ctx.getWrappers().failTodoQ(
       todo.id,
       `[v2] worker produced invalid JSON after repair: ${parsed.reason}`,

@@ -543,6 +543,22 @@ export function buildRunFinishedSummary(summary: RunSummary): TranscriptEntrySum
           },
         }
       : {}),
+    ...(summary.brainOs && summary.brainOs.dispatches > 0
+      ? {
+          brainOs: {
+            dispatches: summary.brainOs.dispatches,
+            resolved: summary.brainOs.resolved,
+            partial: summary.brainOs.partial,
+            blocked: summary.brainOs.blocked,
+            needsHuman: summary.brainOs.needsHuman,
+            helpersSpawned: summary.brainOs.helpersSpawned,
+            childDispatches: summary.brainOs.childDispatches,
+            effectsApplied: summary.brainOs.effectsApplied,
+            effectsRejected: summary.brainOs.effectsRejected,
+            wallMs: summary.brainOs.wallMs,
+          },
+        }
+      : {}),
     // Phase 1: carry composite phase data (additive)
     ...( (summary as any).currentPhase ? { currentPhase: (summary as any).currentPhase } : {} ),
     ...( (summary as any).phases ? { phases: (summary as any).phases } : {} ),

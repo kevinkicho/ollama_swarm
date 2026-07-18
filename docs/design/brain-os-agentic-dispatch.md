@@ -346,11 +346,11 @@ Brain OS helpers inherit the same tool layer. Separately (can land in parallel P
 - Wire `apply_miss` unrepaired dry-run **and** `worker_decline` UNVERIFIED.
 - Compare against legacy: resolution rate, tokens, wall time (still needed in production runs).
 
-### Phase 3 — Expand events — **landed (partial)**
+### Phase 3 — Expand events — **landed**
 
-- `progress_stuck`, `tool_block` (coach thrash), `apply_miss`, `worker_decline` landed.
-- Child dispatches (depth 1, shared budget) + `summary.brainOs` metrics landed.
-- Batch apply fail interrupt still open.
+- `progress_stuck`, `tool_block` (coach thrash), `apply_miss`, `worker_decline`,
+  `parse_fail` (cascade exhausted), batch apply/verify/commit fail → `apply_miss` landed.
+- Child dispatches (depth 1, shared budget) + `summary.brainOs` metrics (+ UI chips) landed.
 
 ### Phase 4 — Substrate honesty — **landed (partial)**
 
