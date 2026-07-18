@@ -173,11 +173,24 @@ async function chatOnceOnce(
           profileForTools as import("../../../shared/src/toolProfiles.js").ToolProfileId,
         )
       : undefined);
+    let promptBody = opts.promptText;
+    if (opts.runId) {
+      try {
+        const { withOpenContestsPromptContext } = await import("../tools/toolContest.js");
+        promptBody = withOpenContestsPromptContext(opts.promptText, {
+          runId: opts.runId,
+          agentId: agent.id,
+          profile: opts.agentName,
+        });
+      } catch {
+        /* best-effort */
+      }
+    }
     let result;
     try {
     result = await provider.chat({
       model: modelId,
-      messages: [{ role: "user", content: opts.promptText }],
+      messages: [{ role: "user", content: promptBody }],
       signal,
       agentId: agent.id,
       logDiag: opts.logDiag,
@@ -202,7 +215,7 @@ async function chatOnceOnce(
     recordChatUsage({
       promptTokens: result.usage?.promptTokens,
       responseTokens: result.usage?.responseTokens,
-      promptText: opts.promptText,
+      promptText: promptBody,
       responseText: result.text,
       durationMs: Date.now() - t0,
       model: agent.model,

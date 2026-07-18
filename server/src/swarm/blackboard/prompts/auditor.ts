@@ -4,7 +4,7 @@ import { windowFileForWorker } from "../windowFile.js";
 import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { lenientPreprocess, softCap } from "./lenientParse.js";
 import { getModelBudget } from "../../modelContextBudget.js";
-import { JSON_ONLY_FINAL_RULE_LINES } from "./sharedSnippets.js";
+import { JSON_ONLY_FINAL_RULE_LINES, TOOL_CONTEST_HIERARCHY_NOTE } from "./sharedSnippets.js";
 
 // ---------------------------------------------------------------------------
 // Phase 11c: auditor.
@@ -227,6 +227,7 @@ export const AUDITOR_SYSTEM_PROMPT = [
   "",
   "TOOLS: read, grep, glob, list — use when file-state evidence is ambiguous.",
   "User prompt provides mission, UNMET criteria, CURRENT CONTENTS of expectedFiles (full or windowed), commits/skips/findings.",
+  TOOL_CONTEST_HIERARCHY_NOTE,
   "",
   "Per UNMET criterion (file state is primary evidence):",
   "  - satisfied in files → \"met\" (quote a short phrase in rationale).",

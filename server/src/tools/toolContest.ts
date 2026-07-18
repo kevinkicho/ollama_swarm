@@ -420,6 +420,80 @@ export function scanAgentContestMessages(input: {
   };
 }
 
+/**
+ * Prompt block listing open contests for this agent (own + peers).
+ * Empty string when none — safe to prepend/append unconditionally.
+ */
+export function formatOpenContestsPromptBlock(input: {
+  runId?: string;
+  agentId?: string;
+  profile?: string;
+  /** Max contests listed per section (default 6). */
+  max?: number;
+}): string {
+  const runId = input.runId?.trim();
+  const agentId = input.agentId?.trim();
+  if (!runId || !agentId) return "";
+  const open = listOpenContests(runId);
+  if (open.length === 0) return "";
+  const max = input.max ?? 6;
+  const mine = open.filter((c) => c.agentId === agentId).slice(0, max);
+  const others = open.filter((c) => c.agentId !== agentId).slice(0, max);
+  if (mine.length === 0 && others.length === 0) return "";
+
+  const lines: string[] = [
+    "=== OPEN TOOL CONTESTS (profile denials; path sandbox never contestable) ===",
+  ];
+  if (mine.length > 0) {
+    lines.push("Your open denials — you may contest (not self-approve):");
+    for (const c of mine) {
+      const extra = c.contestReason
+        ? ` contested="${c.contestReason.slice(0, 80)}"`
+        : "";
+      lines.push(`- id=${c.id} tool=${c.tool} profile=${c.profile}${extra}`);
+    }
+    lines.push(
+      `Contest JSON: {"contestTool":true,"contestId":"<id>","reason":"why this tool is needed"}`,
+    );
+  }
+  if (others.length > 0) {
+    lines.push("Peer open denials — you may approve|deny a one-shot allow (not your own):");
+    for (const c of others) {
+      const why = (c.contestReason ?? c.denyReason).slice(0, 90);
+      lines.push(
+        `- id=${c.id} agent=${c.agentId} tool=${c.tool} profile=${c.profile} — ${why}`,
+      );
+    }
+    lines.push(
+      `Resolve JSON: {"resolveContest":true,"contestId":"<id>","approve":true,"reason":"why allow once"}`,
+    );
+    lines.push(
+      `Deny JSON: {"resolveContest":true,"contestId":"<id>","approve":false,"reason":"why not"}`,
+    );
+    if (isTrustedContestResolver({ agentId, profile: input.profile })) {
+      lines.push(
+        "You are trusted hierarchy (planner/auditor/master): prefer approve only when the tool is needed for durable progress; deny thrash or unsafe host shell.",
+      );
+    }
+  }
+  lines.push("=== end TOOL CONTESTS ===");
+  return lines.join("\n");
+}
+
+/** Prepend open-contest block to a prompt when any contests are open for the run. */
+export function withOpenContestsPromptContext(
+  promptText: string,
+  input: {
+    runId?: string;
+    agentId?: string;
+    profile?: string;
+  },
+): string {
+  const block = formatOpenContestsPromptBlock(input);
+  if (!block) return promptText;
+  return `${block}\n\n${promptText}`;
+}
+
 export type ToolContestPhase = "opened" | "contested" | "approved" | "denied";
 
 /** One-line operator text for transcript / logs. */

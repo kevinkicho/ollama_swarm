@@ -15,6 +15,8 @@ import {
   publishToolContestEvent,
   formatToolContestLine,
   isTrustedContestResolver,
+  formatOpenContestsPromptBlock,
+  withOpenContestsPromptContext,
 } from "./toolContest.js";
 import { setToolContestRunSink, clearToolContestRunSink } from "./toolContestSink.js";
 
@@ -201,5 +203,47 @@ describe("toolContest", () => {
     );
     assert.equal(found.length, 1);
     assert.equal(found[0]!.approve, false);
+  });
+
+  it("formatOpenContestsPromptBlock lists peer and own contests for resolvers", () => {
+    openToolContest({
+      runId: "r7",
+      agentId: "worker-1",
+      tool: "write",
+      profile: "swarm-read",
+      denyReason: "denied write",
+    });
+    openToolContest({
+      runId: "r7",
+      agentId: "planner",
+      tool: "bash",
+      profile: "swarm-planner",
+      denyReason: "denied bash",
+    });
+    const forPlanner = formatOpenContestsPromptBlock({
+      runId: "r7",
+      agentId: "planner",
+      profile: "swarm-planner",
+    });
+    assert.match(forPlanner, /OPEN TOOL CONTESTS/);
+    assert.match(forPlanner, /worker-1/);
+    assert.match(forPlanner, /resolveContest/);
+    assert.match(forPlanner, /trusted hierarchy/i);
+    // Own denial: contest protocol, not self-approve
+    assert.match(forPlanner, /Your open denials/);
+    assert.match(forPlanner, /contestTool/);
+
+    const empty = formatOpenContestsPromptBlock({
+      runId: "none",
+      agentId: "x",
+    });
+    assert.equal(empty, "");
+
+    const wrapped = withOpenContestsPromptContext("PLAN TODOS", {
+      runId: "r7",
+      agentId: "worker-2",
+    });
+    assert.match(wrapped, /OPEN TOOL CONTESTS/);
+    assert.match(wrapped, /PLAN TODOS/);
   });
 });

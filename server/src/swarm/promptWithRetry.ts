@@ -340,9 +340,24 @@ export async function promptWithRetry(
       {
         const t0Provider = Date.now();
         const addendum = opts.promptAddendum?.trim() ?? "";
+        let basePromptText = promptText;
+        // Surface open profile-denial contests so peers/masters can resolveContest
+        // and subjects can contestTool without hunting transcript noise.
+        if (opts.runId) {
+          try {
+            const { withOpenContestsPromptContext } = await import("../tools/toolContest.js");
+            basePromptText = withOpenContestsPromptContext(promptText, {
+              runId: opts.runId,
+              agentId: agent.id,
+              profile: agentName,
+            });
+          } catch {
+            /* best-effort */
+          }
+        }
         const effectivePromptText = addendum.length > 0
-          ? `[Per-agent specialization for this swarm member]\n${addendum}\n[End specialization. Original prompt follows.]\n\n${promptText}`
-          : promptText;
+          ? `[Per-agent specialization for this swarm member]\n${addendum}\n[End specialization. Original prompt follows.]\n\n${basePromptText}`
+          : basePromptText;
         // T193: prefer modelOverride when set (used by round-robin
         // disposition-tuned routing). Falls back to agent.model.
         const effectiveModel = opts.modelOverride ?? agent.model;

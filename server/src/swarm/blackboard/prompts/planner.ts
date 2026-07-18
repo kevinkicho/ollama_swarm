@@ -5,7 +5,7 @@ import { registerParserSchema } from "./brainIntegration.js";
 import { getModelBudget } from "../../modelContextBudget.js";
 import { buildPlannerGroundingBlocks } from "./plannerGrounding.js";
 import { buildBlackboardDirectiveBlock } from "../../directivePromptHelpers.js";
-import { JSON_ONLY_FINAL_RULE_LINES } from "./sharedSnippets.js";
+import { JSON_ONLY_FINAL_RULE_LINES, TOOL_CONTEST_HIERARCHY_NOTE } from "./sharedSnippets.js";
 
 // ---------------------------------------------------------------------------
 // Schema: what we expect back from the planner. Kept tight on purpose — small
@@ -480,6 +480,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "",
   "TOOLS: read, grep, glob, list. Prefer REPO FILE LIST / README / catalog / excerpts in the user message; tool-call only to verify symbols or paths.",
   "Before TODOs that edit an existing symbol: grep it in expectedFiles. Missing → don't invent it. Found → put names in expectedSymbols (runner drops missing symbols).",
+  TOOL_CONTEST_HIERARCHY_NOTE,
   "",
   "RULES:",
   "1. Final response is a JSON array of todos (not an object):",

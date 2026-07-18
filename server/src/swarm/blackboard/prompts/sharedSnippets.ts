@@ -48,6 +48,17 @@ export function buildRepoToolsNote(extraLines: readonly string[] = []): string {
 }
 
 /**
+ * Static note for planner/auditor hierarchy: peer tool contests.
+ * Live open-contest lists are injected per-prompt via toolContest.withOpenContestsPromptContext.
+ */
+export const TOOL_CONTEST_HIERARCHY_NOTE = [
+  "Tool contests: workers may be denied by profile (not path sandbox).",
+  "If OPEN TOOL CONTESTS lists peer denials, you may one-shot approve|deny with:",
+  '{"resolveContest":true,"contestId":"<id>","approve":true,"reason":"..."}',
+  "Never self-approve your own denial. Prefer approve only for durable progress; deny bash thrash.",
+].join("\n");
+
+/**
  * Mention-contract policy for freeform (non-JSON-final) agents only.
  * Do NOT inject into planner/worker/auditor/critic/verifier system prompts.
  */
