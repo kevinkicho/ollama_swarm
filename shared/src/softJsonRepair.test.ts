@@ -40,6 +40,15 @@ describe("applySoftJsonRepairs", () => {
     const got = applySoftJsonRepairs('{“a”: “b”}');
     assert.deepEqual(JSON.parse(got), { a: "b" });
   });
+
+  it("escapes raw newlines inside JSON string values (2010479c UI walls)", () => {
+    const raw =
+      '{"hunks":[{"op":"replace","file":"a.ts","search":"line1\nline2","replace":"x"}]}';
+    const v = tryParseWithSoftRepairs(raw);
+    assert.ok(v);
+    const h = (v as { hunks: Array<{ search: string }> }).hunks[0]!;
+    assert.equal(h.search, "line1\nline2");
+  });
 });
 
 describe("tryParseWithSoftRepairs / parseAgentJson integration", () => {

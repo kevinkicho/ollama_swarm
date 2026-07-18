@@ -25,6 +25,59 @@ export function stripJsonFences(s: string): string {
 }
 
 /**
+ * Escape raw control characters inside JSON string literals.
+ * Models routinely put real newlines/tabs in search/replace values
+ * (2010479c / 120b2044 transcript UI walls: "Bad control character").
+ * Safe on valid JSON (already-escaped sequences stay escaped).
+ */
+export function escapeRawControlCharsInJsonStrings(s: string): string {
+  let out = "";
+  let inString = false;
+  let escape = false;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!;
+    if (escape) {
+      // Keep the escaped pair as-is (valid or not — later repairs may help).
+      out += ch;
+      escape = false;
+      continue;
+    }
+    if (ch === "\\") {
+      out += ch;
+      escape = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      out += ch;
+      continue;
+    }
+    if (inString) {
+      if (ch === "\n") {
+        out += "\\n";
+        continue;
+      }
+      if (ch === "\r") {
+        out += "\\r";
+        continue;
+      }
+      if (ch === "\t") {
+        out += "\\t";
+        continue;
+      }
+      // Other C0 controls (except common whitespace already handled)
+      const code = ch.charCodeAt(0);
+      if (code < 0x20) {
+        out += `\\u${code.toString(16).padStart(4, "0")}`;
+        continue;
+      }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/**
  * Apply best-effort textual repairs that don't require a real parser.
  * Safe to call on already-valid JSON (identity for clean input).
  */
@@ -34,6 +87,13 @@ export function applySoftJsonRepairs(s: string): string {
   out = out.replace(/[‘’]/g, "'").replace(/[“”]/g, '"');
   // Unicode fancy dashes / non-breaking spaces that break string parses
   out = out.replace(/\u00a0/g, " ").replace(/[\u2010-\u2015]/g, "-");
+
+  // Literal newlines/tabs inside "…" (before bare-key rewrites touch structure)
+  out = escapeRawControlCharsInJsonStrings(out);
+
+  // Double-wrapped root: {{"hunks":…}} → {"hunks":…}
+  out = out.replace(/^\s*\{\s*(\{\s*"hunks")/i, "$1");
+  out = out.replace(/(\]\s*\})\s*\}\s*$/i, "$1");
 
   // Missing opening brace before a key that already has a trailing quote:
   // Live 83dc5910: {"hunks":[op":"replace",... → {"hunks":[{"op":"replace",...
@@ -159,10 +219,19 @@ export function tryParseWithSoftRepairs(s: string): unknown | null {
     } catch {
       /* continue */
     }
+    // Always try soft repairs (control-char escape may be identity-looking
+    // only after fence strip on multi-line hunk blobs).
     const repaired = applySoftJsonRepairs(c);
-    if (repaired !== c) {
+    try {
+      return JSON.parse(repaired);
+    } catch {
+      /* continue */
+    }
+    // Second pass: fence-strip after repairs (unclosed ```json mid-blob)
+    const again = applySoftJsonRepairs(stripJsonFences(repaired));
+    if (again !== repaired) {
       try {
-        return JSON.parse(repaired);
+        return JSON.parse(again);
       } catch {
         /* continue */
       }

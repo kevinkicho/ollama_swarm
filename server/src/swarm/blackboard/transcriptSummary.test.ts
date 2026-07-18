@@ -113,6 +113,56 @@ describe("summarizeAgentResponse — extraction edge cases", () => {
     assert.equal(summarizeAgentResponse("{not valid json"), undefined);
     assert.equal(summarizeAgentResponse("```json\nbroken\n```"), undefined);
   });
+
+  it("tags replace_between-only payloads as worker_hunks", () => {
+    const raw = JSON.stringify({
+      hunks: [
+        {
+          op: "replace_between",
+          file: "a.ts",
+          start: "// start",
+          endExclusive: null,
+          replace: "// done",
+        },
+      ],
+    });
+    const s = summarizeAgentResponse(raw);
+    assert.equal(s?.kind, "worker_hunks");
+    if (s?.kind !== "worker_hunks") return;
+    assert.equal(s.hunkCount, 1);
+    assert.equal(s.ops.replace, 1);
+  });
+
+  it("tags build result envelopes", () => {
+    const raw = JSON.stringify({
+      ok: false,
+      exitCode: 1,
+      summary: "Command failed: test",
+    });
+    const s = summarizeAgentResponse(raw);
+    assert.equal(s?.kind, "build_result");
+    if (s?.kind !== "build_result") return;
+    assert.equal(s.ok, false);
+    assert.equal(s.exitCode, 1);
+  });
+
+  it("tags contract missionStatement envelopes", () => {
+    const raw = JSON.stringify({
+      missionStatement: "Harden the hub",
+      criteria: [{ description: "c1", expectedFiles: ["a.ts"] }],
+    });
+    const s = summarizeAgentResponse(raw);
+    assert.equal(s?.kind, "contract");
+    if (s?.kind !== "contract") return;
+    assert.equal(s.criteriaCount, 1);
+  });
+
+  it("soft-repairs raw newlines in hunk strings for server tags", () => {
+    const raw =
+      '{"hunks":[{"op":"replace","file":"a.ts","search":"a\nb","replace":"c"}]}';
+    const s = summarizeAgentResponse(raw);
+    assert.equal(s?.kind, "worker_hunks");
+  });
 });
 
 describe("summarizeAgentResponse — robustness", () => {

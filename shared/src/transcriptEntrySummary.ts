@@ -313,4 +313,22 @@ export type TranscriptEntrySummary =
       stage: "discussion" | "standup" | "synthesis" | "execution" | "audit";
       detail?: string;
     }
+  /** Worker build / bash command result envelope. */
+  | {
+      kind: "build_result";
+      ok: boolean;
+      exitCode?: number;
+      summary: string;
+    }
+  /** First-pass contract JSON when server tags without dedicated contract flow. */
+  | {
+      kind: "contract";
+      criteriaCount: number;
+      missionPreview: string;
+    }
+  /** Planner todo array emit (tagged for transcript UI). */
+  | {
+      kind: "planner_todos";
+      todoCount: number;
+    }
 

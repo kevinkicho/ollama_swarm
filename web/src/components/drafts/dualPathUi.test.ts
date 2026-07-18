@@ -67,4 +67,12 @@ describe("dual-path UI — worker hunk bubble parser", () => {
     assert.ok(hunks);
     assert.equal(hunks![0]!.op, "write");
   });
+
+  it("soft-repairs raw newlines inside hunk search strings", () => {
+    const raw =
+      '{"hunks":[{"op":"replace","file":"a.ts","search":"line1\nline2","replace":"x"}]}';
+    const hunks = tryParseWorkerHunks(raw);
+    assert.ok(hunks);
+    assert.equal(hunks![0]!.search, "line1\nline2");
+  });
 });

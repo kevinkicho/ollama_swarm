@@ -274,36 +274,57 @@ export async function writeRunSummary(ctx: SummaryContext): Promise<void> {
       });
   }
 
-  // Guard the project-level copy + append too (in case writeRunSummary called from multiple stop paths).
-  const alreadyHasRunFinished = ctx.transcript.some((e) => e.summary?.kind === "run_finished");
-  if (!alreadyHasRunFinished) {
-    // Canonical project-level copy (suggestion): always write to logs/<full-runId>/summary.json
-    // independent of the clone. This ensures artifacts survive even if clone logs are missing/pruned.
-    // Uses full runId for easy lookup (matching debug.jsonl layout).
-    try {
-      const projectLogsDir = path.join(process.cwd(), "logs", summary.runId || "unknown");
-      await import("node:fs/promises").then((fs) => fs.mkdir(projectLogsDir, { recursive: true }));
-      const projPath = path.join(projectLogsDir, "summary.json");
-      await writeFileAtomic(projPath, json);
-      ctx.appendSystem(`Canonical project-level summary also written to ${projPath}`);
-
-      // Compact index record (suggestion)
-      try {
-        const indexEntry = {
-          runId: summary.runId,
-          startedAt: summary.startedAt,
-          endedAt: summary.endedAt ?? Date.now(),
-          stopReason: summary.stopReason,
-          preset: summary.preset,
-          commits: summary.commits ?? 0,
-          filesChanged: summary.filesChanged ?? 0,
-          wallClockMs: summary.wallClockMs,
-        };
-        const indexPath = path.join(process.cwd(), "logs", "runs-index.jsonl");
-        await import("node:fs/promises").then((fs) => fs.appendFile(indexPath, JSON.stringify(indexEntry) + "\n", "utf8"));
-      } catch {}
-    } catch (e) {
-      // best effort only
+  // Always write project-level summary.json (independent of clone + run_finished banner).
+  // Prior bug: this block was gated on !alreadyHasRunFinished, but the banner above
+  // already appended run_finished — so project-level write was skipped (926054b0).
+  try {
+    const fs = await import("node:fs/promises");
+    const runId = summary.runId || cfg.runId || "unknown";
+    const roots = new Set<string>([
+      path.join(process.cwd(), "logs", runId),
+      // When server is started from monorepo root vs server/, mirror both layouts.
+      path.join(process.cwd(), "server", "logs", runId),
+    ]);
+    // Also mirror under server package when cwd is server/
+    if (path.basename(process.cwd()) === "server") {
+      roots.add(path.join(process.cwd(), "logs", runId));
     }
+    for (const projectLogsDir of roots) {
+      try {
+        await fs.mkdir(projectLogsDir, { recursive: true });
+        const projPath = path.join(projectLogsDir, "summary.json");
+        await writeFileAtomic(projPath, json);
+      } catch {
+        /* best effort per root */
+      }
+    }
+    const alreadyLogged = ctx.transcript.some(
+      (e) => e.role === "system" && typeof e.text === "string" && e.text.includes("Canonical project-level summary"),
+    );
+    if (!alreadyLogged) {
+      ctx.appendSystem(
+        `Canonical project-level summary written under logs/${runId}/summary.json`,
+      );
+    }
+
+    // Compact index record
+    try {
+      const indexEntry = {
+        runId: summary.runId,
+        startedAt: summary.startedAt,
+        endedAt: summary.endedAt ?? Date.now(),
+        stopReason: summary.stopReason,
+        preset: summary.preset,
+        commits: summary.commits ?? 0,
+        filesChanged: summary.filesChanged ?? 0,
+        wallClockMs: summary.wallClockMs,
+      };
+      const indexPath = path.join(process.cwd(), "logs", "runs-index.jsonl");
+      await fs.appendFile(indexPath, JSON.stringify(indexEntry) + "\n", "utf8");
+    } catch {
+      /* best effort */
+    }
+  } catch {
+    // best effort only
   }
 }

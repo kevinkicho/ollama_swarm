@@ -14,6 +14,7 @@
 // summary implementation visible to both sides.
 
 import { extractFirstBalancedJson } from "./extractJson.js";
+import { applySoftJsonRepairs, stripJsonFences, tryParseWithSoftRepairs } from "./softJsonRepair.js";
 
 // Phase 3 (UI coherent-fix package, 2026-04-27): structured parse
 // result returned alongside the summary string so the web side can
@@ -57,13 +58,20 @@ export interface AgentJsonSummary {
 }
 
 export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
-  const extracted = extractJson(raw);
-  if (!extracted) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(extracted);
-  } catch {
-    return null;
+  // Prefer soft-repair path first (raw newlines in hunk strings, bare keys).
+  let parsed: unknown = tryParseWithSoftRepairs(raw);
+  if (parsed === null || parsed === undefined) {
+    const extracted = extractJson(raw);
+    if (!extracted) return null;
+    try {
+      parsed = JSON.parse(extracted);
+    } catch {
+      try {
+        parsed = JSON.parse(applySoftJsonRepairs(stripJsonFences(extracted)));
+      } catch {
+        return null;
+      }
+    }
   }
 
   const pretty = safePretty(parsed);
@@ -82,16 +90,22 @@ export function summarizeAgentJson(raw: string): AgentJsonSummary | null {
     const parts = p.hunks.map((h) => {
       if (!isObject(h) || typeof h.file !== "string") return "[malformed hunk]";
       const file = h.file;
-      if (h.op === "create" && typeof h.content === "string") {
-        return `create ${file} (${h.content.length.toLocaleString()} chars)`;
+      if ((h.op === "create" || h.op === "write") && typeof h.content === "string") {
+        return `${h.op} ${file} (${h.content.length.toLocaleString()} chars)`;
       }
       if (h.op === "replace" && typeof h.search === "string" && typeof h.replace === "string") {
         const delta = h.replace.length - h.search.length;
         const sign = delta > 0 ? "+" : "";
         return `replace ${file} (${sign}${delta.toLocaleString()} chars)`;
       }
+      if (h.op === "replace_between" && typeof h.start === "string" && typeof h.replace === "string") {
+        return `replace_between ${file} (${h.replace.length.toLocaleString()} chars)`;
+      }
       if (h.op === "append" && typeof h.content === "string") {
         return `append ${file} (+${h.content.length.toLocaleString()} chars)`;
+      }
+      if (h.op === "delete") {
+        return `delete ${file}`;
       }
       return `[unknown hunk on ${file}]`;
     });

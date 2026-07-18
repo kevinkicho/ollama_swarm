@@ -28,4 +28,23 @@ describe("tryParseWorkerHunks", () => {
     assert.ok(h);
     assert.equal(h![0]!.op, "replace");
   });
+
+  it("salvages broken JSON with unescaped quotes in search body", () => {
+    // Invalid JSON: unescaped " inside search value
+    const raw =
+      '{"hunks":[{"op":"replace","file":"a.ts","search":"return { "ok": false }","replace":"x"}]}';
+    const h = tryParseWorkerHunks(raw);
+    assert.ok(h);
+    assert.equal(h![0]!.file, "a.ts");
+    assert.equal(h![0]!.op, "replace");
+  });
+
+  it("salvages raw newlines + extract op/file for display", () => {
+    const raw =
+      '{"hunks":[{"op":"create","file":"b.ts","content":"line1\nline2 with "quote"\n"}]}';
+    const h = tryParseWorkerHunks(raw);
+    assert.ok(h);
+    assert.equal(h![0]!.op, "create");
+    assert.equal(h![0]!.file, "b.ts");
+  });
 });

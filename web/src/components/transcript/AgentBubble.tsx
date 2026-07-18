@@ -28,6 +28,7 @@ import { CouncilDraftBubble } from "./CouncilDraftBubble";
 import { CouncilSynthesisBubble } from "./CouncilSynthesisBubble";
 import { PlannerBriefBubble } from "./PlannerBriefBubble";
 import { DecoratedSynthesisBlock, StigmergyAnnotationBubble } from "./SynthesisBubbles";
+import { BuildResultBubble, tryParseBuildResult } from "./BuildResultBubble";
 
 export function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   const thinking = useMemo(() => resolveEntryThinking(entry), [entry]);
@@ -298,6 +299,88 @@ export function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string 
         />
       );
     }
+    if (entry.summary.kind === "build_result") {
+      return (
+        <BuildResultBubble
+          className={className}
+          style={style}
+          header={header}
+          result={{
+            ok: entry.summary.ok,
+            exitCode: entry.summary.exitCode,
+            summary: entry.summary.summary,
+          }}
+          thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
+        />
+      );
+    }
+    if (entry.summary.kind === "contract") {
+      // Prefer client ContractBubble when text still parses as full envelope.
+      const client = summarizeAgentJson(entry.text);
+      if (client?.parsed.kind === "contract") {
+        return (
+          <ContractBubble
+            envelope={client.parsed}
+            header={header}
+            className={className}
+            style={style}
+            thinking={thinking}
+            prompt={prompt}
+          />
+        );
+      }
+      return (
+        <CollapsibleBlock
+          className={className}
+          style={style}
+          header={
+            <div>
+              {header}
+              <div className="text-[10px] uppercase tracking-wider font-semibold text-sky-300 mb-1">
+                ═ Contract · {entry.summary.criteriaCount} criteria ═
+              </div>
+            </div>
+          }
+          text={entry.text}
+          thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
+        />
+      );
+    }
+    if (entry.summary.kind === "planner_todos") {
+      const client = summarizeAgentJson(entry.text);
+      if (client?.parsed.kind === "todos") {
+        return (
+          <TodosBubble
+            envelope={client.parsed}
+            header={header}
+            className={className}
+            style={style}
+          />
+        );
+      }
+      return (
+        <CollapsibleBlock
+          className={className}
+          style={style}
+          header={
+            <div>
+              {header}
+              <div className="text-[10px] uppercase tracking-wider font-semibold text-violet-300 mb-1">
+                ═ {entry.summary.todoCount} todos ═
+              </div>
+            </div>
+          }
+          text={entry.text}
+          thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
+        />
+      );
+    }
     // Other server-summary kinds (worker_skip) are JSON envelopes — AgentJsonBubble.
     // ow_assignments gets a nicer list render.
     const oneLine = formatServerSummary(entry.summary);
@@ -333,7 +416,15 @@ export function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string 
         </div>
       );
     }
-    if (!["worker_skip", "ow_assignments"].includes(entry.summary.kind)) {
+    if (
+      ![
+        "worker_skip",
+        "ow_assignments",
+        "build_result",
+        "contract",
+        "planner_todos",
+      ].includes(entry.summary.kind)
+    ) {
       console.warn(`[MessageBubble] Unhandled agent summary kind: "${entry.summary.kind}" — add an AgentBubble branch`);
     }
     return (
@@ -394,6 +485,7 @@ function AgentClientFallback({
   const looseHunks = useMemo(() => tryParseWorkerHunks(entry.text), [entry.text]);
   const clientSummary = useMemo(() => summarizeAgentJson(entry.text), [entry.text]);
   const prettyJson = useMemo(() => tryPrettyJson(entry.text), [entry.text]);
+  const buildResult = useMemo(() => tryParseBuildResult(entry.text), [entry.text]);
 
   if (looseHunks) {
     return (
@@ -403,6 +495,19 @@ function AgentClientFallback({
         header={header}
         summary={`${looseHunks.length} hunk${looseHunks.length === 1 ? "" : "s"}`}
         rawJson={entry.text}
+        thinking={thinking}
+        prompt={prompt}
+        toolTrace={toolTrace}
+      />
+    );
+  }
+  if (buildResult) {
+    return (
+      <BuildResultBubble
+        className={className}
+        style={style}
+        header={header}
+        result={buildResult}
         thinking={thinking}
         prompt={prompt}
         toolTrace={toolTrace}

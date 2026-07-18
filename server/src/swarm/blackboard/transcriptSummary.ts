@@ -29,28 +29,33 @@ export function summarizeAgentResponse(raw: string): TranscriptEntrySummary | un
   }
 
   // Worker hunks: { hunks: [...] } — count by op, identify primary file.
+  // Includes replace_between / write / delete (2010479c) so server tags
+  // still attach when only those ops are present.
   if (Array.isArray(obj.hunks)) {
     const ops = { replace: 0, create: 0, append: 0 };
     const filesSeen = new Set<string>();
     let firstFile: string | undefined;
     let totalChars = 0;
+    let otherOps = 0;
     for (const h of obj.hunks) {
       if (typeof h !== "object" || h === null) continue;
       const hunk = h as Record<string, unknown>;
       const op = typeof hunk.op === "string" ? hunk.op : undefined;
-      if (op === "replace") {
+      if (op === "replace" || op === "replace_between") {
         ops.replace++;
         if (typeof hunk.search === "string") totalChars += hunk.search.length;
+        if (typeof hunk.start === "string") totalChars += hunk.start.length;
         if (typeof hunk.replace === "string") totalChars += hunk.replace.length;
-      } else if (op === "create") {
+      } else if (op === "create" || op === "write") {
         ops.create++;
         if (typeof hunk.content === "string") totalChars += hunk.content.length;
       } else if (op === "append") {
         ops.append++;
         if (typeof hunk.content === "string") totalChars += hunk.content.length;
+      } else if (op === "delete") {
+        otherOps++;
       } else {
-        // Unknown op — count it as 0 so the UI can still show
-        // "N hunks (some unknown)" without misleading op breakdown.
+        // Unknown op — exclude from count (UI still gets tag from known siblings).
         continue;
       }
       const file = typeof hunk.file === "string" ? hunk.file : undefined;
@@ -59,7 +64,7 @@ export function summarizeAgentResponse(raw: string): TranscriptEntrySummary | un
         if (firstFile === undefined) firstFile = file;
       }
     }
-    const hunkCount = ops.replace + ops.create + ops.append;
+    const hunkCount = ops.replace + ops.create + ops.append + otherOps;
     if (hunkCount === 0) {
       // Empty `hunks: []` with no skip reason — treat as a no-op
       // skip rather than a meaningful response.
@@ -73,6 +78,46 @@ export function summarizeAgentResponse(raw: string): TranscriptEntrySummary | un
       multipleFiles: filesSeen.size > 1,
       totalChars,
     };
+  }
+
+  // Build / tool command result: { ok, exitCode, summary }
+  if (
+    typeof obj.ok === "boolean"
+    && (typeof obj.exitCode === "number" || typeof obj.summary === "string")
+  ) {
+    return {
+      kind: "build_result",
+      ok: obj.ok,
+      exitCode: typeof obj.exitCode === "number" ? obj.exitCode : undefined,
+      summary:
+        typeof obj.summary === "string"
+          ? obj.summary.slice(0, 400)
+          : obj.ok
+            ? "ok"
+            : "failed",
+    };
+  }
+
+  // First-pass contract envelope (council emit without dedicated tagger)
+  if (typeof obj.missionStatement === "string" && Array.isArray(obj.criteria)) {
+    return {
+      kind: "contract",
+      criteriaCount: obj.criteria.length,
+      missionPreview: obj.missionStatement.slice(0, 120),
+    };
+  }
+
+  // Planner todo array (top-level) — rare on council but helpful for BB
+  if (Array.isArray(parsed) && parsed.length > 0) {
+    const first = parsed[0];
+    if (
+      first
+      && typeof first === "object"
+      && typeof (first as { description?: unknown }).description === "string"
+      && Array.isArray((first as { expectedFiles?: unknown }).expectedFiles)
+    ) {
+      return { kind: "planner_todos", todoCount: parsed.length };
+    }
   }
 
   return undefined;

@@ -157,5 +157,15 @@ export function formatServerSummary(s: TranscriptEntrySummary): string {
     const sec = s.sections === 1 ? "1 section" : `${s.sections} sections`;
     return `${label} · ${s.chars.toLocaleString()} chars · ${sec}`;
   }
+  if (s.kind === "build_result") {
+    const code = s.exitCode !== undefined ? ` · exit ${s.exitCode}` : "";
+    return `${s.ok ? "Build ok" : "Build failed"}${code}: ${s.summary}`;
+  }
+  if (s.kind === "contract") {
+    return `Contract · ${s.criteriaCount} criteria · ${s.missionPreview}`;
+  }
+  if (s.kind === "planner_todos") {
+    return `Posted ${s.todoCount} todo${s.todoCount === 1 ? "" : "s"}`;
+  }
   return `Unknown summary kind`;
 }
