@@ -114,8 +114,9 @@ export function isJunkKnownParentPath(p: string): boolean {
   if (/\/logs\/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(n)) return true;
   // Short run-id dirs under any .../logs/<8hex>
   if (/\/logs\/[0-9a-f]{8}$/i.test(n)) return true;
+  // OS temp trees (and the bare temp root) are never real workspace parents.
   if (n.includes("/temp/") || n.includes("/tmp/")) return true;
-  if (n.includes("\\temp\\") || n.includes("\\tmp\\")) return true;
+  if (n.endsWith("/temp") || n.endsWith("/tmp")) return true;
   if (n.includes("crash-sum-")) return true;
   return false;
 }

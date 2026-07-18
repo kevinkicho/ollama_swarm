@@ -6,7 +6,6 @@
 import { describe, it, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mergeKnownParents, scanForRunParents } from "./Orchestrator.js";
@@ -45,25 +44,43 @@ describe("mergeKnownParents", () => {
   });
 });
 
-describe("scanForRunParents — discovers logs/{runId}/ directories with summary files", () => {
+describe("scanForRunParents — discovers project roots that hold run summaries", () => {
+  // Use a repo-local fixture dir (not os.tmpdir): knownParents filters /temp|/tmp.
   function setupFixture(): { cwd: string; cleanup: () => void } {
-    const cwd = mkdtempSync(join(tmpdir(), "scan-runs-"));
-    return { cwd, cleanup: () => rmSync(cwd, { recursive: true, force: true }) };
+    const root = join(__dirname, "..", "..", ".test-scan-parents");
+    mkdirSync(root, { recursive: true });
+    const cwd = mkdtempSync(join(root, "scan-runs-"));
+    return {
+      cwd,
+      cleanup: () => {
+        rmSync(cwd, { recursive: true, force: true });
+        try {
+          rmSync(root, { recursive: true, force: true });
+        } catch {
+          /* keep if other parallel tests still hold children */
+        }
+      },
+    };
   }
 
-  it("finds a logs/{runId}/summary.json directory", () => {
+  it("returns the project root when logs/{runId}/summary.json exists", () => {
     const { cwd, cleanup } = setupFixture();
     try {
       mkdirSync(join(cwd, "logs", "abc123"), { recursive: true });
       writeFileSync(join(cwd, "logs", "abc123", "summary.json"), "{}");
       const out = scanForRunParents(cwd);
-      assert.deepEqual(out, [join(cwd, "logs", "abc123")]);
+      // Project root + parent-of-project — never the per-run log dir.
+      assert.ok(out.includes(cwd), `expected project root ${cwd} in ${JSON.stringify(out)}`);
+      assert.ok(
+        !out.some((p) => p.includes(join("logs", "abc123"))),
+        "must not pollute knownParents with logs/<runId>",
+      );
     } finally {
       cleanup();
     }
   });
 
-  it("finds logs/{runId}/summary-<iso>.json (per-run files)", () => {
+  it("returns project root for summary-<iso>.json under a run dir", () => {
     const { cwd, cleanup } = setupFixture();
     try {
       mkdirSync(join(cwd, "logs", "def456"), { recursive: true });
@@ -72,13 +89,14 @@ describe("scanForRunParents — discovers logs/{runId}/ directories with summary
         "{}",
       );
       const out = scanForRunParents(cwd);
-      assert.deepEqual(out, [join(cwd, "logs", "def456")]);
+      assert.ok(out.includes(cwd));
+      assert.ok(!out.some((p) => /logs[\\/]def456$/i.test(p)));
     } finally {
       cleanup();
     }
   });
 
-  it("returns multiple run directories when several exist", () => {
+  it("dedupes to one project root when several run dirs exist", () => {
     const { cwd, cleanup } = setupFixture();
     try {
       mkdirSync(join(cwd, "logs", "run1"), { recursive: true });
@@ -87,11 +105,10 @@ describe("scanForRunParents — discovers logs/{runId}/ directories with summary
       writeFileSync(join(cwd, "logs", "run2", "summary.json"), "{}");
       mkdirSync(join(cwd, "logs", "run3"), { recursive: true });
       writeFileSync(join(cwd, "logs", "run3", "summary-x.json"), "{}");
-      const out = new Set(scanForRunParents(cwd));
-      assert.equal(out.size, 3);
-      assert.ok(out.has(join(cwd, "logs", "run1")));
-      assert.ok(out.has(join(cwd, "logs", "run2")));
-      assert.ok(out.has(join(cwd, "logs", "run3")));
+      const out = scanForRunParents(cwd);
+      assert.ok(out.includes(cwd));
+      // One project root, not three run log dirs.
+      assert.equal(out.filter((p) => /logs[\\/]run\d$/i.test(p)).length, 0);
     } finally {
       cleanup();
     }
@@ -103,7 +120,7 @@ describe("scanForRunParents — discovers logs/{runId}/ directories with summary
       mkdirSync(join(cwd, "logs", "empty-run"), { recursive: true });
       // No summary file dropped in.
       const out = scanForRunParents(cwd);
-      assert.deepEqual(out, []);
+      assert.equal(out.includes(cwd), false);
     } finally {
       cleanup();
     }
@@ -115,7 +132,7 @@ describe("scanForRunParents — discovers logs/{runId}/ directories with summary
       mkdirSync(join(cwd, "logs"), { recursive: true });
       writeFileSync(join(cwd, "logs", "stray-file.txt"), "not a run");
       const out = scanForRunParents(cwd);
-      assert.deepEqual(out, []);
+      assert.equal(out.includes(cwd), false);
     } finally {
       cleanup();
     }
@@ -126,7 +143,7 @@ describe("scanForRunParents — discovers logs/{runId}/ directories with summary
     assert.deepEqual(out, []);
   });
 
-  it("doesn't double-count one run directory with multiple summary files", () => {
+  it("doesn't emit per-run log dirs when multiple summaries share one run folder", () => {
     const { cwd, cleanup } = setupFixture();
     try {
       mkdirSync(join(cwd, "logs", "run1"), { recursive: true });
@@ -134,7 +151,8 @@ describe("scanForRunParents — discovers logs/{runId}/ directories with summary
       writeFileSync(join(cwd, "logs", "run1", "summary-1.json"), "{}");
       writeFileSync(join(cwd, "logs", "run1", "summary-2.json"), "{}");
       const out = scanForRunParents(cwd);
-      assert.deepEqual(out, [join(cwd, "logs", "run1")]);
+      assert.ok(out.includes(cwd));
+      assert.equal(out.filter((p) => /logs[\\/]run1$/i.test(p)).length, 0);
     } finally {
       cleanup();
     }

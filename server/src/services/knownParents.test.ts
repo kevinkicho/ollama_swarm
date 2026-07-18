@@ -48,4 +48,13 @@ describe("knownParents hygiene", () => {
     ];
     assert.deepEqual(filterKnownParentPaths(clean), clean);
   });
+
+  it("flags OS temp roots and short hex log dirs as junk", () => {
+    assert.equal(isJunkKnownParentPath("C:\\Users\\kevin\\AppData\\Local\\Temp"), true);
+    assert.equal(isJunkKnownParentPath("/tmp"), true);
+    assert.equal(
+      isJunkKnownParentPath("C:\\app\\logs\\abc12345"),
+      true,
+    );
+  });
 });
