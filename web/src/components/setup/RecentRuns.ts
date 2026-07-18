@@ -1,44 +1,87 @@
-// 2026-05-03 (UX win #7): localStorage-backed "recently used" list.
-// Saves the last 3 successful start configurations so users
-// iterating on the same project can re-fill the form with one click.
-//
-// Stored shape (JSON in localStorage):
-//   { entries: RecentRun[] }
-// Capped at 3 entries; older entries roll off the back.
-//
-// What's persisted: repoUrl, presetId, directive (truncated), parentPath.
-// NOT persisted: per-preset advanced knobs (proposition, roles, etc.).
-// Those reset to defaults on re-fill — keeps the surface tight.
+// localStorage-backed recent start configs for the Setup form.
+// List view shows last N successful starts with full parameter snapshots
+// so one click can re-fill the form (topology, MCP, models, flags, etc.).
+
+import type { Topology } from "../../../../shared/src/topology";
+import type { Provider } from "../../../../shared/src/providers";
 
 const STORAGE_KEY = "ollama-swarm:recent-runs";
-const MAX_ENTRIES = 3;
-const MAX_DIRECTIVE_PREVIEW = 80;
+/** List view: more room than the old 3-chip strip. */
+export const MAX_RECENT_RUNS = 12;
+const MAX_DIRECTIVE_PREVIEW = 120;
 
+/** Full start snapshot — enough to rehydrate SetupForm without server round-trip. */
 export interface RecentRun {
-  /** Stable identifier for this entry — used as React key. Currently
-   *  a timestamp, but treat opaquely. */
+  /** Opaque React key (timestamp string for legacy; prefer runId when present). */
   id: string;
-  /** GitHub URL the user typed. */
   repoUrl: string;
-  /** Parent folder path the user typed. */
   parentPath: string;
-  /** Preset id (PresetId from server's enum, but stored as string here
-   *  to avoid pulling the server type into the web layer). */
   presetId: string;
-  /** Truncated directive snippet for the chip label. Empty string when
-   *  no directive was set (e.g. analysis-only run). */
   directiveSnippet: string;
-  /** Full untruncated directive — re-fills the textarea on click. */
   directive: string;
-  /** Posix timestamp (ms) for sort + display ("2 min ago"). */
   startedAt: number;
-  /** Persisted caps/tiers so refill restores the exact advanced settings. */
   wallClockCapMin?: string;
   ambitionTiers?: string;
-  /** The runId returned by the server on successful start (full UUID).
-   *  Used to load full summary and deep-link to /runs/:runId. */
+  /** Full UUID from successful /start. */
   runId?: string;
+
+  // ── Full form snapshot (optional for legacy localStorage entries) ──
+  model?: string;
+  provider?: Provider | string;
+  plannerModel?: string;
+  workerModel?: string;
+  auditorModel?: string;
+  agentCount?: number;
+  rounds?: number;
+  topology?: Topology;
+  webTools?: boolean;
+  autoApprove?: boolean;
+  mcpServers?: string;
+  writeMode?: "none" | "single" | "multi";
+  conflictPolicy?: "merge" | "sequential" | "vote" | "judge" | "pick";
+  councilSharedExplore?: boolean;
+  councilSharedResearch?: boolean;
+  councilReconcile?: "revise" | "vote" | "judge";
+  verifyCommand?: string;
+  preflightDryRun?: boolean;
+  hunkRag?: boolean;
+  dynamicRolePicker?: boolean;
+  mentionContracts?: boolean;
+  bestOfNTurn?: number;
 }
+
+/** Fields captured at successful start (everything the form can restore). */
+export type RecentRunSnapshotInput = {
+  repoUrl: string;
+  parentPath: string;
+  presetId: string;
+  directive: string;
+  wallClockCapMin?: string;
+  ambitionTiers?: string;
+  runId?: string;
+  model?: string;
+  provider?: Provider | string;
+  plannerModel?: string;
+  workerModel?: string;
+  auditorModel?: string;
+  agentCount?: number;
+  rounds?: number;
+  topology?: Topology;
+  webTools?: boolean;
+  autoApprove?: boolean;
+  mcpServers?: string;
+  writeMode?: "none" | "single" | "multi";
+  conflictPolicy?: "merge" | "sequential" | "vote" | "judge" | "pick";
+  councilSharedExplore?: boolean;
+  councilSharedResearch?: boolean;
+  councilReconcile?: "revise" | "vote" | "judge";
+  verifyCommand?: string;
+  preflightDryRun?: boolean;
+  hunkRag?: boolean;
+  dynamicRolePicker?: boolean;
+  mentionContracts?: boolean;
+  bestOfNTurn?: number;
+};
 
 export function loadRecentRuns(): RecentRun[] {
   try {
@@ -46,24 +89,23 @@ export function loadRecentRuns(): RecentRun[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw) as { entries?: RecentRun[] };
     if (!parsed.entries || !Array.isArray(parsed.entries)) return [];
-    return parsed.entries.slice(0, MAX_ENTRIES);
+    // Newest first; cap
+    return parsed.entries
+      .filter((e) => e && typeof e === "object")
+      .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
+      .slice(0, MAX_RECENT_RUNS);
   } catch {
     return [];
   }
 }
 
-/** Push a new entry to the front; cap to MAX_ENTRIES; dedupe by
- *  (repoUrl + presetId) so back-to-back runs against the same target
- *  don't fill the list with duplicates. */
-export function saveRecentRun(input: {
-  repoUrl: string;
-  parentPath: string;
-  presetId: string;
-  directive: string;
-  wallClockCapMin?: string;
-  ambitionTiers?: string;
-  runId?: string;
-}): RecentRun[] {
+/**
+ * Push a new entry to the front.
+ * Dedup: same runId → replace; else same (repoUrl + parentPath + presetId) keeps
+ * only the newest so repeated starts of the same workspace don't flood the list,
+ * but each distinct runId stays (latest N).
+ */
+export function saveRecentRun(input: RecentRunSnapshotInput): RecentRun[] {
   try {
     const existing = loadRecentRuns();
     const directiveTrimmed = input.directive.trim();
@@ -72,7 +114,7 @@ export function saveRecentRun(input: {
         ? `${directiveTrimmed.slice(0, MAX_DIRECTIVE_PREVIEW - 1)}…`
         : directiveTrimmed;
     const fresh: RecentRun = {
-      id: String(Date.now()),
+      id: input.runId?.trim() || String(Date.now()),
       repoUrl: input.repoUrl,
       parentPath: input.parentPath,
       presetId: input.presetId,
@@ -82,12 +124,45 @@ export function saveRecentRun(input: {
       wallClockCapMin: input.wallClockCapMin,
       ambitionTiers: input.ambitionTiers,
       runId: input.runId,
+      model: input.model,
+      provider: input.provider,
+      plannerModel: input.plannerModel,
+      workerModel: input.workerModel,
+      auditorModel: input.auditorModel,
+      agentCount: input.agentCount,
+      rounds: input.rounds,
+      topology: input.topology,
+      webTools: input.webTools,
+      autoApprove: input.autoApprove,
+      mcpServers: input.mcpServers,
+      writeMode: input.writeMode,
+      conflictPolicy: input.conflictPolicy,
+      councilSharedExplore: input.councilSharedExplore,
+      councilSharedResearch: input.councilSharedResearch,
+      councilReconcile: input.councilReconcile,
+      verifyCommand: input.verifyCommand,
+      preflightDryRun: input.preflightDryRun,
+      hunkRag: input.hunkRag,
+      dynamicRolePicker: input.dynamicRolePicker,
+      mentionContracts: input.mentionContracts,
+      bestOfNTurn: input.bestOfNTurn,
     };
-    // Dedupe: drop any prior entry with the same (repoUrl + presetId).
-    const deduped = existing.filter(
-      (e) => !(e.repoUrl === fresh.repoUrl && e.presetId === fresh.presetId),
-    );
-    const next = [fresh, ...deduped].slice(0, MAX_ENTRIES);
+
+    const workspaceKey = (e: RecentRun) =>
+      `${(e.repoUrl || "").trim()}|${(e.parentPath || "").trim()}|${(e.presetId || "").trim()}`;
+
+    let deduped = existing.filter((e) => {
+      if (fresh.runId && e.runId && e.runId === fresh.runId) return false;
+      // No runId on either: collapse same workspace+preset (legacy chip behavior)
+      if (!fresh.runId && !e.runId && workspaceKey(e) === workspaceKey(fresh)) return false;
+      return true;
+    });
+
+    // Prefer one row per runId; keep older runs of same workspace (list view).
+    // If over cap, drop oldest after unshift.
+    const next = [fresh, ...deduped]
+      .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
+      .slice(0, MAX_RECENT_RUNS);
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries: next }));
     return next;
   } catch {
@@ -95,7 +170,17 @@ export function saveRecentRun(input: {
   }
 }
 
-/** Strip the github.com prefix for the chip's repo label. */
+/** Remove one entry (list trash control). */
+export function removeRecentRun(id: string): RecentRun[] {
+  try {
+    const next = loadRecentRuns().filter((e) => e.id !== id && e.runId !== id);
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ entries: next }));
+    return next;
+  } catch {
+    return loadRecentRuns();
+  }
+}
+
 export function shortRepoLabel(repoUrl: string): string {
   return repoUrl.replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "");
 }
@@ -107,7 +192,6 @@ export type RecentRunTipField = {
   multiline?: boolean;
 };
 
-/** Relative time for recent-run tooltips (deterministic `now` for tests). */
 export function formatRecentRunAgo(startedAt: number, now = Date.now()): string {
   if (!startedAt || !Number.isFinite(startedAt)) return "—";
   const dt = now - startedAt;
@@ -123,7 +207,6 @@ export function formatRecentRunAgo(startedAt: number, now = Date.now()): string 
   });
 }
 
-/** Label/value rows for the recent-run chip hover tooltip. */
 export function buildRecentRunTipFields(r: RecentRun): RecentRunTipField[] {
   const fields: RecentRunTipField[] = [
     { label: "preset", value: r.presetId?.trim() || "—", mono: true },
@@ -133,6 +216,15 @@ export function buildRecentRunTipFields(r: RecentRun): RecentRunTipField[] {
   }
   if (r.parentPath?.trim()) {
     fields.push({ label: "workspace", value: r.parentPath.trim(), mono: true });
+  }
+  if (r.model?.trim()) {
+    fields.push({ label: "model", value: r.model.trim(), mono: true });
+  }
+  if (r.agentCount != null) {
+    fields.push({ label: "agents", value: String(r.agentCount), mono: true });
+  }
+  if (r.mcpServers?.trim()) {
+    fields.push({ label: "mcp", value: r.mcpServers.trim().slice(0, 80), mono: true });
   }
   const directive = r.directive?.trim() || r.directiveSnippet?.trim();
   if (directive) {
@@ -151,7 +243,6 @@ export function buildRecentRunTipFields(r: RecentRun): RecentRunTipField[] {
   return fields;
 }
 
-/** Primary + optional preset labels for a recent-run chip (no separator dot). */
 export function recentRunChipLabel(
   r: Pick<RecentRun, "repoUrl" | "parentPath" | "presetId">,
 ): { primary: string; preset?: string } {
@@ -166,4 +257,30 @@ export function recentRunChipLabel(
   if (!primary) primary = r.presetId || "run";
   const preset = r.presetId && primary !== r.presetId ? r.presetId : undefined;
   return preset ? { primary, preset } : { primary };
+}
+
+/** Workspace basename for list primary column. */
+export function recentRunWorkspaceLabel(r: Pick<RecentRun, "repoUrl" | "parentPath">): string {
+  if (r.repoUrl?.trim()) return shortRepoLabel(r.repoUrl.trim());
+  if (r.parentPath?.trim()) {
+    const path = r.parentPath.trim().replace(/\\/g, "/").replace(/\/$/, "");
+    return path.split("/").pop() ?? path;
+  }
+  return "—";
+}
+
+/** Compact flag chips for list secondary line. */
+export function recentRunFlagLabels(r: RecentRun): string[] {
+  const flags: string[] = [];
+  if (r.webTools) flags.push("web");
+  if (r.autoApprove) flags.push("auto");
+  if (r.mcpServers?.trim()) flags.push("mcp");
+  if (r.topology?.agents?.length) flags.push(`topo×${r.topology.agents.length}`);
+  if (r.councilSharedExplore) flags.push("shared-explore");
+  if (r.councilSharedResearch) flags.push("research");
+  if (r.hunkRag) flags.push("hunk-rag");
+  if (r.mentionContracts) flags.push("mentions");
+  if (r.bestOfNTurn && r.bestOfNTurn > 1) flags.push(`best-of-${r.bestOfNTurn}`);
+  if (r.writeMode && r.writeMode !== "none") flags.push(`write:${r.writeMode}`);
+  return flags;
 }

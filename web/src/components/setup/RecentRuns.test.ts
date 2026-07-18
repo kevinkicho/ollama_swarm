@@ -4,6 +4,8 @@ import {
   buildRecentRunTipFields,
   formatRecentRunAgo,
   recentRunChipLabel,
+  recentRunFlagLabels,
+  recentRunWorkspaceLabel,
   shortRepoLabel,
 } from "./RecentRuns.js";
 
@@ -124,3 +126,36 @@ describe("recentRunChipLabel", () => {
     );
   });
 });
+
+describe("recentRuns list helpers", () => {
+  it("workspace label prefers github short form", () => {
+    assert.equal(
+      recentRunWorkspaceLabel({
+        repoUrl: "https://github.com/a/b",
+        parentPath: "C:\\x\\y",
+      }),
+      "a/b",
+    );
+  });
+
+  it("flag labels surface mcp / web / topology size", () => {
+    const flags = recentRunFlagLabels({
+      id: "1",
+      repoUrl: "",
+      parentPath: "",
+      presetId: "council",
+      directiveSnippet: "",
+      directive: "",
+      startedAt: 0,
+      webTools: true,
+      mcpServers: "search=npx foo",
+      topology: { agents: [{ role: "drafter" }, { role: "drafter" }] } as any,
+      councilSharedExplore: true,
+    });
+    assert.ok(flags.includes("web"));
+    assert.ok(flags.includes("mcp"));
+    assert.ok(flags.some((f) => f.startsWith("topo×")));
+    assert.ok(flags.includes("shared-explore"));
+  });
+});
+

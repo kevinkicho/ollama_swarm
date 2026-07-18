@@ -16,8 +16,7 @@ import { InfoTip } from "./setup/InfoTip";
 import { FormattedTipContent, TipParagraph, TipSection } from "./setup/FormattedTipContent";
 import { estimateWallClockSeconds, formatDurationSeconds } from "./setup/WallClockEstimate";
 import { useSwarm } from "../state/store";
-import { recentRunChipLabel } from "./setup/RecentRuns";
-import { RecentRunTipContent } from "./setup/RecentRunTipContent";
+import { RecentRunsList } from "./setup/RecentRunsList";
 import { PresetTipContent } from "./setup/PresetTooltip";
 
 const SIMPLE_MATURITY: ReadonlySet<PresetMaturity> = new Set(["core", "supported"]);
@@ -170,42 +169,15 @@ export function SetupForm() {
 
         {form.recentRuns.length > 0 && (
           <Section title="Recent runs">
-            <div className="flex flex-wrap gap-2">
-              {form.recentRuns.map((r: any) => {
-                const { primary, preset } = recentRunChipLabel(r);
-                return (
-                  <InfoTip
-                    key={r.id}
-                    maxWidth={400}
-                    wrapperClassName="inline-block max-w-[280px]"
-                    trigger={
-                      <button
-                        type="button"
-                        onClick={() => form.refillFromRecent(r)}
-                        className="w-full text-left bg-ink-900 hover:bg-ink-700 border border-ink-700 rounded p-2 transition-colors text-xs"
-                      >
-                        {primary}
-                        {preset ? <span className="text-ink-500 ml-1">{preset}</span> : null}
-                        {r.runId && (
-                          <span
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              navigate(`/runs/${encodeURIComponent(r.runId)}`);
-                            }}
-                            className="ml-1 text-[9px] px-1 bg-ink-700 hover:bg-ink-600 rounded text-ink-400 cursor-pointer"
-                            title={`View run ${r.runId}`}
-                          >
-                            view
-                          </span>
-                        )}
-                      </button>
-                    }
-                  >
-                    <RecentRunTipContent run={r} />
-                  </InfoTip>
-                );
-              })}
-            </div>
+            <p className="text-[11px] text-ink-400 -mt-1 mb-1">
+              Last starts from this browser. Click a row to restore workspace, directive,
+              topology, models, MCP, and flags.
+            </p>
+            <RecentRunsList
+              runs={form.recentRuns}
+              onSelect={(r) => form.refillFromRecent(r)}
+              onRemove={(r) => form.removeFromRecent?.(r)}
+            />
           </Section>
         )}
 

@@ -22,7 +22,7 @@ export function RecentRunTipContent({ run }: { run: RecentRun }) {
   );
 
   return (
-    <FormattedTipContent title={title} footer="Click chip to refill the form">
+    <FormattedTipContent title={title} footer="Click row to refill the form">
       {fields.map((field: TipKvField) => (
         <TipKvRow key={field.label} field={field} />
       ))}

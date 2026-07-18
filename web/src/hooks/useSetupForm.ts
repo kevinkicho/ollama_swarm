@@ -6,7 +6,12 @@ import { PRESETS } from "../components/setup/presets";
 import { topologyForPreset } from "../components/setup/TopologyGrid";
 import type { Topology } from "../../../shared/src/topology";
 import { detectProvider, type Provider } from "../../../shared/src/providers";
-import { loadRecentRuns, saveRecentRun, type RecentRun } from "../components/setup/RecentRuns";
+import {
+  loadRecentRuns,
+  removeRecentRun,
+  saveRecentRun,
+  type RecentRun,
+} from "../components/setup/RecentRuns";
 import { apiFetch } from "../lib/apiFetch";
 import {
   applyDeferredReconfigToStartFields,
@@ -197,6 +202,22 @@ export function useSetupForm(navigate: (path: string) => void) {
   const [topologyOpen, setTopologyOpen] = useState(false);
   const [recentRuns, setRecentRuns] = useState<RecentRun[]>(() => loadRecentRuns());
 
+  // Re-read localStorage when user returns to setup (navigation remounts, or
+  // same tab after another window wrote). Fixes "list stuck on old chips".
+  useEffect(() => {
+    const refresh = () => setRecentRuns(loadRecentRuns());
+    refresh();
+    const onVis = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+
   const onPresetChange = (e: any) => {
     const next = PRESETS.find((p) => p.id === e.target.value);
     if (next) setPresetId(next.id);
@@ -204,14 +225,57 @@ export function useSetupForm(navigate: (path: string) => void) {
 
   const onTopologyChange = (next: Topology) => setTopology(next);
 
+  /** Full form rehydrate from a recent-run snapshot (list row click). */
   const refillFromRecent = (r: RecentRun) => {
     setRepoUrl(r.repoUrl || "");
     setParentPath(r.parentPath || "");
-    if (r.presetId) setPresetId(r.presetId);
-    if (r.directive) setUserDirective(r.directive);
-    // Restore caps/tiers if present in recent run metadata (for continuity)
-    if ((r as any).wallClockCapMin) setWallClockCapMin((r as any).wallClockCapMin);
-    if ((r as any).ambitionTiers) setAmbitionTiers((r as any).ambitionTiers);
+    // Apply models first so setPresetId topology seed sees them; then
+    // override topology/agentCount from snapshot if present.
+    if (r.model) setModel(r.model);
+    if (r.provider) setProvider(r.provider as Provider);
+    if (r.plannerModel != null) setPlannerModel(r.plannerModel);
+    if (r.workerModel != null) setWorkerModel(r.workerModel);
+    if (r.auditorModel != null) setAuditorModel(r.auditorModel);
+
+    if (r.presetId) {
+      // Prefer snapshot topology over synthesized defaults from setPresetId.
+      if (r.topology?.agents?.length) {
+        _setPresetId(r.presetId);
+        setTopology(r.topology);
+        if (r.agentCount != null) setAgentCount(r.agentCount);
+        else setAgentCount(r.topology.agents.length);
+      } else {
+        setPresetId(r.presetId);
+        if (r.agentCount != null) setAgentCount(r.agentCount);
+      }
+    } else if (r.topology?.agents?.length) {
+      setTopology(r.topology);
+      if (r.agentCount != null) setAgentCount(r.agentCount);
+    }
+
+    setUserDirective(r.directive || r.directiveSnippet || "");
+    if (r.wallClockCapMin != null) setWallClockCapMin(r.wallClockCapMin);
+    if (r.ambitionTiers != null) setAmbitionTiers(r.ambitionTiers);
+    if (r.rounds != null) setRoundsInput(r.rounds);
+    if (r.webTools != null) setWebTools(r.webTools);
+    if (r.autoApprove != null) setAutoApprove(r.autoApprove);
+    if (r.mcpServers != null) setMcpServers(r.mcpServers);
+    if (r.writeMode != null) setWriteMode(r.writeMode);
+    if (r.conflictPolicy != null) setConflictPolicy(r.conflictPolicy);
+    if (r.councilSharedExplore != null) setCouncilSharedExplore(r.councilSharedExplore);
+    if (r.councilSharedResearch != null) setCouncilSharedResearch(r.councilSharedResearch);
+    if (r.councilReconcile != null) setCouncilReconcile(r.councilReconcile);
+    if (r.verifyCommand != null) setVerifyCommand(r.verifyCommand);
+    if (r.preflightDryRun != null) setPreflightDryRun(r.preflightDryRun);
+    if (r.hunkRag != null) setHunkRag(r.hunkRag);
+    if (r.dynamicRolePicker != null) setDynamicRolePicker(r.dynamicRolePicker);
+    if (r.mentionContracts != null) setMentionContracts(r.mentionContracts);
+    if (r.bestOfNTurn != null) setBestOfNTurn(r.bestOfNTurn);
+  };
+
+  const removeFromRecent = (r: RecentRun) => {
+    const next = removeRecentRun(r.id || r.runId || "");
+    setRecentRuns(next);
   };
 
   const startSwarmDirectlyFromBrain = async (cfg: BrainConfigPatch) => {
@@ -392,7 +456,7 @@ export function useSetupForm(navigate: (path: string) => void) {
       }
       if (body.runId) {
         console.log('[DEBUG-START] got runId, navigating', body.runId);
-        // persist including caps/tiers for refill
+        // Full form snapshot so list-row refill restores topology, MCP, flags, etc.
         const saved = saveRecentRun({
           repoUrl,
           parentPath,
@@ -401,6 +465,28 @@ export function useSetupForm(navigate: (path: string) => void) {
           wallClockCapMin: startWallMin || undefined,
           ambitionTiers: ambitionTiers || undefined,
           runId: body.runId,
+          model,
+          provider,
+          plannerModel: plannerModel || undefined,
+          workerModel: workerModel || undefined,
+          auditorModel: auditorModel || undefined,
+          agentCount,
+          rounds: startRounds,
+          topology,
+          webTools,
+          autoApprove,
+          mcpServers: mcpServers || undefined,
+          writeMode,
+          conflictPolicy,
+          councilSharedExplore,
+          councilSharedResearch,
+          councilReconcile,
+          verifyCommand: verifyCommand || undefined,
+          preflightDryRun,
+          hunkRag,
+          dynamicRolePicker,
+          mentionContracts,
+          bestOfNTurn,
         });
         setRecentRuns(saved);
         navigate(`/runs/${encodeURIComponent(body.runId)}`);
@@ -473,6 +559,7 @@ export function useSetupForm(navigate: (path: string) => void) {
     onPresetChange,
     onTopologyChange,
     refillFromRecent,
+    removeFromRecent,
     startSwarmDirectlyFromBrain,
     performStart,
   } as any; // surface for the thin component
