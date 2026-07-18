@@ -4,9 +4,12 @@ import { useRunsList } from "../hooks/useRunsList";
 import { useSwarm } from "../state/store";
 import { runQueueIsActive, runQueueStatusClass, runQueueStatusLabel } from "../lib/runQueueState";
 
-/** Preset column shrinks; actions column fixed so Stop appearing does not shift View. */
+/**
+ * Layout: dot | id | preset (compact) | outcome (flex, more room for chips) | actions (auto, right-aligned).
+ * Outcome was previously fixed ~2.5rem and truncated heavily; View/Stop sit at the trailing edge.
+ */
 const RUN_ROW =
-  "grid grid-cols-[0.5rem_2.25rem_minmax(0,1fr)_2.5rem_3.25rem] items-center gap-x-1 min-w-0 w-full max-w-full overflow-hidden";
+  "grid grid-cols-[0.5rem_2.25rem_minmax(0,3.75rem)_minmax(0,1fr)_auto] items-center gap-x-1 min-w-0 w-full max-w-full overflow-hidden";
 
 interface RunQueuePanelProps {
   parentPath?: string;
@@ -106,7 +109,7 @@ function RunRow({
       >
         {run.preset}
       </span>
-      <span className="min-w-0 overflow-hidden">
+      <span className="min-w-0 overflow-hidden justify-self-stretch">
         <span
           className={`inline-block max-w-full px-1 py-px rounded border text-[9px] leading-none truncate ${statusClass}`}
           title={status}
@@ -114,12 +117,12 @@ function RunRow({
           {status}
         </span>
       </span>
-      <div className="flex items-center justify-end gap-px w-full shrink-0">
+      <div className="flex items-center justify-end gap-0.5 shrink-0 justify-self-end pl-0.5">
         <button
           type="button"
           onClick={onView}
           title="View run"
-          className="text-[8px] px-0.5 py-px rounded bg-ink-700 hover:bg-ink-600 text-ink-300 leading-none"
+          className="text-[8px] px-1 py-px rounded bg-ink-700 hover:bg-ink-600 text-ink-300 leading-none whitespace-nowrap"
         >
           View
         </button>
@@ -130,10 +133,10 @@ function RunRow({
           disabled={!isActive || !onStop}
           aria-hidden={!isActive}
           tabIndex={isActive ? 0 : -1}
-          className={`text-[8px] px-0.5 py-px rounded leading-none min-w-[1.65rem] ${
+          className={`text-[8px] px-1 py-px rounded leading-none whitespace-nowrap ${
             isActive
               ? "bg-rose-900/60 hover:bg-rose-800 text-rose-300"
-              : "invisible pointer-events-none bg-transparent text-transparent"
+              : "invisible pointer-events-none bg-transparent text-transparent w-0 min-w-0 px-0 overflow-hidden"
           }`}
         >
           Stop
