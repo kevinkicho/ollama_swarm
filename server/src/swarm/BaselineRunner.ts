@@ -226,20 +226,20 @@ export class BaselineRunner implements SwarmRunner {
     const candidates: Array<{
       attempt: number;
       hunks: readonly Hunk[];
-      /** Git-native: tools already wrote disk; commit without re-apply. */
-      workingTree?: { files: string[]; message: string };
+      /** Git-native: tools wrote disk in clone (K=1) or sandbox (K>1). */
+      workingTree?: { files: string[]; message: string; sandboxPath?: string };
       critiquePassed: boolean | null;
       score: number;
     }> = [];
     const abortController = new AbortController();
-    // Multi-attempt votes must stay emit-only (tools would dirty one shared tree).
-    // Single-attempt: bind write/edit tools for git-native workingTree finish.
-    const useTools = attempts === 1;
-    if (useTools) {
-      this.appendSystem(
-        "Baseline: git-native tools enabled (write/edit/git) — prefer workingTree finish over pure hunk emit.",
-      );
-    }
+    const sandboxCleanups: Array<() => Promise<void>> = [];
+    // Always prefer tools when we can isolate (K=1 → main clone; K>1 → sandbox).
+    this.appendSystem(
+      attempts === 1
+        ? "Baseline: git-native tools enabled (write/edit/git) — prefer workingTree finish over pure hunk emit."
+        : `Baseline: multi-attempt with isolated sandboxes + git-native tools (${attempts} attempts).`,
+    );
+    try {
     for (let attempt = 1; attempt <= attempts; attempt++) {
       if (this.stopping) return;
       if (attempts > 1) {
@@ -247,6 +247,33 @@ export class BaselineRunner implements SwarmRunner {
       } else {
         this.appendSystem("Baseline prompt sent.");
       }
+
+      // Isolated tree for multi-attempt so tools never dirty the shared clone mid-vote.
+      let workPath = destPath;
+      let sandboxPath: string | undefined;
+      if (attempts > 1) {
+        try {
+          const {
+            prepareBaselineAttemptSandbox,
+          } = await import("./baselineAttemptSandbox.js");
+          const sb = await prepareBaselineAttemptSandbox(destPath, attempt);
+          sandboxCleanups.push(sb.cleanup);
+          workPath = sb.sandboxPath;
+          sandboxPath = sb.sandboxPath;
+          this.appendSystem(
+            `[T199 attempt ${attempt}/${attempts}] sandbox ready (${sb.mode}): ${path.basename(path.dirname(sb.sandboxPath))}/${path.basename(sb.sandboxPath)}`,
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.appendSystem(
+            `[T199 attempt ${attempt}/${attempts}] sandbox failed (${msg}) — emit-only fallback for this attempt.`,
+          );
+          workPath = destPath;
+          sandboxPath = undefined;
+        }
+      }
+
+      const useTools = attempts === 1 || !!sandboxPath;
       let raw: string;
       try {
         if (useTools) {
@@ -254,7 +281,7 @@ export class BaselineRunner implements SwarmRunner {
           const result = await runGitNativeApplyChat({
             model: cfg.model,
             agentId: agent.id,
-            clonePath: destPath,
+            clonePath: workPath,
             prompt,
             signal: abortController.signal,
             runId: cfg.runId,
@@ -305,7 +332,7 @@ export class BaselineRunner implements SwarmRunner {
         this.appendSystem(`[T199 attempt ${attempt}/${attempts}] parse failed: ${parsed.reason}; skipping.`);
         continue;
       }
-      // Git-native finish after tool writes.
+      // Git-native finish after tool writes (main clone or sandbox).
       if (
         parsed.workingTree === true
         || (parsed.hunks.length === 0 && (parsed.filesTouched?.length ?? 0) > 0 && !parsed.skip)
@@ -319,12 +346,18 @@ export class BaselineRunner implements SwarmRunner {
         candidates.push({
           attempt,
           hunks: [],
-          workingTree: { files, message },
+          workingTree: {
+            files,
+            message,
+            ...(sandboxPath ? { sandboxPath } : {}),
+          },
           critiquePassed: null,
           score,
         });
         this.appendSystem(
-          `[T199 attempt ${attempt}/${attempts}] candidate scored: workingTree files=${files.length}, score=${score}`,
+          `[T199 attempt ${attempt}/${attempts}] candidate scored: workingTree files=${files.length}` +
+            (sandboxPath ? " (sandbox)" : "") +
+            `, score=${score}`,
         );
         continue;
       }
@@ -388,9 +421,33 @@ export class BaselineRunner implements SwarmRunner {
     const gitAdapter = realGitAdapter(destPath);
     this.result.verifyPassed = winner.critiquePassed;
 
-    // Git-native: tools already mutated disk — commit only.
+    // Git-native: tools mutated main clone (K=1) or sandbox (K>1) — promote + commit.
     if (winner.workingTree) {
       try {
+        if (winner.workingTree.sandboxPath) {
+          const { promoteSandboxFilesToClone } = await import("./baselineAttemptSandbox.js");
+          const promo = await promoteSandboxFilesToClone({
+            sandboxPath: winner.workingTree.sandboxPath,
+            clonePath: destPath,
+            files: winner.workingTree.files,
+          });
+          if (promo.written.length === 0) {
+            this.appendSystem(
+              `Baseline: sandbox promote wrote 0 files` +
+                (promo.missing.length ? ` (missing: ${promo.missing.slice(0, 5).join(", ")})` : "") +
+                " — nothing to commit.",
+            );
+            this.setPhase("completed");
+            return;
+          }
+          this.appendSystem(
+            `Baseline: promoted ${promo.written.length} file(s) from attempt-${winner.attempt} sandbox to clone.`,
+          );
+          winner.workingTree = {
+            ...winner.workingTree,
+            files: promo.written,
+          };
+        }
         const { commitWorkingTreeFiles } = await import("./blackboard/workingTreeCommit.js");
         const wtResult = await commitWorkingTreeFiles({
           todoId: "baseline",
@@ -473,6 +530,24 @@ export class BaselineRunner implements SwarmRunner {
     }
     if (this.phase !== "failed") {
       this.setPhase("completed");
+    }
+    } finally {
+      // Drop sandboxes so the clone isn't left with detached worktrees / temp trees.
+      for (const fn of sandboxCleanups) {
+        try {
+          await fn();
+        } catch {
+          /* best-effort */
+        }
+      }
+      try {
+        const { cleanupAllBaselineAttemptSandboxes } = await import(
+          "./baselineAttemptSandbox.js"
+        );
+        await cleanupAllBaselineAttemptSandboxes(destPath);
+      } catch {
+        /* best-effort */
+      }
     }
   }
 
