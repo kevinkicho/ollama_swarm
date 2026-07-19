@@ -23,8 +23,23 @@ export async function runAuditor(
   planner: Agent,
   opts: { allowWhenStopping?: boolean } = {},
 ): Promise<void> {
+  const auditPrimaryEarly = ctx.getAuditor() ?? planner;
+
+  // Pending-commit review is independent of the criteria-verdict LLM.
+  // Live blackboard no-progress (11b4e505, 4bd7f7f6, 72f72773, 5a33a5f7):
+  // workers left many pending-commit todos; auditor think-only / prompt-
+  // too-long threw *before* reviewPendingCommits → zero commits for 3
+  // cycles → no-productive-progress stop. Drain the gate first.
+  try {
+    await reviewPendingCommits(ctx, auditPrimaryEarly);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ctx.appendSystem(`[auditor-gate] pending-commit review failed early: ${msg}`);
+  }
+  if (ctx.getStopping() && !opts.allowWhenStopping) return;
+
   if (!ctx.getContract()) return;
-  // Skip audit if all criteria are already resolved — nothing to evaluate.
+  // Skip criteria LLM if all criteria are already resolved.
   const unresolved = ctx.getContract()!.criteria.filter((c) => c.status === "unmet");
   if (unresolved.length === 0) {
     ctx.appendSystem(`Audit skipped — all ${ctx.getContract()!.criteria.length} criteria already resolved (met or wont-do).`);
@@ -55,7 +70,7 @@ export async function runAuditor(
     return;
   }
 
-  const auditPrimary = ctx.getAuditor() ?? planner;
+  const auditPrimary = auditPrimaryEarly;
   const modelAtEntry = auditPrimary.model;
   const auditorProfile = resolveToolProfile("auditor", ctx.getActive());
   const { response: firstResponse, agentUsed: auditAgent } = await ctx.promptPlannerSafely(
@@ -145,7 +160,7 @@ export async function runAuditor(
     (n, v) => n + (v.status === "unmet" ? v.todos.length : 0),
     0,
   );
-  // Auditor-gated commits: review pending changes before applying verdicts
+  // Pending commits already reviewed at entry; re-check for any mid-audit arrivals.
   await reviewPendingCommits(ctx, auditAgent);
   // Dynamic import avoids circular load with auditorRunner re-exporting this module.
   const { applyAuditorResult } = await import("./auditorRunner.js");

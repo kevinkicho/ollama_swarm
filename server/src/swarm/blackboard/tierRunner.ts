@@ -534,6 +534,17 @@ export async function runAuditedExecution(
         ctx.noteProviderStall?.(msg);
       }
       ctx.appendSystem(`Auditor failed (${msg}) — skipping this cycle, will retry next.`);
+      // Belt-and-suspenders: if criteria LLM threw before pending-commit drain
+      // (think-only sniff / context overflow), still try to land proposals.
+      // runAuditor now drains first, but older paths / partial throws may not.
+      try {
+        const { reviewPendingCommits } = await import("./auditorPendingCommits.js");
+        // Planner is a valid stand-in when dedicated auditor unavailable.
+        await reviewPendingCommits(ctx as any, planner);
+      } catch (drainErr) {
+        const dmsg = drainErr instanceof Error ? drainErr.message : String(drainErr);
+        ctx.appendSystem(`[auditor-gate] post-fail pending-commit drain failed: ${dmsg}`);
+      }
     }
     if (ctx.getStopping()) return;
 
