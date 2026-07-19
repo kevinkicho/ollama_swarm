@@ -17,6 +17,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const BB = join(__dirname, "blackboard");
 
 const CASCADE = readFileSync(join(BB, "workerParseCascade.ts"), "utf8");
+const WORKER_RUNNER = readFileSync(join(BB, "workerRunner.ts"), "utf8");
+const COUNCIL_ATTEMPT = readFileSync(join(__dirname, "councilWorkerAttempt.ts"), "utf8");
 const PLANNER_REC = readFileSync(join(BB, "plannerRecovery.ts"), "utf8");
 const REPLAN_REC = readFileSync(join(BB, "replannerRecovery.ts"), "utf8");
 const REPLAN_MGR = readFileSync(join(BB, "replanManager.ts"), "utf8");
@@ -48,6 +50,30 @@ describe("dual-path cascade — 926054b0 emit-only repair", () => {
   it("skips LLM repair for empty / pure-think responses", () => {
     assert.ok(CASCADE.includes("shouldSkipLlmJsonRepair") || CASCADE.includes("pure <think>"));
     assert.ok(CASCADE.includes("empty response") || CASCADE.includes("skipping LLM repair"));
+  });
+
+  it("disk-first settle runs after soft-repair and before LLM repair/salvage", () => {
+    assert.ok(CASCADE.includes("tryDiskFirstWorkerParse") || CASCADE.includes("diskFirstWorkerSettle"));
+    assert.ok(CASCADE.includes("disk-first"));
+    const softIdx = CASCADE.indexOf("repairAndParseJson");
+    const diskIdx = CASCADE.indexOf("tryDiskFirstWorkerParse");
+    const llmIdx = CASCADE.indexOf("issuing emit-only repair prompt");
+    assert.ok(diskIdx > softIdx, "disk-first must follow soft-repair");
+    assert.ok(diskIdx > 0 && llmIdx > diskIdx, "disk-first must precede LLM repair");
+  });
+
+  it("workerRunner peeks tool trace before appendAgent for disk-first", () => {
+    assert.ok(WORKER_RUNNER.includes("peekPendingToolTrace"));
+    assert.ok(WORKER_RUNNER.includes("toolTrace"));
+    const peekIdx = WORKER_RUNNER.indexOf("peekPendingToolTrace");
+    // Primary worker path: peek near appendAgent + runWorkerParseCascade
+    assert.ok(WORKER_RUNNER.includes("runWorkerParseCascade"));
+    assert.ok(peekIdx > 0);
+  });
+
+  it("councilWorkerAttempt wires disk-first after parse fail", () => {
+    assert.ok(COUNCIL_ATTEMPT.includes("tryDiskFirstWorkerParse") || COUNCIL_ATTEMPT.includes("diskFirstWorkerSettle"));
+    assert.ok(COUNCIL_ATTEMPT.includes("peekPendingToolTrace"));
   });
 
   it("planner + replanner soft-repair before extra emit", () => {
@@ -84,13 +110,19 @@ describe("dual-path cascade — 2010479c schema + council parity", () => {
   });
 
   it("BB self-consistency and council worker both use emit-only apply repair", () => {
+    // Council apply/repair lives in councilWorkerAttempt (extracted from runner).
     for (const [name, src] of [
       ["workerSelfConsistency", SELF_CONSIST],
-      ["councilWorkerRunner", COUNCIL_WORKER],
+      ["councilWorkerAttempt", COUNCIL_ATTEMPT],
     ] as const) {
       assert.ok(src.includes("EMIT_ONLY_PROFILE_ID"), `${name}: emit-only profile`);
       assert.ok(src.includes("maxToolTurns: 1"), `${name}: maxToolTurns 1`);
       assert.ok(src.includes("applyOrGroundedRepair"), `${name}: shared apply repair`);
     }
+    // Runner still orchestrates; keep a light presence check.
+    assert.ok(
+      COUNCIL_WORKER.includes("runCouncilWorker") || COUNCIL_WORKER.includes("councilWorker"),
+      "councilWorkerRunner still wires worker loop",
+    );
   });
 });

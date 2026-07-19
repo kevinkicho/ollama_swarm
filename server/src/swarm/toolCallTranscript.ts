@@ -22,7 +22,12 @@ function summarizeToolArgs(tool: string, args: Record<string, unknown>): string 
       return scope && scope !== "." ? `${pattern} in ${scope}` : pattern;
     }
     case "bash":
+    case "run":
       return String(args.command ?? "").trim().slice(0, 80);
+    case "write":
+    case "edit":
+    case "propose_hunks":
+      return String(args.path ?? args.file ?? "").trim();
     case "web_fetch":
       return String(args.url ?? "").trim();
     case "web_search":

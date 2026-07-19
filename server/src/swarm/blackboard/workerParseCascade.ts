@@ -13,6 +13,7 @@ import type { Todo, CommitTier } from "./types.js";
 import type { ProfileName } from "../../tools/ToolDispatcher.js";
 import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueueWrappers } from "./todoQueueWrappers.js";
+import type { ToolTraceEntry } from "../toolCallTranscript.js";
 import {
   buildWorkerRepairPrompt,
   buildWorkerUserPrompt,
@@ -26,6 +27,7 @@ import { withSiblingRetry } from "./siblingRetry.js";
 import { isPromptHaltError } from "./lifecycleState.js";
 import { repairAndParseJson } from "../repairJson.js";
 import { EMIT_ONLY_PROFILE_ID } from "@ollama-swarm/shared/toolProfiles";
+import { tryDiskFirstWorkerParse } from "./diskFirstWorkerSettle.js";
 
 export type WorkerParseResult =
   | { ok: true; parsed: Extract<ReturnType<typeof parseWorkerResponse>, { ok: true }>; commitTier: CommitTier }
@@ -64,6 +66,13 @@ export interface WorkerParseCascadeCtx {
   emit: (ev: Record<string, unknown>) => void;
   getPlannerFallbackModel: () => string | undefined;
   workerToolProfile: (kind: "hunk" | "build" | "read") => ProfileName;
+  /**
+   * Tool invocations from the primary worker turn (peeked before appendAgent
+   * consumes the pending buffer). Used for disk-first settle.
+   */
+  toolTrace?: readonly ToolTraceEntry[];
+  /** Clone path for git dirty-tree detection when tool previews are sparse. */
+  getClonePath?: () => string;
 }
 
 /** Failures where another full worker-shaped repair turn rarely helps. */
@@ -105,6 +114,38 @@ export async function runWorkerParseCascade(
         `[${agent.id}] [v2] worker JSON recovered via soft-repair (${soft.strategy}) — skipping LLM repair.`,
       );
       return { ok: true, parsed: second, commitTier: "parse" };
+    }
+  }
+
+  // Disk-first settle: write/edit tools (or dirty git ∩ expected) already
+  // mutated the tree, but the model never emitted a valid JSON envelope.
+  // Prefer real disk over salvage/sibling thrash.
+  {
+    const clonePath =
+      (ctx.getClonePath?.() ?? ctx.getActive()?.localPath ?? "").trim();
+    if (clonePath) {
+      try {
+        const disk = await tryDiskFirstWorkerParse({
+          expectedFiles: todo.expectedFiles,
+          toolTrace: ctx.toolTrace ?? [],
+          clonePath,
+          todoDescription: todo.description,
+        });
+        if (disk) {
+          const n = disk.filesTouched?.length ?? 0;
+          ctx.appendSystem(
+            `[${agent.id}] [v2] disk-first settle — synthetic workingTree for ${n} file(s)` +
+              ` after parse fail (${parsed.reason.slice(0, 80)}); auditor will review git reality.`,
+          );
+          return { ok: true, parsed: disk, commitTier: "disk-first" };
+        }
+      } catch (err) {
+        ctx.appendSystem(
+          `[${agent.id}] [v2] disk-first settle error: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
     }
   }
 

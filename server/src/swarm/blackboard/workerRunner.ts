@@ -36,7 +36,7 @@ import {
 
 import { extractText } from "../extractText.js";
 import { isWebToolsEnabled } from "../toolProfiles.js";
-import { type ToolTraceEntry } from "../toolCallTranscript.js";
+import { peekPendingToolTrace, type ToolTraceEntry } from "../toolCallTranscript.js";
 import { DISPOSITIONS, type RoundRobinDisposition, getDispositionForTurn } from "../roundRobinPromptHelpers.js";
 import { WORKER_HUNKS_JSON_SCHEMA } from "./prompts/jsonSchemas.js";
 import { applyAndCommit } from "./WorkerPipeline.js";
@@ -446,6 +446,9 @@ export async function executeWorkerTodo(
     return "stale";
   }
   if (ctx.isStopping()) return "aborted";
+  // Peek tool trace before appendAgent consumes the pending buffer — disk-first
+  // settle needs write/edit paths when JSON emit fails.
+  const toolTrace = [...peekPendingToolTrace(ctx.pendingToolTraceByAgent, agent.id)];
   ctx.appendAgent(agent, response, { role: "worker" });
 
   const parseResult = await runWorkerParseCascade(
@@ -465,6 +468,8 @@ export async function executeWorkerTodo(
       emit: ctx.emit,
       getPlannerFallbackModel: ctx.getPlannerFallbackModel,
       workerToolProfile: (kind) => workerToolProfile(ctx, kind),
+      toolTrace,
+      getClonePath: () => ctx.getActive()?.localPath?.trim() ?? "",
     },
     agent,
     todo,

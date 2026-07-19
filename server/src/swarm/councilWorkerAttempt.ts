@@ -23,7 +23,7 @@ import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractProviderText } from "./councilUtils.js";
 import { isWebToolsEnabled } from "./toolProfiles.js";
 import { EMIT_ONLY_PROFILE_ID } from "../../../shared/src/toolProfiles.js";
-import { makeBufferedToolHandler } from "./toolCallTranscript.js";
+import { makeBufferedToolHandler, peekPendingToolTrace } from "./toolCallTranscript.js";
 import { wrapProgressContextForPrompt } from "./councilProgressLedger.js";
 import {
   noteMissRecoveredDet,
@@ -212,11 +212,43 @@ export async function tryWorkerPrompt(
       return { outcome: "retry", reason: "empty provider response", lastResponse: undefined };
     }
 
+    // Peek tool trace before appendAgent consumes the pending buffer.
+    const toolTrace = [...peekPendingToolTrace(state.pendingToolTraceByAgent, agent.id)];
+
     // Mirror blackboard workerRunner: persist the model JSON so refresh/hydrate
     // can render WorkerHunksBubble (live StreamingDock alone is ephemeral).
     state.appendAgent(agent, res, { role: "worker" });
 
-    const parsed = parseWorkerResponseWithRepair(res, expectedFiles);
+    let parsed = parseWorkerResponseWithRepair(res, expectedFiles);
+
+    // Disk-first: tools/git show real disk work but JSON envelope missing/invalid.
+    if (!parsed.ok) {
+      try {
+        const { tryDiskFirstWorkerParse } = await import(
+          "./blackboard/diskFirstWorkerSettle.js"
+        );
+        const disk = await tryDiskFirstWorkerParse({
+          expectedFiles,
+          toolTrace,
+          clonePath: state.clonePath,
+          todoDescription: todo.description,
+        });
+        if (disk) {
+          ctx.appendSystem(
+            `[execution] ${agent.id} disk-first settle — synthetic workingTree for ` +
+              `${disk.filesTouched?.length ?? 0} file(s) after parse fail ` +
+              `(${parsed.reason.slice(0, 80)}).`,
+          );
+          parsed = disk;
+        }
+      } catch (err) {
+        ctx.appendSystem(
+          `[execution] ${agent.id} disk-first settle error: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
 
     // Git-native: worker used write/edit tools; commit dirty working tree (no re-apply).
     if (

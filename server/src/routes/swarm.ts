@@ -218,7 +218,7 @@ export function swarmRouter(orch: Orchestrator): Router {
     const wastedWallClockSec = Math.round(((counts?.stale ?? 0) * EST_MEAN_TURN_MS) / 1000);
 
     const hunkMetrics = {
-      firstTry: (commits["parse"] ?? 0) + (commits["repair"] ?? 0) + (commits["brain"] ?? 0) + (commits["sibling"] ?? 0),
+      firstTry: (commits["parse"] ?? 0) + (commits["repair"] ?? 0) + (commits["brain"] ?? 0) + (commits["sibling"] ?? 0) + (commits["disk-first"] ?? 0),
       hunkRepair: commits["hunk-repair"] ?? 0,
       hunkFail: staleness["hunk-fail"] ?? 0,
     };
