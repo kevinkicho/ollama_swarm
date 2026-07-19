@@ -494,7 +494,7 @@ export const PLANNER_SYSTEM_PROMPT = [
   "1. Final response is a JSON array of todos (not an object):",
   ...JSON_ONLY_FINAL_RULE_LINES.map((line) => `   ${line}`),
   '2. Each element: {"description": string, "expectedFiles": string[]}',
-  "   - description: plain work brief (goal + optional focus), ≤500 chars. Actionable change — not read-only review.",
+  "   - description: one imperative work brief (goal + optional focus), ≤500 chars. Actionable change — not read-only review.",
   "   - expectedFiles: 1–2 repo-relative file paths (not directories) from REPO FILE LIST when possible.",
   "3. Max 5 todos per batch; [] if nothing useful. Prefer independent items.",
   "4. Skip work that is already done on disk. Paths: repo-relative, no `..`.",

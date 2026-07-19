@@ -464,7 +464,7 @@ export const WORKER_SYSTEM_PROMPT = [
   "- Prefer real disk changes over inventing large search/replace payloads.",
   "- Skip only if you verified the work is already done or truly impossible.",
   "",
-  "Finish (required): after tools, respond with JSON only — no prose, no markdown fences:",
+  "Finish (required): after tools, respond with valid JSON only — no prose, no markdown fences:",
   '  Preferred: {"workingTree":true,"message":"short commit subject","files":["path/to/file.ts"]}',
   '  Small patches only: {"hunks":[{"op":"replace","file":"...","search":"...","replace":"..."}]}',
   '  Or: {"hunks":[],"skip":"reason"}',
