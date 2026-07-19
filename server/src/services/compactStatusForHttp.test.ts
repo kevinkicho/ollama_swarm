@@ -30,6 +30,16 @@ describe("compactStatusForHttp", () => {
     assert.equal(c.transcript[0]?.id, `e${50}`);
   });
 
+  it("does not require a pre-cloned transcript array", () => {
+    // statusBuilder may pass the live runner array by reference.
+    const live = makeStatus(STATUS_HTTP_TRANSCRIPT_TAIL + 10);
+    const shared = live.transcript;
+    const c = compactStatusForHttp(live);
+    assert.equal(shared.length, STATUS_HTTP_TRANSCRIPT_TAIL + 10);
+    assert.equal(c.transcript.length, STATUS_HTTP_TRANSCRIPT_TAIL);
+    assert.notEqual(c.transcript, shared);
+  });
+
   it("truncates huge entry texts", () => {
     const raw = makeStatus(2, 50_000);
     const c = compactStatusForHttp(raw, { entryTextMax: 1000 });

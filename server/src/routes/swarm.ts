@@ -42,6 +42,7 @@ import {
   probeWarningsForModels,
   uniqueProvidersForModels,
 } from "../providers/providerHealth.js";
+import { compactStatusForHttp } from "../services/compactStatusForHttp.js";
 
 // parentPath on setup form → clone under <parentPath>/<repo-name>.
 
@@ -57,9 +58,8 @@ export function swarmRouter(orch: Orchestrator): Router {
 
   r.get("/status", validate(StatusQuery, "query"), (req: Request, res: Response) => {
     const { runId } = req.query as unknown as z.infer<typeof StatusQuery>;
-    // Dynamic import keeps route boot light; compact is pure.
-    const sendStatus = async (status: import("../types.js").SwarmStatus) => {
-      const { compactStatusForHttp } = await import("../services/compactStatusForHttp.js");
+    // Sync compact — avoid dynamic import latency on every poll/hydrate.
+    const sendStatus = (status: import("../types.js").SwarmStatus) => {
       res.json(compactStatusForHttp(status));
     };
     if (runId) {
@@ -128,7 +128,7 @@ export function swarmRouter(orch: Orchestrator): Router {
   // T-Item-MultiTenant Phase 5 (2026-05-04): per-run status snapshot.
   // 404 when the runId isn't in the active map. Mirrors GET /status
   // shape but scoped to one run.
-  r.get("/runs/:runId/status", async (req: Request, res: Response) => {
+  r.get("/runs/:runId/status", (req: Request, res: Response) => {
     const runId = String(req.params.runId);
     const status = orch.statusForRun(runId);
     if (!status) {
@@ -137,7 +137,6 @@ export function swarmRouter(orch: Orchestrator): Router {
     }
     // Cap multi-MB completed-run transcripts so hydrate does not freeze the UI
     // (5a33a5f7 / 72f72773 summaries were 3–6MB of full bubble text).
-    const { compactStatusForHttp } = await import("../services/compactStatusForHttp.js");
     res.json(compactStatusForHttp(status));
   });
 

@@ -163,7 +163,10 @@ export function status(ctx: StatusContext): SwarmStatus {
     localPath: ctx.active?.localPath,
     model: ctx.active?.model,
     agents: ctx.agentStates(),
-    transcript: [...ctx.transcript],
+    // Share the live array reference (do not clone 10k–30k entries on every
+    // /status poll). HTTP routes must run compactStatusForHttp before JSON;
+    // callers that mutate transcript must copy first.
+    transcript: ctx.transcript as TranscriptEntry[],
     summary: ctx.lastSummary,
     contract: ctx.contract ? ctx.cloneContract(ctx.contract) : undefined,
     cloneState: ctx.cloneStateForStatus,

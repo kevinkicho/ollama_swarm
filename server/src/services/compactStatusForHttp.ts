@@ -8,11 +8,11 @@
 import type { SwarmStatus, TranscriptEntry } from "../types.js";
 
 /** Keep last N transcript bubbles on HTTP status (WS still streams live). */
-export const STATUS_HTTP_TRANSCRIPT_TAIL = 80;
-/** Soft cap per entry text (chars). */
-export const STATUS_HTTP_ENTRY_TEXT_MAX = 6_000;
+export const STATUS_HTTP_TRANSCRIPT_TAIL = 60;
+/** Soft cap per entry text (chars). Long think dumps dominate hydrate cost. */
+export const STATUS_HTTP_ENTRY_TEXT_MAX = 3_500;
 /** Absolute soft cap on total transcript chars in one status response. */
-export const STATUS_HTTP_TRANSCRIPT_CHARS_MAX = 400_000;
+export const STATUS_HTTP_TRANSCRIPT_CHARS_MAX = 220_000;
 
 export interface CompactStatusMeta {
   transcriptTruncated: boolean;

@@ -81,4 +81,33 @@ describe("transcriptDisplayFilter", () => {
     assert.equal(out.length, 1);
     assert.equal(out[0]!.streamSnapshot?.text, "stream body");
   });
+
+  it("filterSupersededAgentStreams stays O(n) on long transcripts", () => {
+    const pairs = 6_000;
+    const transcript: TranscriptEntry[] = [];
+    for (let i = 0; i < pairs; i++) {
+      const agentId = `agent-${i % 6}`;
+      transcript.push({
+        id: `s${i}`,
+        role: "agent-stream",
+        agentId,
+        text: "stream",
+        ts: i * 2,
+      });
+      transcript.push({
+        id: `a${i}`,
+        role: "agent",
+        agentId,
+        text: "final",
+        ts: i * 2 + 1,
+      });
+    }
+    const t0 = performance.now();
+    const out = filterSupersededAgentStreams(transcript);
+    const ms = performance.now() - t0;
+    // Every stream is superseded by a later final for the same agent.
+    assert.equal(out.length, pairs);
+    // O(n²) used to take hundreds of ms; O(n) should stay well under 50ms.
+    assert.ok(ms < 80, `expected <80ms, took ${ms.toFixed(1)}ms`);
+  });
 });

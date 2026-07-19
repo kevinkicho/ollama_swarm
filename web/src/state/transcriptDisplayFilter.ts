@@ -5,27 +5,42 @@ import { textsAreRedundantStream } from "./transcriptMerge.js";
  * Hide agent-stream entries superseded by a later final agent bubble for the
  * same agent. Covers hydrated historical transcripts where merge-time folding
  * did not run.
+ *
+ * O(n) — prior nested scan was O(n²) and froze the UI on multi-hour runs
+ * (10k–30k transcript entries).
  */
 export function filterSupersededAgentStreams(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  if (transcript.length === 0) return transcript;
+
+  // Last index of a final agent bubble per agentId.
+  const lastFinalIdx = new Map<string, number>();
+  for (let i = 0; i < transcript.length; i++) {
+    const e = transcript[i]!;
+    if (e.role === "agent" && e.agentId) lastFinalIdx.set(e.agentId, i);
+  }
+  if (lastFinalIdx.size === 0) return transcript;
+
   const hideIds = new Set<string>();
   for (let i = 0; i < transcript.length; i++) {
     const e = transcript[i]!;
     if (e.role !== "agent-stream" || !e.agentId) continue;
-    for (let j = i + 1; j < transcript.length; j++) {
-      const next = transcript[j]!;
-      if (next.role !== "agent" || next.agentId !== e.agentId) continue;
-      hideIds.add(e.id);
-      break;
-    }
+    const fi = lastFinalIdx.get(e.agentId);
+    if (fi != null && fi > i) hideIds.add(e.id);
   }
   if (hideIds.size === 0) return transcript;
   return transcript.filter((t) => !hideIds.has(t.id));
 }
 
-/** Fold streamSnapshot onto agent entries when replay/hydrate left them split. */
+/** Fold streamSnapshot onto agent entries when replay/hydrate left them split. O(n). */
 export function attachOrphanStreamSnapshots(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  if (transcript.length === 0) return transcript;
+
+  // Last agent-stream entry per agent (by array order).
   const streamByAgent = new Map<string, TranscriptEntry>();
-  for (const e of transcript) {
+  const idToIndex = new Map<string, number>();
+  for (let i = 0; i < transcript.length; i++) {
+    const e = transcript[i]!;
+    idToIndex.set(e.id, i);
     if (e.role === "agent-stream" && e.agentId) {
       streamByAgent.set(e.agentId, e);
     }
@@ -37,9 +52,9 @@ export function attachOrphanStreamSnapshots(transcript: TranscriptEntry[]): Tran
     if (e.role !== "agent" || !e.agentId || e.streamSnapshot) return e;
     const stream = streamByAgent.get(e.agentId);
     if (!stream) return e;
-    const streamIdx = transcript.findIndex((t) => t.id === stream.id);
-    const agentIdx = transcript.findIndex((t) => t.id === e.id);
-    if (streamIdx < 0 || agentIdx < 0 || streamIdx >= agentIdx) return e;
+    const streamIdx = idToIndex.get(stream.id);
+    const agentIdx = idToIndex.get(e.id);
+    if (streamIdx == null || agentIdx == null || streamIdx >= agentIdx) return e;
     if (textsAreRedundantStream(stream.text, e.text)) return e;
     changed = true;
     return {
@@ -54,5 +69,7 @@ export function attachOrphanStreamSnapshots(transcript: TranscriptEntry[]): Tran
 }
 
 export function prepareTranscriptForDisplay(transcript: TranscriptEntry[]): TranscriptEntry[] {
+  // Attach first so we can fold stream text onto the final bubble, then hide
+  // the raw agent-stream rows.
   return filterSupersededAgentStreams(attachOrphanStreamSnapshots(transcript));
 }
