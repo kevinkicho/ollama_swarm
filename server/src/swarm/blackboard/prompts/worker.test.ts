@@ -377,7 +377,8 @@ describe("buildWorkerUserPrompt — small files embedded in full", () => {
       expectedFiles: ["README.md"],
       fileContents: { "README.md": "# Tiny readme\n" },
     });
-    assert.match(prompt, /TODO: tweak the readme/);
+    assert.match(prompt, /Work item|tweak the readme/i);
+    assert.match(prompt, /tweak the readme/);
     assert.match(prompt, /README\.md.*full/);
     assert.ok(prompt.includes("# Tiny readme\n"));
   });
@@ -391,6 +392,24 @@ describe("buildWorkerUserPrompt — small files embedded in full", () => {
     });
     assert.match(prompt, /new\.ts \(does not exist/);
     assert.match(prompt, /"create"/);
+  });
+
+  it("leads with directive as primary job brief when present", () => {
+    const prompt = buildWorkerUserPrompt({
+      todoId: "t1",
+      description: "touch one panel",
+      expectedFiles: ["src/a.tsx"],
+      fileContents: { "src/a.tsx": "export const a = 1;\n" },
+      directive: "Make the app durable and fix broken panels.",
+    });
+    assert.match(prompt, /PRIMARY JOB BRIEF|AUTHORITATIVE|directive/i);
+    assert.match(prompt, /Make the app durable/);
+    assert.match(prompt, /Work item|soft focus/i);
+    assert.match(prompt, /touch one panel/);
+    // Directive should appear before the work-item section.
+    const di = prompt.search(/Make the app durable/);
+    const wi = prompt.search(/touch one panel/);
+    assert.ok(di >= 0 && wi > di, "directive should precede board work item");
   });
 });
 
@@ -414,11 +433,10 @@ describe("buildWorkerUserPrompt — large files are windowed", () => {
     // Head and tail anchors survive the window; middle fluff does not.
     assert.ok(prompt.includes("HEAD-UNIQUE-"));
     assert.ok(prompt.includes("-TAIL-UNIQUE"));
-    // Prompt is dramatically smaller than the source file. 49KB should land
-    // under ~10KB of total user prompt once windowed.
+    // Prompt is dramatically smaller than the source file once windowed.
     assert.ok(
-      prompt.length < big.length / 4,
-      `prompt (${prompt.length}) should be < big/4 (${Math.floor(big.length / 4)})`,
+      prompt.length < big.length / 3,
+      `prompt (${prompt.length}) should be < big/3 (${Math.floor(big.length / 3)})`,
     );
   });
 });
@@ -435,7 +453,7 @@ describe("WORKER_SYSTEM_PROMPT — teaches the windowed view", () => {
 // ~30% of failures were search-not-unique or escaping mistakes).
 describe("WORKER_SYSTEM_PROMPT — few-shot examples", () => {
   it("includes a labeled EXAMPLES section", () => {
-    assert.match(WORKER_SYSTEM_PROMPT, /EXAMPLES/);
+    assert.match(WORKER_SYSTEM_PROMPT, /Examples/i);
   });
 
   it("shows a replace example with escaped newlines (\\n) inside the JSON value", () => {
@@ -461,9 +479,14 @@ describe("WORKER_SYSTEM_PROMPT — few-shot examples", () => {
     assert.match(WORKER_SYSTEM_PROMPT, multiHunkIndicator);
   });
 
-  it("calls out the search-not-unique mistake explicitly", () => {
-    assert.match(WORKER_SYSTEM_PROMPT, /non-unique search|EXACTLY ONCE/i);
-    assert.match(WORKER_SYSTEM_PROMPT, /EXACTLY ONCE/);
+  it("asks for unique search when using hunks (lean wording)", () => {
+    assert.match(WORKER_SYSTEM_PROMPT, /exactly once/i);
+  });
+
+  it("frames work as judgment + workingTree (not micro-spec overload)", () => {
+    assert.match(WORKER_SYSTEM_PROMPT, /judgment/i);
+    assert.match(WORKER_SYSTEM_PROMPT, /workingTree/);
+    assert.doesNotMatch(WORKER_SYSTEM_PROMPT, /RULES:\s*\n1\./);
   });
 });
 
@@ -479,9 +502,9 @@ describe("buildWorkerUserPrompt — Unit 59 role guidance preamble", () => {
       roleGuidance: "ROLE BIAS — CORRECTNESS. Weight edge cases heavily.",
     });
     const guidanceIdx = prompt.indexOf("ROLE BIAS");
-    const todoIdx = prompt.indexOf("TODO:");
+    const workIdx = prompt.search(/Work item|do the thing/);
     assert.ok(guidanceIdx >= 0, "guidance preamble should be present");
-    assert.ok(todoIdx > guidanceIdx, "guidance must come BEFORE the TODO line");
+    assert.ok(workIdx > guidanceIdx, "guidance must come BEFORE the work item");
   });
 
   it("omits the preamble when roleGuidance is absent (byte-identical to pre-Unit-59 shape)", () => {

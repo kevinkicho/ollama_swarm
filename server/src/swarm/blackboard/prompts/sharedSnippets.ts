@@ -28,7 +28,7 @@ export function hostToolingConstraintLines(): readonly string[] {
   if (process.platform === "win32") {
     return [
       "HOST=Windows: never use bash for Unix utilities (wc, grep, cat, find, head, tail, ls, sed, awk).",
-      "Use built-in read/grep/glob/list for inspection. Edits go through hunk JSON / propose_hunks only.",
+      "Use built-in read/grep/glob/list for inspection; write/edit tools for changes; finish with workingTree or small hunk JSON.",
     ];
   }
   return [

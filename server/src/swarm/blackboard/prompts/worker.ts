@@ -11,7 +11,7 @@ import { parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import { softCap } from "./lenientParse.js";
 import { buildResearchNotesBlock, buildResearchToolsNote } from "./planner.js";
 import { buildBlackboardDirectiveBlock } from "../../directivePromptHelpers.js";
-import { hostToolingConstraintLines, JSON_ONLY_FINAL_RULE_LINES } from "./sharedSnippets.js";
+import { hostToolingConstraintLines } from "./sharedSnippets.js";
 
 // ---------------------------------------------------------------------------
 // Worker response schema (v2). Shape: {"hunks": [ ...discriminated on op ]}.
@@ -450,42 +450,35 @@ export function parseWorkerResponse(
 // Prompts.
 // ---------------------------------------------------------------------------
 
+/**
+ * Worker system prompt — lean.
+ * Treat USER DIRECTIVE + TODO as a human work brief; implement with tools/git;
+ * auditor approves the commit. Avoid overloaded micro-spec that causes give-up.
+ */
 export const WORKER_SYSTEM_PROMPT = [
-  "You are a WORKER implementing one TODO.",
-  "Collaborate via the git working tree — not by inventing large search/replace payloads for peers.",
-  "PREFERRED: use write/edit tools (and git_status/git_diff) to change files on disk, then finish with:",
-  '  {"workingTree":true,"message":"short commit subject","files":["path/to/file.ts"]}',
-  "ALTERNATE (small anchor patches only): emit search/replace hunks:",
-  '  {"hunks":[{"op":"replace","file":"...","search":"...","replace":"..."}]}',
+  "You are a coding agent doing one work item from the board.",
   "",
-  "RULES:",
-  "1. Final response:",
-  ...JSON_ONLY_FINAL_RULE_LINES.map((line) => `   ${line}`),
-  "2. Preferred shape: {\"workingTree\":true,\"message\":\"...\",\"files\":[...]} after write/edit tools.",
-  "   Hunks shape: {\"hunks\": [...]} — max " + String(MAX_HUNKS) + " hunks. Optional skip: {\"hunks\":[],\"skip\":\"reason\"}.",
-  "3. Target the TODO's expectedFiles (same directory / basename is ok). Prefer tools for multi-file work.",
-  "4. Hunk ops (when not using workingTree):",
-  "   - replace: {op,file,search,replace} — `search` must match EXACTLY ONCE (enough context to be unique).",
-  "   - replace_between: {op,file,start,endExclusive?,replace} — prefer for large section rewrites; omit endExclusive for start→EOF.",
-  "   - write: {op,file,content} — full rewrite or create when unsure.",
-  "   - create: {op,file,content} — only if the file does not exist yet.",
-  "   - append: {op,file,content} — end of file, no stable anchor.",
-  "   - delete: {op,file} — only when the TODO requires removing the file.",
-  "5. Missing expectedFiles → create them (do not skip). Skip only if verified already done or genuinely impossible.",
-  "6. USER DIRECTIVE (when present) is authoritative — no mock/placeholder data; serve its intent.",
-  "7. Prefer write/edit + workingTree over propose_hunks for large rewrites. propose_hunks dry-run is ok for small anchors.",
-  "8. After a search/start miss: re-read the file and copy a unique anchor — do not re-emit the failed search or claim already-done without reading.",
-  ...hostToolingConstraintLines().map((line) => `   ${line}`),
+  "How to work:",
+  "- Read the USER DIRECTIVE (if any) and the TODO as your job brief — use your judgment.",
+  "- Inspect with read/grep/glob/list; change files with write/edit; check with git_status/git_diff.",
+  "- Prefer real disk changes over inventing large search/replace payloads.",
+  "- Skip only if you verified the work is already done or truly impossible.",
   "",
-  "WINDOWED files (large): head + gap + tail only — use write/edit tools or replace_between/write; do not invent a search spanning the gap.",
+  "Finish (required): after tools, respond with JSON only — no prose, no markdown fences:",
+  '  Preferred: {"workingTree":true,"message":"short commit subject","files":["path/to/file.ts"]}',
+  '  Small patches only: {"hunks":[{"op":"replace","file":"...","search":"...","replace":"..."}]}',
+  '  Or: {"hunks":[],"skip":"reason"}',
+  "  Max " + String(MAX_HUNKS) + " hunks if using hunks. search must match exactly once when used.",
+  "  Hunk ops: replace | replace_between | write | create | append | delete.",
   "",
-  "EXAMPLES (shape only):",
+  ...hostToolingConstraintLines(),
+  "Large/windowed files: use write/edit or replace_between/write — do not invent a search that spans omitted middle.",
+  "",
+  "Examples:",
   '{"workingTree":true,"message":"fix clamp boundary","files":["src/utils.js"]}',
   '{"hunks":[{"op":"replace","file":"src/utils.js","search":"function clamp(n, max) {\\n  return n > max ? max : n;\\n}","replace":"function clamp(n, max) {\\n  return n >= max ? max : n;\\n}"}]}',
   '{"hunks":[{"op":"create","file":"src/log.js","content":"export function log(msg) {\\n  console.log(`[app] ${msg}`);\\n}\\n"}]}',
   '{"hunks":[{"op":"append","file":"src/log.js","content":"export function warn(msg) {\\n  console.warn(msg);\\n}\\n"}]}',
-  "",
-  "Avoid: inventing giant search blobs; literal newlines in JSON (use \\n); create on an existing file; fences/line numbers in output.",
 ].join("\n");
 
 export interface WorkerSeed {
@@ -722,19 +715,34 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     parts.push(seed.hunkRagBlock.trim());
     parts.push("");
   }
+  // Directive-first: human prompt is primary; board TODO is a soft focus.
   const directiveLines = buildBlackboardDirectiveBlock(seed.directive, {
-    labelSuffix: "(AUTHORITATIVE — your work MUST serve this directive. Never create mock/fake/placeholder data.)",
+    labelSuffix:
+      "(PRIMARY JOB BRIEF — treat like a human user prompt. Use your judgment. No mock/placeholder data.)",
     authoritative: true,
     includeAuthoritativeFraming: false,
   });
   if (directiveLines.length > 0) {
     parts.push("");
     parts.push(...directiveLines);
+    parts.push("");
   }
   if (seed.userChatBlock && seed.userChatBlock.trim().length > 0) {
     parts.push(seed.userChatBlock.trim());
     parts.push("");
   }
+  parts.push("## Work item (from board — soft focus, not a rigid recipe)");
+  parts.push(seed.description);
+  if (seed.expectedFiles.length > 0) {
+    parts.push("");
+    parts.push(
+      `Suggested files (prefer these; same directory/basename OK): ${seed.expectedFiles.join(", ")}`,
+    );
+  }
+  if (anchors.length > 0) {
+    parts.push(`Optional anchors: ${anchors.map((a) => JSON.stringify(a)).join(", ")}`);
+  }
+  parts.push("");
   parts.push(buildWorkerToolsNote());
   parts.push("");
   if (seed.endpointCatalogBlock && seed.endpointCatalogBlock.trim().length > 0) {
@@ -747,7 +755,7 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
       parts.push(toolsNote);
       parts.push("");
       parts.push(
-        "For literature/research TODOs: use web_search + web_fetch to gather citable sources, then write hunks that document findings with URLs in the target files.",
+        "If this work needs sources: web_search/web_fetch, then document findings with URLs in the files you change.",
       );
       parts.push("");
     }
@@ -760,11 +768,6 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
     parts.push("");
   }
   parts.push(buildResearchNotesBlock(seed.researchNotes));
-  parts.push(`TODO: ${seed.description}`);
-  parts.push(`Expected files: ${seed.expectedFiles.join(", ")}`);
-  if (anchors.length > 0) {
-    parts.push(`Expected anchors (Unit 44b): ${anchors.map((a) => JSON.stringify(a)).join(", ")}`);
-  }
   parts.push("");
   for (const f of seed.expectedFiles) {
     const content = seed.fileContents[f];

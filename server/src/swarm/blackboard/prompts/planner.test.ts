@@ -289,4 +289,12 @@ describe("planner prompts — repo grounding (Unit 6a)", () => {
   it("system prompt instructs planner to ground expectedFiles in REPO FILE LIST", () => {
     assert.match(PLANNER_SYSTEM_PROMPT, /REPO FILE LIST/);
   });
+
+  it("system prompt is a short work-brief style (not micro-spec overload)", () => {
+    assert.match(PLANNER_SYSTEM_PROMPT, /work request|human-style|judgment/i);
+    assert.match(PLANNER_SYSTEM_PROMPT, /Do NOT write step-by-step/i);
+    // Dropped the old 9-rule wall.
+    assert.doesNotMatch(PLANNER_SYSTEM_PROMPT, /expectedAnchors \(1–4/);
+    assert.doesNotMatch(PLANNER_SYSTEM_PROMPT, /RULES:\s*\n1\./);
+  });
 });

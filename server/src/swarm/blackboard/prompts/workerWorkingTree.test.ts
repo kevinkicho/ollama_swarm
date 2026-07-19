@@ -59,6 +59,6 @@ describe("parseWorkerResponse workingTree + soft expectedFiles", () => {
   it("WORKER_SYSTEM_PROMPT prefers git-native workingTree", () => {
     assert.match(WORKER_SYSTEM_PROMPT, /workingTree/);
     assert.match(WORKER_SYSTEM_PROMPT, /write\/edit/);
-    assert.match(WORKER_SYSTEM_PROMPT, /git working tree/i);
+    assert.match(WORKER_SYSTEM_PROMPT, /git_status|disk changes/i);
   });
 });

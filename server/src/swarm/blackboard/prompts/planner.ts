@@ -475,24 +475,30 @@ export function parsePlannerResponse(raw: string): PlannerParseResult {
 // the planner is asked to produce and the shape we parse.
 // ---------------------------------------------------------------------------
 
+/**
+ * Planner system prompt — intentionally short.
+ * Workers use discretion (tools + git); planner only posts work briefs, not micro-specs.
+ * Verbose anchors/symbols/tags/build fields remain *optional* in the schema/parser.
+ */
 export const PLANNER_SYSTEM_PROMPT = [
-  "You are the PLANNER. Emit a short batch of atomic TODOs for workers.",
+  "You are the PLANNER. Break the user directive into a few work items for coding agents.",
   "",
-  "TOOLS: read, grep, glob, list. Prefer REPO FILE LIST / README / catalog / excerpts in the user message; tool-call only to verify symbols or paths.",
-  "Before TODOs that edit an existing symbol: grep it in expectedFiles. Missing → don't invent it. Found → put names in expectedSymbols (runner drops missing symbols).",
+  "Mindset: each TODO is a short human-style work request — what a manager would say in chat.",
+  "Do NOT write step-by-step implementation recipes, line numbers, or long patch specs.",
+  "Workers will inspect the repo and implement with judgment; you only aim them.",
+  "",
+  "TOOLS: read, grep, glob, list when needed. Prefer REPO FILE LIST / README / excerpts already in the user message.",
   TOOL_CONTEST_HIERARCHY_NOTE,
   "",
-  "RULES:",
+  "OUTPUT:",
   "1. Final response is a JSON array of todos (not an object):",
   ...JSON_ONLY_FINAL_RULE_LINES.map((line) => `   ${line}`),
-  "2. Element shape: {\"description\": string, \"expectedFiles\": string[]} plus optional fields below.",
-  "3. `description`: one imperative sentence, ≤500 chars. Concrete file CHANGE only — DO NOT emit read-only TODOs (read/analyze/review/explore).",
-  "4. `expectedFiles`: 1–2 repo-relative FILE paths (never directories). Ground in REPO FILE LIST (existing path, or new file under a listed parent).",
-  "5. Independently completable. Max 5 TODOs per batch; [] if nothing useful. One TODO per file in a batch (new files OK with other files).",
-  "6. Large-file middle edits: optional expectedAnchors (1–4 short unique substrings). Existing-symbol edits: optional expectedSymbols (1–4 names).",
-  "7. Build-style when a project script is required: {\"kind\":\"build\",\"description\", \"expectedFiles\", \"command\"}. Default kind is hunks.",
-  "8. Optional: preferredTag (must match AVAILABLE WORKER TAGS), criteria ([\"c1\",…]), contextFiles (read-only, max 3, not in expectedFiles).",
-  "9. Verify work is not already done before emitting. Paths: repo-relative, no `..`.",
+  '2. Each element: {"description": string, "expectedFiles": string[]}',
+  "   - description: plain work brief (goal + optional focus), ≤500 chars. Actionable change — not read-only review.",
+  "   - expectedFiles: 1–2 repo-relative file paths (not directories) from REPO FILE LIST when possible.",
+  "3. Max 5 todos per batch; [] if nothing useful. Prefer independent items.",
+  "4. Skip work that is already done on disk. Paths: repo-relative, no `..`.",
+  "5. Optional fields (only if useful — never invent ceremony): criteria, preferredTag, kind/build command.",
 ].join("\n");
 
 export interface PlannerSeed {
@@ -728,8 +734,9 @@ export function buildPlannerUserPrompt(seed: PlannerSeed, contract?: { missionSt
           "",
         ].join("\n")
       : "",
-    "Using the directive + contract + file list above, output your JSON array of TODOs now. Each TODO should be a concrete step toward making the contract criteria met.",
-    "Remember: JSON array, no prose, <=2 files per TODO. Prefer paths that appear in the REPO FILE LIST; if creating a new file, its parent directory should appear there.",
+    "Using the directive + contract + file list above, output a JSON array of short work requests now.",
+    "Each TODO is a brief for a coding agent (what to achieve), not a line-by-line patch plan.",
+    "JSON array only; ≤2 files per TODO; prefer paths from REPO FILE LIST.",
   ].join("\n");
 }
 
@@ -756,11 +763,11 @@ export function buildRepairPrompt(
     previousResponse,
     "--- END PREVIOUS RESPONSE ---",
     "",
-    "You have already explored the repo. Do NOT emit more XML pseudo-tool-calls or file dumps.",
-    "Respond now with ONLY a JSON array matching the schema:",
-    '[{"description": "one sentence", "expectedFiles": ["path1", "path2"]}, ...]',
+    "You have already explored enough. Do NOT emit more tool dumps.",
+    "Respond with ONLY a JSON array of short work briefs:",
+    '[{"description": "clear work request", "expectedFiles": ["path1"]}, ...]',
     "",
-    "No prose. No markdown fences. No <think> tags. No commentary. Just the JSON array.",
+    "No prose, fences, or commentary — JSON array only.",
   ].join("\n");
 }
 
