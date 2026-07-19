@@ -26,6 +26,26 @@ function deliberationSink(ctx: AuditorContext): DeliberationSink {
 }
 
 /** Reject auditor batches that wrote no files or touch no unmet criterion paths. */
+/** Normalize repo-relative paths for criterion / write matching. */
+function normPath(p: string): string {
+  return p
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+    .replace(/^\.\//, "")
+    .replace(/\/+/g, "/")
+    .trim();
+}
+
+function basenames(paths: Iterable<string>): Set<string> {
+  const out = new Set<string>();
+  for (const p of paths) {
+    const n = normPath(p);
+    const base = n.includes("/") ? n.slice(n.lastIndexOf("/") + 1) : n;
+    if (base) out.add(base);
+  }
+  return out;
+}
+
 export function batchAdvancesUnmetCriteria(
   contract: ExitContract | undefined,
   filesWritten: readonly string[],
@@ -39,13 +59,25 @@ export function batchAdvancesUnmetCriteria(
 
   const expected = new Set<string>();
   for (const c of unmet) {
-    for (const f of c.expectedFiles ?? []) expected.add(f);
+    for (const f of c.expectedFiles ?? []) {
+      const n = normPath(String(f));
+      if (n) expected.add(n);
+    }
   }
   if (expected.size === 0) return { ok: true, reason: "" };
 
-  const touched = new Set([...filesWritten, ...batchFileSet]);
+  const touched = new Set<string>();
+  for (const f of filesWritten) touched.add(normPath(f));
+  for (const f of batchFileSet) touched.add(normPath(f));
+
   for (const f of touched) {
     if (expected.has(f)) return { ok: true, reason: "" };
+  }
+  // Live 11b4e505: path variants / basename-only expectedFiles sometimes diverge.
+  const expBase = basenames(expected);
+  const touchBase = basenames(touched);
+  for (const b of touchBase) {
+    if (expBase.has(b)) return { ok: true, reason: "" };
   }
   return {
     ok: false,
@@ -296,16 +328,17 @@ export async function reviewPendingCommits(
     // Use wrapper for each (supports skipCommit) - this routes through WorkerPipeline for consistency
     // (handles delete, anchors, verify per item if needed, but we batch the final commit).
     // Git-native working_tree proposals: files already on disk — commit only, no re-apply.
-    let batchOk = true;
+    // Live 4bd7f7f6: all-or-nothing batch discarded 14–18 good applies when one failed.
+    // Commit successful todos; only reject the failures.
     const batchFailReasons: string[] = [];
     const failedTodoIds: string[] = [];
     const filesWritten: string[] = [];
+    const succeededItems: typeof approved = [];
     const applyFn = ctx.applyHunksAndCommit;
     for (let i = 0; i < approved.length; i++) {
       const item = approved[i];
       if (!applyFn) {
         // Fallback should not happen; ctx always provides it
-        batchOk = false;
         const reason = "no apply fn in auditor ctx";
         batchFailReasons.push(reason);
         failedTodoIds.push(item.todo.id);
@@ -406,7 +439,6 @@ export async function reviewPendingCommits(
           }
         }
         if (!res.ok) {
-          batchOk = false;
           const reason = res.reason || "apply failed in batch";
           batchFailReasons.push(`${item.todo.id.slice(0, 8)}: ${reason}`);
           failedTodoIds.push(item.todo.id);
@@ -414,16 +446,15 @@ export async function reviewPendingCommits(
         } else if (!res.filesWritten || res.filesWritten.length === 0) {
           // Fail-closed symmetry with WorkerPipeline + council workers:
           // never approve a todo that wrote nothing (even if apply said ok).
-          batchOk = false;
           const reason = "apply wrote zero files (no-op) — not a successful commit";
           batchFailReasons.push(`${item.todo.id.slice(0, 8)}: ${reason}`);
           failedTodoIds.push(item.todo.id);
           ctx.wrappers.rejectCommitQ(item.todo.id, reason);
         } else {
           filesWritten.push(...res.filesWritten);
+          succeededItems.push(item);
         }
       } catch (e: any) {
-        batchOk = false;
         const reason = e?.message || "apply exception";
         batchFailReasons.push(`${item.todo.id.slice(0, 8)}: ${reason}`);
         failedTodoIds.push(item.todo.id);
@@ -431,30 +462,46 @@ export async function reviewPendingCommits(
       }
     }
 
-    if (!batchOk) {
-      ctx.appendSystem(`[auditor-gate] ✗ Some applies failed in unified batch path`);
+    if (failedTodoIds.length > 0) {
+      ctx.appendSystem(
+        `[auditor-gate] ✗ ${failedTodoIds.length} apply(s) failed in batch` +
+          (succeededItems.length > 0
+            ? ` — continuing with ${succeededItems.length} successful apply(s)`
+            : " — nothing left to commit"),
+      );
       await dispatchBatchApplyFailBrainOs(ctx, {
         failReasons: batchFailReasons,
         todoIds: failedTodoIds,
         files: [...allFiles],
       });
+    }
+
+    if (succeededItems.length === 0) {
       return;
+    }
+
+    // From here only successful items participate in advance check + final commit.
+    const okTodoIds = succeededItems.map((i) => i.todo.id);
+    const okMessages = succeededItems.map((i) => i.message);
+    const okFiles = new Set<string>();
+    for (const item of succeededItems) {
+      item.files.forEach((f: string) => okFiles.add(f));
     }
 
     const advanceCheck = batchAdvancesUnmetCriteria(
       ctx.getContract(),
       filesWritten,
-      allFiles,
+      okFiles,
     );
     if (!advanceCheck.ok) {
-      for (const id of todoIds) {
+      for (const id of okTodoIds) {
         ctx.wrappers.rejectCommitQ(id, advanceCheck.reason);
       }
       ctx.appendSystem(`[auditor-gate] ✗ Batch rejected: ${advanceCheck.reason}`);
       await dispatchBatchApplyFailBrainOs(ctx, {
         failReasons: [advanceCheck.reason],
-        todoIds: [...todoIds],
-        files: [...allFiles],
+        todoIds: [...okTodoIds],
+        files: [...okFiles],
         phase: "batch_advance_reject",
       });
       return;
@@ -481,11 +528,11 @@ export async function reviewPendingCommits(
     if (verifyOk) {
       // Final single commit for the batch (per-todo applies used skipCommit).
       const localPath = ctx.getActive()?.localPath ?? "";
-      const batchMessage = `auditor batch approval (one commit):\n${todoMessages.map(m => `- ${m}`).join('\n')}`;
+      const batchMessage = `auditor batch approval (one commit):\n${okMessages.map(m => `- ${m}`).join('\n')}`;
       const { finalizeAuditorBatchCommit } = await import("./v2Adapters.js");
       const commitRes = await finalizeAuditorBatchCommit(localPath, batchMessage);
       if (commitRes.ok) {
-        for (const id of todoIds) {
+        for (const id of okTodoIds) {
           ctx.wrappers.approveCommitQ(id);
         }
         // Q11: record successful (todo, hunks) for future hunkRag few-shots.
@@ -496,7 +543,7 @@ export async function reviewPendingCommits(
               serializeHunksForRag,
             } = await import("../hunkRagStore.js");
             const runId = ctx.getActive()?.runId;
-            for (const item of approved) {
+            for (const item of succeededItems) {
               if (!item.hunks?.length) continue;
               await appendHunkExample(localPath, {
                 todoDescription: item.todo.description,
@@ -512,33 +559,33 @@ export async function reviewPendingCommits(
         }
         if (commitRes.skippedGit) {
           ctx.appendSystem(
-            `[auditor-gate] ✓ Batch applied for ${approved.length} todo(s) (no git repo at ${localPath} — commit skipped)`,
+            `[auditor-gate] ✓ Batch applied for ${succeededItems.length} todo(s) (no git repo at ${localPath} — commit skipped)`,
           );
         } else {
-          ctx.appendSystem(`[auditor-gate] ✓ Unified batch + single git commit for ${approved.length} todos`);
+          ctx.appendSystem(`[auditor-gate] ✓ Unified batch + single git commit for ${succeededItems.length} todos`);
         }
       } else {
-        for (const id of todoIds) {
+        for (const id of okTodoIds) {
           ctx.wrappers.rejectCommitQ(id, `batch commit failed: ${commitRes.reason}`);
         }
         ctx.appendSystem(`[auditor-gate] ✗ Batch commit failed: ${commitRes.reason}`);
         await dispatchBatchApplyFailBrainOs(ctx, {
           failReasons: [`batch commit failed: ${commitRes.reason}`],
-          todoIds: [...todoIds],
-          files: [...allFiles],
+          todoIds: [...okTodoIds],
+          files: [...okFiles],
           phase: "batch_commit_fail",
         });
       }
     } else {
       // Best effort revert would be complex here; rely on previous per-apply or git state.
-      for (const id of todoIds) {
+      for (const id of okTodoIds) {
         ctx.wrappers.rejectCommitQ(id, `verify failed: ${verifyReason}`);
       }
       ctx.appendSystem(`[auditor-gate] ✗ Batch verify failed: ${verifyReason}`);
       await dispatchBatchApplyFailBrainOs(ctx, {
         failReasons: [`verify failed: ${verifyReason}`],
-        todoIds: [...todoIds],
-        files: [...allFiles],
+        todoIds: [...okTodoIds],
+        files: [...okFiles],
         phase: "batch_verify_fail",
       });
     }

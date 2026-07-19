@@ -44,4 +44,35 @@ describe("batchAdvancesUnmetCriteria (batch-fail gate)", () => {
     assert.equal(r.ok, false);
     assert.match(r.reason, /no unmet criterion/);
   });
+
+  it("accepts path-normalized and basename matches (11b4e505)", () => {
+    const contract: ExitContract = {
+      missionStatement: "m",
+      criteria: [
+        {
+          id: "c1",
+          description: "need provider",
+          expectedFiles: ["src/hub/DataProvider.jsx"],
+          status: "unmet",
+          addedAt: 0,
+        },
+      ],
+    };
+    assert.equal(
+      batchAdvancesUnmetCriteria(
+        contract,
+        ["src\\hub\\DataProvider.jsx"],
+        new Set(),
+      ).ok,
+      true,
+    );
+    assert.equal(
+      batchAdvancesUnmetCriteria(
+        contract,
+        ["DataProvider.jsx"],
+        new Set(["DataProvider.jsx"]),
+      ).ok,
+      true,
+    );
+  });
 });
