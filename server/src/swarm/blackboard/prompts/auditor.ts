@@ -460,28 +460,40 @@ export async function buildAuditorSeedCore(
 ): Promise<AuditorSeed> {
   const { contract, todos, findings, readFiles, auditInvocation, maxInvocations } = input;
 
-  const committed: CommittedTodoSummary[] = todos
+  // Seed shrink: cap list sizes early (prompt also slices, but seed memory
+  // and findings grow unbounded on long autonomous runs).
+  const SEED_LIST_CAP = 60;
+  const DESC_MAX = 240;
+  const shrinkDesc = (s: string) =>
+    s.length <= DESC_MAX ? s : `${s.slice(0, DESC_MAX - 1)}…`;
+
+  const committedAll = todos
     .filter((t) => t.status === "committed")
-    .sort((a, b) => (a.committedAt ?? 0) - (b.committedAt ?? 0))
+    .sort((a, b) => (a.committedAt ?? 0) - (b.committedAt ?? 0));
+  const committed: CommittedTodoSummary[] = committedAll
+    .slice(-SEED_LIST_CAP)
     .map((t) => ({
       todoId: t.id,
-      description: t.description,
-      expectedFiles: [...t.expectedFiles],
+      description: shrinkDesc(t.description),
+      expectedFiles: [...t.expectedFiles].slice(0, 12),
       committedAt: t.committedAt,
       criterionId: t.criterionId,
     }));
 
-  const skipped: SkippedTodoSummary[] = todos
-    .filter((t) => t.status === "skipped")
-    .map((t) => ({
-      todoId: t.id,
-      description: t.description,
-      skippedReason: t.skippedReason,
-    }));
+  const skippedAll = todos.filter((t) => t.status === "skipped");
+  const skipped: SkippedTodoSummary[] = skippedAll.slice(-SEED_LIST_CAP).map((t) => ({
+    todoId: t.id,
+    description: shrinkDesc(t.description),
+    skippedReason: t.skippedReason
+      ? t.skippedReason.length > 200
+        ? `${t.skippedReason.slice(0, 199)}…`
+        : t.skippedReason
+      : t.skippedReason,
+  }));
 
-  const findingSummaries: FindingSummary[] = findings.map((f) => ({
+  const findingSummaries: FindingSummary[] = findings.slice(-SEED_LIST_CAP).map((f) => ({
     agentId: f.agentId,
-    text: f.text,
+    text: f.text.length > 400 ? `${f.text.slice(0, 399)}…` : f.text,
     createdAt: f.createdAt,
   }));
 
@@ -494,9 +506,12 @@ export async function buildAuditorSeedCore(
     .filter((c) => c.status === "unmet")
     .map((c) => ({ ...c, expectedFiles: resolveCriterionFiles(c, committed) }));
 
+  // Prefer files on currently unmet criteria; cap path count so fullFileMode
+  // cannot inflate the seed to hundreds of files on sprawling contracts.
+  const MAX_FILES_TO_READ = input.fullFileMode ? 40 : 24;
   const filesToRead = Array.from(
     new Set(unmetCriteria.flatMap((c) => c.expectedFiles)),
-  );
+  ).slice(0, MAX_FILES_TO_READ);
   const fileContents = filesToRead.length > 0 ? await readFiles(filesToRead) : {};
   const currentFileState = buildAuditorFileStates(fileContents, input.fullFileMode);
 
@@ -531,13 +546,15 @@ const MAX_CONTEXT_ITEMS = 40;
 // criteria don't burn 50 KB on prose.
 //
 // AUDITOR_FILE_STATE_MAX_CHARS: 60_000 — sum of all file blocks in the
-// "current file state" section. Above this, oldest entries (sorted
-// alphabetically — chosen for stable test output) are dropped with a
+// "current file state" section. Above this, surplus entries are dropped
+// (prefer keeping shorter files first so more criteria get a peek) with a
 // truncation marker. 60 KB is roughly 7-8 windowed files; if the
 // auditor needs more, the contract has too many simultaneous open
 // criteria and should be tier-gated anyway.
 const AUDITOR_RATIONALE_MAX_CHARS = 400;
 const AUDITOR_FILE_STATE_MAX_CHARS = 60_000;
+/** fullFileMode still needs a hard ceiling (live auditor timeouts). */
+const AUDITOR_FILE_STATE_MAX_CHARS_FULL = 180_000;
 
 function truncateRationale(s: string | undefined): string {
   if (!s) return "";
@@ -548,8 +565,11 @@ function truncateRationale(s: string | undefined): string {
 
 export function buildAuditorUserPrompt(seed: AuditorSeed, model?: string): string {
   const budget = getModelBudget(model);
-  const maxContextItems = budget.fullFileMode ? 200 : 40;
-  const fileStateMaxChars = budget.fullFileMode ? 500_000 : 60_000;
+  // Tighter than pre-shrink 200/40 — long autonomous runs balloon otherwise.
+  const maxContextItems = budget.fullFileMode ? 80 : 30;
+  const fileStateMaxChars = budget.fullFileMode
+    ? AUDITOR_FILE_STATE_MAX_CHARS_FULL
+    : AUDITOR_FILE_STATE_MAX_CHARS;
   const committed = seed.committed
     .slice(-maxContextItems)
     .map((c) => `- [${c.todoId}] ${c.description} (files: ${c.expectedFiles.join(", ") || "none"})`)
@@ -577,16 +597,17 @@ export function buildAuditorUserPrompt(seed: AuditorSeed, model?: string): strin
     })
     .join("\n");
 
-  // File-state block: one entry per known file. Sorted for determinism so the
-  // same seed always produces the same prompt (easier diffing in test output
-  // and in the transcript log).
-  // Unit 46b: total budget cap. We render entries in order; once the
-  // running byte total would exceed the budget, drop remaining entries
-  // and emit a truncation marker. Alphabetical order means the dropped
-  // entries are always the last alphabetically — deterministic and
-  // testable.
+  // File-state block: prefer shorter files first so more unmet criteria get
+  // a peek under the char budget; break ties alphabetically (stable tests).
+  // Unit 46b: total budget cap. Once running total would exceed budget, drop
+  // remaining entries and emit a truncation marker.
   const fileStateEntries = Object.entries(seed.currentFileState).sort(
-    ([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
+    ([pathA, a], [pathB, b]) => {
+      const lenA = a.exists ? a.originalLength : 0;
+      const lenB = b.exists ? b.originalLength : 0;
+      if (lenA !== lenB) return lenA - lenB;
+      return pathA < pathB ? -1 : pathA > pathB ? 1 : 0;
+    },
   );
   const fileStateBlocks: string[] = [];
   let fileStateUsed = 0;

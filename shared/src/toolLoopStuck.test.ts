@@ -42,4 +42,27 @@ describe("createToolLoopStuckDetector", () => {
     d.record("web_fetch", true, { url: "https://stats.bis.org" });
     assert.equal(d.record("web_search", false, { query: "c" }), null);
   });
+
+  it("allows more identical write iterations than research tools", () => {
+    const d = createToolLoopStuckDetector();
+    // 3 identical greps still trip at default
+    const g = { pattern: "foo", path: "src" };
+    d.record("grep", true, g);
+    d.record("grep", true, g);
+    assert.match(d.record("grep", true, g) ?? "", /repeated grep/);
+
+    const d2 = createToolLoopStuckDetector();
+    const w = { path: "a.ts", content: "export const x = 1;\n" };
+    for (let i = 0; i < 7; i++) {
+      assert.equal(d2.record("write", true, w), null, `write iter ${i} should pass`);
+    }
+    assert.match(d2.record("write", true, w) ?? "", /repeated write/);
+  });
+
+  it("does not trip write when content fingerprint changes", () => {
+    const d = createToolLoopStuckDetector({ maxBuilderSameCallRepeats: 3 });
+    assert.equal(d.record("write", true, { path: "a.ts", content: "v1" }), null);
+    assert.equal(d.record("write", true, { path: "a.ts", content: "v2" }), null);
+    assert.equal(d.record("write", true, { path: "a.ts", content: "v3" }), null);
+  });
 });

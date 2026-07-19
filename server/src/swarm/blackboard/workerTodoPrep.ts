@@ -171,6 +171,29 @@ export async function prepareWorkerTodoSeed(
     }
   }
 
+  let tabInventoryBlock: string | undefined;
+  try {
+    const {
+      todoLikelyNeedsTabInventory,
+      buildTabInventories,
+      renderTabInventoryBlock,
+    } = await import("./tabInventory.js");
+    if (todoLikelyNeedsTabInventory(todo.description, todo.expectedFiles)) {
+      const paths = [...todo.expectedFiles, ...(todo.contextFiles ?? [])];
+      const inventories = buildTabInventories(contents, paths);
+      const block = renderTabInventoryBlock(inventories);
+      if (block) {
+        tabInventoryBlock = block;
+        const n = inventories.reduce((s, i) => s + i.tabs.length, 0);
+        ctx.appendSystem(
+          `[${agent.id}] [tab-inventory] ${inventories.length} file(s), ${n} tab(s) on disk`,
+        );
+      }
+    }
+  } catch {
+    // best-effort
+  }
+
   const seed: WorkerSeed = {
     todoId: todo.id,
     description: todo.description,
@@ -187,6 +210,7 @@ export async function prepareWorkerTodoSeed(
     ...(endpointCatalogBlock ? { endpointCatalogBlock } : {}),
     ...(projectGraphSlice ? { projectGraphSlice } : {}),
     ...(hunkRagBlock ? { hunkRagBlock } : {}),
+    ...(tabInventoryBlock ? { tabInventoryBlock } : {}),
     ...(todo.lastApplyMiss
       ? {
           lastApplyMiss: {

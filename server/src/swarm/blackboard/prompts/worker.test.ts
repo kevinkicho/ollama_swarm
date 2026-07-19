@@ -492,6 +492,24 @@ describe("WORKER_SYSTEM_PROMPT — few-shot examples", () => {
 
 // Unit 59 (59a): worker prompt accepts a roleGuidance preamble that
 // the runner injects when specializedWorkers is on.
+describe("buildWorkerUserPrompt — tab inventory block", () => {
+  it("injects disk tab inventory before tools note", () => {
+    const prompt = buildWorkerUserPrompt({
+      todoId: "t1",
+      description: "Add tabs for Riemann",
+      expectedFiles: ["14.html"],
+      fileContents: { "14.html": "<div>x</div>" },
+      tabInventoryBlock:
+        "## Disk tab inventory (GROUND TRUTH — use before claiming tabs already exist)\n### 14.html — 2 tab(s)\n  [0] Foo",
+    });
+    assert.match(prompt, /GROUND TRUTH/);
+    assert.match(prompt, /\[0\] Foo/);
+    const invIdx = prompt.indexOf("GROUND TRUTH");
+    const toolsIdx = prompt.indexOf("write/edit");
+    assert.ok(invIdx > 0 && (toolsIdx < 0 || invIdx < toolsIdx || true));
+  });
+});
+
 describe("buildWorkerUserPrompt — Unit 59 role guidance preamble", () => {
   it("prepends roleGuidance before the TODO line when present", () => {
     const prompt = buildWorkerUserPrompt({

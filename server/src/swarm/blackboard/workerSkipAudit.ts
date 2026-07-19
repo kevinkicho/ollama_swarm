@@ -50,6 +50,52 @@ export async function handleWorkerSkip(
   skipReason: string,
 ): Promise<WorkerSkipOutcome> {
   ctx.appendSystem(`[${agent.id}] [v2] worker declined todo: ${skipReason}`);
+
+  // Deterministic tab inventory gate (1963ce25): refuse "already has tabs"
+  // skips when requested topics are missing from disk inventory.
+  try {
+    const {
+      todoLikelyNeedsTabInventory,
+      buildTabInventories,
+      tabSkipContradictsInventory,
+    } = await import("./tabInventory.js");
+    if (todoLikelyNeedsTabInventory(todo.description, todo.expectedFiles)) {
+      const fileContents = await ctx.readExpectedFiles(todo.expectedFiles);
+      const inventories = buildTabInventories(fileContents, todo.expectedFiles);
+      const check = tabSkipContradictsInventory(
+        skipReason,
+        todo.description,
+        inventories,
+      );
+      if (check.contradicts) {
+        ctx.appendSystem(
+          `[${agent.id}] [tab-inventory] override skip — ${check.detail}`,
+        );
+        ctx.getWrappers().postFindingQ({
+          agentId: agent.id,
+          text:
+            `[tab-inventory] todo ${todo.id.slice(0, 8)} — worker-${agent.index} refused: ` +
+            `"${skipReason}" → INVALID (disk missing: ${check.missing.join("; ")}). ${check.detail}`,
+          createdAt: Date.now(),
+        });
+        ctx.getWrappers().releaseTodoQ(
+          todo.id,
+          `tab-inventory overrode refusal: ${check.detail}`,
+        );
+        ctx.recordInteraction(
+          "auditor_override_refusal",
+          todo.id,
+          agent.id,
+          check.detail,
+        );
+        ctx.bumpRejectedAttempts(agent.id);
+        return "released";
+      }
+    }
+  } catch {
+    // fall through to LLM auditor
+  }
+
   const auditor = ctx.getAuditor();
   if (auditor) {
     const workerProfile = ctx.workerToolProfile(todo.kind === "build" ? "build" : "hunk");

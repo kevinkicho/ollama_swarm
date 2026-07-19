@@ -528,6 +528,11 @@ export interface WorkerSeed {
   /** Q11: few-shot similar past hunks from `.swarm-hunk-examples.jsonl`. */
   hunkRagBlock?: string;
   /**
+   * Compact disk tab inventory for multi-tab HTML (full-file extract).
+   * Prevents false "already contains N tabs" skips when windowed views hide the bar.
+   */
+  tabInventoryBlock?: string;
+  /**
    * RR-B: prior apply miss from this run (todo.lastApplyMiss).
    * Prefer uniqueCandidates as search/start on re-emit.
    */
@@ -741,6 +746,10 @@ export function buildWorkerUserPrompt(seed: WorkerSeed): string {
   }
   if (anchors.length > 0) {
     parts.push(`Optional anchors: ${anchors.map((a) => JSON.stringify(a)).join(", ")}`);
+  }
+  if (seed.tabInventoryBlock && seed.tabInventoryBlock.trim().length > 0) {
+    parts.push("");
+    parts.push(seed.tabInventoryBlock.trim());
   }
   parts.push("");
   parts.push(buildWorkerToolsNote());
