@@ -41,6 +41,11 @@ import type { ExplorationCacheEntry } from "@ollama-swarm/shared/explorationCach
 import { runReplannerEmitRecovery } from "./replannerRecovery.js";
 import { applyPanelConvention } from "@ollama-swarm/shared/panelConvention";
 import { evaluateReplannerSkip } from "@ollama-swarm/shared/swarmControl/replannerSkipGrounding";
+import {
+  todoLikelyNeedsTabInventory,
+  buildTabInventories,
+  renderTabInventoryBlock,
+} from "./tabInventory.js";
 
 export interface ReplanContext {
   getReplanPending: () => Set<string>;
@@ -138,6 +143,14 @@ function buildReplannerSeed(
     forAgentId: planner.id,
   });
   const explorationCache = ctx.getExplorationCache?.() ?? [];
+
+  let tabInventoryBlock: string | undefined;
+  if (todoLikelyNeedsTabInventory(todo.description, todo.expectedFiles)) {
+    const inventories = buildTabInventories(contents, todo.expectedFiles);
+    const block = renderTabInventoryBlock(inventories);
+    if (block) tabInventoryBlock = block;
+  }
+
   return {
     todoId: todo.id,
     originalDescription: todo.description,
@@ -149,6 +162,7 @@ function buildReplannerSeed(
     ...(explorationCache.length > 0 ? { explorationCache } : {}),
     ...(promptExtras.effectiveDirective ? { userDirective: promptExtras.effectiveDirective } : {}),
     ...(promptExtras.userChatBlock ? { userChatBlock: promptExtras.userChatBlock } : {}),
+    ...(tabInventoryBlock ? { tabInventoryBlock } : {}),
   };
 }
 

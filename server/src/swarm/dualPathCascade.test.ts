@@ -76,6 +76,14 @@ describe("dual-path cascade — 926054b0 emit-only repair", () => {
     assert.ok(COUNCIL_ATTEMPT.includes("peekPendingToolTrace"));
   });
 
+  it("council + replanManager wire tab inventory for multi-tab HTML thrash", () => {
+    assert.ok(COUNCIL_ATTEMPT.includes("tabInventory") || COUNCIL_ATTEMPT.includes("tab-inventory"));
+    assert.ok(COUNCIL_ATTEMPT.includes("tabSkipContradictsInventory") || COUNCIL_ATTEMPT.includes("tab-inventory"));
+    const REPLAN_MGR_SRC = REPLAN_MGR;
+    assert.ok(REPLAN_MGR_SRC.includes("tabInventory") || REPLAN_MGR_SRC.includes("buildTabInventories"));
+    assert.ok(REPLAN_MGR_SRC.includes("todoLikelyNeedsTabInventory"));
+  });
+
   it("planner + replanner soft-repair before extra emit", () => {
     assert.ok(PLANNER_REC.includes("repairAndParseJson"));
     assert.ok(PLANNER_REC.includes("soft-repair"));

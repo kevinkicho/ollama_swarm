@@ -166,6 +166,11 @@ export interface ReplannerSeed {
   userChatBlock?: string;
   /** Prior planning explore briefs — avoid broad repo re-tours during replan. */
   explorationCache?: readonly ExplorationCacheEntry[];
+  /**
+   * Disk tab inventory for multi-tab HTML — ground truth so replan does not
+   * re-mint "add tabs that already exist" or invent wrong counts.
+   */
+  tabInventoryBlock?: string;
 }
 
 export function buildReplannerUserPrompt(seed: ReplannerSeed): string {
@@ -192,6 +197,14 @@ export function buildReplannerUserPrompt(seed: ReplannerSeed): string {
     `Prior replan attempts: ${seed.replanCount}`,
     "",
   );
+  if (seed.tabInventoryBlock && seed.tabInventoryBlock.trim().length > 0) {
+    parts.push(seed.tabInventoryBlock.trim());
+    parts.push(
+      "When revising: only ask for topics NOT already listed above. " +
+        "If every requested topic is already on disk, prefer {\"skip\":true,...}.",
+    );
+    parts.push("");
+  }
   if (seed.autoAnchors && seed.autoAnchors.length > 0) {
     parts.push(`Auto-detected anchors from description: ${seed.autoAnchors.join(", ")}`);
     parts.push("(These sections exist in the file — use them as context for your revision)");

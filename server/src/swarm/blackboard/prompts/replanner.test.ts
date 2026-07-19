@@ -1,6 +1,10 @@
 import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
-import { parseReplannerResponse, type ReplannerParseResult } from "./replanner.js";
+import {
+  buildReplannerUserPrompt,
+  parseReplannerResponse,
+  type ReplannerParseResult,
+} from "./replanner.js";
 
 function expectRevised(
   r: ReplannerParseResult,
@@ -129,6 +133,24 @@ describe("parseReplannerResponse — rejections", () => {
     );
     assert.equal(r.ok, false);
     if (!r.ok) assert.match(r.reason, /file path, not a directory/);
+  });
+});
+
+describe("buildReplannerUserPrompt — tab inventory", () => {
+  it("includes disk tab inventory and skip-when-covered guidance", () => {
+    const prompt = buildReplannerUserPrompt({
+      todoId: "t1",
+      originalDescription: "Add tabs for Riemann",
+      originalExpectedFiles: ["14.html"],
+      staleReason: "worker skipped: already contains tabs",
+      fileContents: { "14.html": "<div/>" },
+      replanCount: 1,
+      tabInventoryBlock:
+        "## Disk tab inventory (GROUND TRUTH)\n### 14.html — 2 tab(s)\n  [0] Foo",
+    });
+    assert.match(prompt, /GROUND TRUTH/);
+    assert.match(prompt, /only ask for topics NOT already listed/i);
+    assert.match(prompt, /Stale TODO id: t1/);
   });
 });
 

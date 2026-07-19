@@ -157,6 +157,30 @@ export async function tryWorkerPrompt(
         nearbyExcerpt: todo.lastApplyMiss.nearbyExcerpt,
       }
     : undefined;
+
+  // Parity with BB workerTodoPrep: ground multi-tab HTML skips in disk truth.
+  let tabInventoryBlock: string | undefined;
+  try {
+    const {
+      todoLikelyNeedsTabInventory,
+      buildTabInventories,
+      renderTabInventoryBlock,
+    } = await import("./blackboard/tabInventory.js");
+    if (todoLikelyNeedsTabInventory(todo.description, expectedFiles)) {
+      const inventories = buildTabInventories(fileContents, expectedFiles);
+      const block = renderTabInventoryBlock(inventories);
+      if (block) {
+        tabInventoryBlock = block;
+        ctx.appendSystem(
+          `[execution] ${agent.id} [tab-inventory] ${inventories.length} file(s), ` +
+            `${inventories.reduce((s, i) => s + i.tabs.length, 0)} tab(s) on disk`,
+        );
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+
   const userBlock = opts.repairFrom
     ? buildWorkerRepairPrompt(opts.repairFrom.previousResponse, opts.repairFrom.parseError)
     : buildWorkerUserPrompt({
@@ -169,6 +193,7 @@ export async function tryWorkerPrompt(
         webToolsEnabled,
         researchNotes,
         lastApplyMiss: priorMiss,
+        ...(tabInventoryBlock ? { tabInventoryBlock } : {}),
       });
   const basePrompt = wrapCouncilPromptWithControlHints(
     `${WORKER_SYSTEM_PROMPT}\n\n${userBlock}${opts.repairFrom ? "" : progressBlock}`,
@@ -563,6 +588,34 @@ export async function tryWorkerPrompt(
           reason: "worker returned no hunks (garbage skip placeholder)",
           lastResponse: res,
         };
+      }
+      // Disk tab inventory: refuse "already has tabs" when requested topics missing.
+      try {
+        const {
+          todoLikelyNeedsTabInventory,
+          buildTabInventories,
+          tabSkipContradictsInventory,
+        } = await import("./blackboard/tabInventory.js");
+        if (todoLikelyNeedsTabInventory(todo.description, expectedFiles)) {
+          const inventories = buildTabInventories(fileContents, expectedFiles);
+          const check = tabSkipContradictsInventory(
+            classified.reason,
+            todo.description,
+            inventories,
+          );
+          if (check.contradicts) {
+            ctx.appendSystem(
+              `[execution] ${agent.id} [tab-inventory] override skip — ${check.detail}`,
+            );
+            return {
+              outcome: "retry",
+              reason: `tab-inventory: ${check.detail}`,
+              lastResponse: res,
+            };
+          }
+        }
+      } catch {
+        /* fall through */
       }
       const skipReason = classified.permanent
         ? `permanent:${classified.code.replace(/_/g, "-")}: ${classified.reason}`
