@@ -228,11 +228,19 @@ export function extractRequestedTabTopics(description: string): string[] {
   return topics.slice(0, 12);
 }
 
+function normalizeTopicKey(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/['’`]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function topicCoveredByInventory(topic: string, tabs: readonly TabEntry[]): boolean {
-  const t = topic.toLowerCase();
+  const t = normalizeTopicKey(topic);
   const tokens = t.split(/[^a-z0-9]+/).filter((w) => w.length >= 4);
   for (const tab of tabs) {
-    const title = tab.title.toLowerCase();
+    const title = normalizeTopicKey(tab.title);
     if (title.includes(t) || t.includes(title)) return true;
     // Token overlap: ≥2 significant tokens match, or 1 if topic is short
     if (tokens.length === 0) continue;

@@ -75,4 +75,18 @@ describe("tabInventory", () => {
     );
     assert.equal(r.contradicts, false);
   });
+
+  it("replan auto-skip signal: covered topics do not contradict", () => {
+    const inv = buildTabInventories({ "f.html": SAMPLE_HTML });
+    // Use titles that match disk inventory without apostrophe edge cases.
+    const desc = "Ensure tabs for Ordinals and Hilbert's Hotel exist on disk";
+    const topics = extractRequestedTabTopics(desc);
+    assert.ok(topics.some((t) => /ordinals|hilbert/i.test(t)), `topics=${JSON.stringify(topics)}`);
+    const r = tabSkipContradictsInventory(
+      "already contains tabs covering requested topics",
+      desc,
+      inv,
+    );
+    assert.equal(r.contradicts, false, r.contradicts ? r.detail : "");
+  });
 });

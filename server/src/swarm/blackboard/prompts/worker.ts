@@ -867,6 +867,46 @@ export function buildWorkerRepairPrompt(previousResponse: string, parseError: st
   ].join("\n");
 }
 
+/**
+ * Brief re-emit after empty / pure-think primary turns (1963ce25).
+ * Does not re-paste full windowed files — only the job brief + optional tab inventory.
+ */
+export function buildWorkerEmptyReemitPrompt(
+  todo: { description: string; expectedFiles: readonly string[] },
+  parseError: string,
+  opts?: { tabInventoryBlock?: string },
+): string {
+  const lines = [
+    "Your previous turn produced no usable JSON envelope" +
+      (parseError ? ` (${parseError.slice(0, 120)})` : "") +
+      ".",
+    "Emit JSON only now — no tools, no prose, no <think> dump.",
+    "",
+    `TODO: ${todo.description.slice(0, 500)}`,
+  ];
+  if (todo.expectedFiles.length > 0) {
+    lines.push(`Files: ${todo.expectedFiles.join(", ")}`);
+  }
+  if (opts?.tabInventoryBlock?.trim()) {
+    lines.push("");
+    lines.push(opts.tabInventoryBlock.trim());
+    lines.push(
+      "If every requested topic is already listed above, emit " +
+        '{"hunks":[],"skip":"already on disk per tab inventory"}.',
+    );
+    lines.push("If any requested topic is missing, you must ADD it (do not skip).");
+  }
+  lines.push("");
+  lines.push("Valid finishes:");
+  lines.push(
+    '  {"workingTree":true,"message":"short subject","files":["path"]}',
+  );
+  lines.push('  {"hunks":[{"op":"replace","file":"...","search":"...","replace":"..."}]}');
+  lines.push('  {"hunks":[],"skip":"reason"}');
+  lines.push("JSON only.");
+  return lines.join("\n");
+}
+
 // Task #78 (2026-04-25): self-repair when applyHunks fails because a
 // `search` text doesn't exactly match the file (whitespace drift, tab
 // vs spaces, CRLF vs LF, the model imagined a slightly-different

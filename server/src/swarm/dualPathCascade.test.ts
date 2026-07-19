@@ -47,9 +47,16 @@ describe("dual-path cascade — 926054b0 emit-only repair", () => {
     assert.ok(emitHits >= 2, `expected ≥2 EMIT_ONLY uses, got ${emitHits}`);
   });
 
-  it("skips LLM repair for empty / pure-think responses", () => {
-    assert.ok(CASCADE.includes("shouldSkipLlmJsonRepair") || CASCADE.includes("pure <think>"));
-    assert.ok(CASCADE.includes("empty response") || CASCADE.includes("skipping LLM repair"));
+  it("empty / pure-think uses brief re-emit and skips auditor salvage", () => {
+    assert.ok(
+      CASCADE.includes("buildWorkerEmptyReemitPrompt") || CASCADE.includes("empty-reemit"),
+      "empty path must brief re-emit",
+    );
+    assert.ok(
+      CASCADE.includes("skip auditor salvage") || CASCADE.includes("shouldSkipAuditorSalvage"),
+      "must not salvage empty blobs",
+    );
+    assert.ok(CASCADE.includes("empty response") || CASCADE.includes("pure <think>"));
   });
 
   it("disk-first settle runs after soft-repair and before LLM repair/salvage", () => {

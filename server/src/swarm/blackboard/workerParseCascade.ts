@@ -5,7 +5,7 @@
  * 926054b0: repair used the full worker tool profile + full seed, so gemma
  * kept calling tools during "JSON repair" (tool-coach thrash) and fences
  * still failed after a useless repair turn. Repair is emit-only + short
- * framing; pure-think/empty skip straight to salvage.
+ * framing; pure-think/empty get a brief re-emit (not auditor salvage of nothing).
  */
 
 import type { Agent } from "../../services/AgentManager.js";
@@ -15,6 +15,7 @@ import type { RunConfig } from "../SwarmRunner.js";
 import type { TodoQueueWrappers } from "./todoQueueWrappers.js";
 import type { ToolTraceEntry } from "../toolCallTranscript.js";
 import {
+  buildWorkerEmptyReemitPrompt,
   buildWorkerRepairPrompt,
   buildWorkerUserPrompt,
   parseWorkerResponse,
@@ -75,11 +76,16 @@ export interface WorkerParseCascadeCtx {
   getClonePath?: () => string;
 }
 
-/** Failures where another full worker-shaped repair turn rarely helps. */
-function shouldSkipLlmJsonRepair(reason: string): boolean {
-  return (
-    /empty response|pure <think>|no JSON envelope|format\/provider/i.test(reason)
-  );
+/** Failures where echoing the prior blob as "repair" rarely helps — use brief re-emit. */
+function isEmptyOrThinkOnlyParseFail(reason: string): boolean {
+  return /empty response|pure <think>|no JSON envelope|format\/provider/i.test(reason);
+}
+
+/** Auditor salvage of empty / pure-think almost always yields {_unparseable:true}. */
+function shouldSkipAuditorSalvage(reason: string, raw: string): boolean {
+  if (isEmptyOrThinkOnlyParseFail(reason)) return true;
+  const t = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  return t.length < 8;
 }
 
 export async function runWorkerParseCascade(
@@ -151,10 +157,44 @@ export async function runWorkerParseCascade(
 
   ctx.bumpJsonRepairs(agent.id);
   let repair = "";
-  if (shouldSkipLlmJsonRepair(parsed.reason)) {
+  if (isEmptyOrThinkOnlyParseFail(parsed.reason)) {
+    // 1963ce25: empty/think-only — brief re-emit with job brief + tab inventory
+    // beats auditor salvage of "" (always {_unparseable:true}).
     ctx.appendSystem(
-      `[${agent.id}] [v2] worker JSON invalid (${parsed.reason}); skipping LLM repair — going to salvage/sibling.`,
+      `[${agent.id}] [v2] worker JSON invalid (${parsed.reason}); brief empty-reemit (skip salvage).`,
     );
+    try {
+      repair = await ctx.promptAgent(
+        agent,
+        `${WORKER_SYSTEM_PROMPT}\n\n${buildWorkerEmptyReemitPrompt(
+          { description: todo.description, expectedFiles: todo.expectedFiles },
+          parsed.reason,
+          { tabInventoryBlock: seed.tabInventoryBlock },
+        )}`,
+        EMIT_ONLY_PROFILE_ID as ProfileName,
+        "json",
+        WORKER_HUNKS_JSON_SCHEMA,
+        {
+          kind: "worker",
+          label: `empty-reemit ${todo.id.slice(0, 8)}`,
+          mode: "emit",
+          maxToolTurns: 1,
+        },
+      );
+    } catch (err) {
+      if (isPromptHaltError(err, ctx.isStopping, ctx.isDraining)) {
+        return { ok: false, outcome: "aborted" };
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      ctx.getWrappers().failTodoQ(todo.id, `[v2] worker empty-reemit failed: ${msg}`, "repair");
+      ctx.bumpPromptErrors(agent.id);
+      ctx.bumpRejectedAttempts(agent.id);
+      return { ok: false, outcome: "stale" };
+    }
+    if (ctx.isStopping()) return { ok: false, outcome: "aborted" };
+    ctx.appendAgent(agent, repair);
+    parsed = parseWorkerResponse(repair, todo.expectedFiles);
+    if (parsed.ok) commitTier = "repair";
   } else {
     ctx.appendSystem(
       `[${agent.id}] [v2] worker JSON invalid (${parsed.reason}); issuing emit-only repair prompt.`,
@@ -192,55 +232,62 @@ export async function runWorkerParseCascade(
   }
 
   if (!parsed.ok) {
-    const auditor = ctx.getAuditor();
-    if (auditor && !ctx.isStopping()) {
+    const rawForSalvage = repair || response;
+    if (shouldSkipAuditorSalvage(parsed.reason, rawForSalvage)) {
       ctx.appendSystem(
-        `[${agent.id}] [v2] parse failed after repair — routing raw response to auditor for JSON salvage.`,
+        `[${agent.id}] [v2] skip auditor salvage (empty/think-only) — going to sibling.`,
       );
-      try {
-        const salvage = await runParseSalvage(
-          auditor,
-          {
-            getStopping: ctx.isStopping,
-            appendSystem: ctx.appendSystem,
-            appendAgent: (a, t, o) => ctx.appendAgent(a, t, o),
-            promptPlannerSafely: (a, p, profile, schema) =>
-              ctx
-                .promptAgent(
-                  a,
-                  p,
-                  profile ?? ctx.workerToolProfile("read"),
-                  "json",
-                  schema,
-                )
-                .then((r) => ({ response: r, agentUsed: a })),
-            getActive: ctx.getActive,
-            jsonSchema: WORKER_HUNKS_JSON_SCHEMA,
-          },
-          {
-            kind: "worker",
-            parseError: parsed.reason,
-            rawOutput: repair || response,
-            attempt: 1,
-          },
+    } else {
+      const auditor = ctx.getAuditor();
+      if (auditor && !ctx.isStopping()) {
+        ctx.appendSystem(
+          `[${agent.id}] [v2] parse failed after repair — routing raw response to auditor for JSON salvage.`,
         );
-        const auditorResponse = salvage?.json ?? "";
-        const auditorParsed = salvage
-          ? parseWorkerResponse(auditorResponse, todo.expectedFiles)
-          : { ok: false as const, reason: "auditor salvage failed" };
-        if (auditorParsed.ok && (auditorParsed.hunks.length > 0 || auditorParsed.skip)) {
-          parsed = auditorParsed;
-          commitTier = "auditor-parse";
+        try {
+          const salvage = await runParseSalvage(
+            auditor,
+            {
+              getStopping: ctx.isStopping,
+              appendSystem: ctx.appendSystem,
+              appendAgent: (a, t, o) => ctx.appendAgent(a, t, o),
+              promptPlannerSafely: (a, p, profile, schema) =>
+                ctx
+                  .promptAgent(
+                    a,
+                    p,
+                    profile ?? ctx.workerToolProfile("read"),
+                    "json",
+                    schema,
+                  )
+                  .then((r) => ({ response: r, agentUsed: a })),
+              getActive: ctx.getActive,
+              jsonSchema: WORKER_HUNKS_JSON_SCHEMA,
+            },
+            {
+              kind: "worker",
+              parseError: parsed.reason,
+              rawOutput: rawForSalvage,
+              attempt: 1,
+            },
+          );
+          const auditorResponse = salvage?.json ?? "";
+          const auditorParsed = salvage
+            ? parseWorkerResponse(auditorResponse, todo.expectedFiles)
+            : { ok: false as const, reason: "auditor salvage failed" };
+          if (auditorParsed.ok && (auditorParsed.hunks.length > 0 || auditorParsed.skip)) {
+            parsed = auditorParsed;
+            commitTier = "auditor-parse";
+            ctx.appendSystem(
+              auditorParsed.skip
+                ? `[${agent.id}] [v2] auditor confirmed skip: ${auditorParsed.skip}`
+                : `[${agent.id}] [v2] auditor interpreted response — ${auditorParsed.hunks.length} hunk(s).`,
+            );
+          }
+        } catch (err) {
           ctx.appendSystem(
-            auditorParsed.skip
-              ? `[${agent.id}] [v2] auditor confirmed skip: ${auditorParsed.skip}`
-              : `[${agent.id}] [v2] auditor interpreted response — ${auditorParsed.hunks.length} hunk(s).`,
+            `⚠ [${agent.id}] [v2] auditor interpretation failed: ${err instanceof Error ? err.message : String(err)}`,
           );
         }
-      } catch (err) {
-        ctx.appendSystem(
-          `⚠ [${agent.id}] [v2] auditor interpretation failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
       }
     }
   }

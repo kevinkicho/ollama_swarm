@@ -45,6 +45,8 @@ import {
   todoLikelyNeedsTabInventory,
   buildTabInventories,
   renderTabInventoryBlock,
+  extractRequestedTabTopics,
+  tabSkipContradictsInventory,
 } from "./tabInventory.js";
 
 export interface ReplanContext {
@@ -215,6 +217,35 @@ export async function replanOne(
     const msg = err instanceof Error ? err.message : String(err);
     ctx.wrappers.skipTodoQ(todoId, `replanner unable to read files: ${msg}`);
     return;
+  }
+
+  // Deterministic: multi-tab HTML work whose requested topics are already
+  // on disk — skip replan thrash (1963ce25 replan re-minted covered topics).
+  if (todoLikelyNeedsTabInventory(todo.description, todo.expectedFiles)) {
+    const inventories = buildTabInventories(contents, todo.expectedFiles);
+    const topics = extractRequestedTabTopics(todo.description);
+    if (inventories.length > 0 && topics.length > 0) {
+      const check = tabSkipContradictsInventory(
+        "already contains tabs covering requested topics",
+        todo.description,
+        inventories,
+      );
+      if (!check.contradicts) {
+        const titles = inventories
+          .flatMap((i) => i.tabs.map((t) => t.title))
+          .slice(0, 12)
+          .join("; ");
+        ctx.wrappers.skipTodoQ(
+          todoId,
+          `permanent:tab-inventory-covered: requested topics already on disk (${titles.slice(0, 200)})`,
+        );
+        ctx.appendSystem(
+          `[tab-inventory] Replan auto-skipped ${todoId.slice(0, 8)} — ` +
+            `${topics.length} requested topic(s) already present on disk.`,
+        );
+        return;
+      }
+    }
   }
 
   let autoAnchors: string[] | undefined;

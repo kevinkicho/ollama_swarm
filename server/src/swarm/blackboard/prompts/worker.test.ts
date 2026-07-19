@@ -2,6 +2,7 @@ import { strict as assert } from "node:assert";
 import { describe, it } from "node:test";
 import {
   buildHunkRepairPrompt,
+  buildWorkerEmptyReemitPrompt,
   buildWorkerUserPrompt,
   HUNK_REPLACE_SOFT_MAX,
   isRepairableApplyMiss,
@@ -492,6 +493,23 @@ describe("WORKER_SYSTEM_PROMPT — few-shot examples", () => {
 
 // Unit 59 (59a): worker prompt accepts a roleGuidance preamble that
 // the runner injects when specializedWorkers is on.
+describe("buildWorkerEmptyReemitPrompt", () => {
+  it("includes todo, finish shapes, and optional tab inventory", () => {
+    const p = buildWorkerEmptyReemitPrompt(
+      { description: "Add tabs for Riemann", expectedFiles: ["14.html"] },
+      "empty response",
+      {
+        tabInventoryBlock:
+          "## Disk tab inventory (GROUND TRUTH)\n### 14.html — 1 tab(s)\n  [0] Foo",
+      },
+    );
+    assert.match(p, /no usable JSON/i);
+    assert.match(p, /workingTree/);
+    assert.match(p, /GROUND TRUTH/);
+    assert.match(p, /already on disk per tab inventory/);
+  });
+});
+
 describe("buildWorkerUserPrompt — tab inventory block", () => {
   it("injects disk tab inventory before tools note", () => {
     const prompt = buildWorkerUserPrompt({
