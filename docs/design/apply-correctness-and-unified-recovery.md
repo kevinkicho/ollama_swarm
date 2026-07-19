@@ -5,7 +5,7 @@
 | **Author** | Residual reliability program |
 | **Date** | 2026-07-17 |
 | **Revision** | 1 |
-| **Status** | Proposed — ready for implementation on `main` |
+| **Status** | **Mostly shipped on `main`** (C1–C4 + applyOrGroundedRepair + auditor repair + wrap-up fail-closed). Optional polish only. |
 | **Program** | [`residual-reliability-program.md`](./residual-reliability-program.md) (RR-A) |
 | **Depends on** | Shipped grounding stack (`ApplyMissReport`, `buildHunkRepairPrompt`, emit-only repair) |
 | **Related code** | `applyHunks.ts`, `applyMissReport.ts`, `councilWorkerRunner.ts`, `workerSelfConsistency.ts`, `WorkerPipeline.ts`, `auditorPendingCommits.ts`, `wrapUpApplyPhase.ts`, `BaselineRunner.ts` |
@@ -293,12 +293,17 @@ Implement sequentially on `main` (or stacked branches only if requested).
 
 ## Acceptance checklist
 
-- [ ] C1–C4 unit/source regressions green  
-- [ ] Council uses core for grounded repair  
-- [ ] Blackboard never proposes dry-run failures without accepted repair  
-- [ ] Auditor repair path exists (1×)  
-- [ ] Wrap-up fail-closed + integrity  
-- [ ] `validate-grounding-stack.mjs` updated  
+- [x] C1–C4 unit/source regressions green (`applyHunks` fail-closed multi-match + create-on-existing; wrap-up mixed dry-run fallthrough)  
+- [x] Council uses core for grounded repair (`applyOrGroundedRepair` in `councilWorkerAttempt`)  
+- [x] Blackboard never proposes dry-run failures without accepted repair (`workerSelfConsistency` unrepaired → failTodo)  
+- [x] Auditor repair path exists (1× in `auditorPendingCommits`)  
+- [x] Wrap-up fail-closed + integrity  
+- [x] `validate-grounding-stack.mjs` updated (+ multi-tab smoke, dual-path, applyOrGroundedRepair)  
+
+### Residual (optional)
+
+- Soft multi-match shorten only under explicit env (default remains fail-closed) — already fail-closed by default  
+- Path-tagged `applyIntegrity` rate dashboards in UI — counters exist; polish only
 
 ---
 

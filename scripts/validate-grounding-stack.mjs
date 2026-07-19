@@ -30,10 +30,19 @@ const serverFiles = [
   "src/swarm/applyIntegrityStats.test.ts",
   "src/swarm/wrapUpApplyPhase.test.ts",
   "src/swarm/councilWorkerRunner.test.ts",
+  // 1963ce25 multi-tab + disk-first + dual-path locks
+  "src/swarm/blackboard/tabInventory.test.ts",
+  "src/swarm/blackboard/diskFirstWorkerSettle.test.ts",
+  "src/swarm/dualPathCascade.test.ts",
+  "src/swarm/applyOrGroundedRepair.test.ts",
 ];
 
 /** Shared package tests (cwd = shared/) */
-const sharedFiles = ["src/applyIntegrityReport.test.ts"];
+const sharedFiles = [
+  "src/applyIntegrityReport.test.ts",
+  "src/toolLoopStuck.test.ts",
+  "src/cycleIntegrityReport.test.ts",
+];
 
 function runSuite(label, cwd, files) {
   process.stdout.write(`• ${label} (${files.length} files) ... `);
@@ -59,12 +68,27 @@ console.log("\n=== Grounding stack offline validation ===\n");
 const okServer = runSuite("server grounding tests", path.join(root, "server"), serverFiles);
 const okShared = runSuite("shared applyIntegrityReport", path.join(root, "shared"), sharedFiles);
 
-console.log("\nManual (live) still recommended:");
-console.log("  - Panel-heavy council run on current main");
-console.log("  - Compare applyIntegrity.missByKind vs eee6718f baseline");
-console.log("  - Confirm literature noise near zero; catalog/keys for true research\n");
+// Multi-tab offline smoke (pure helpers + unit bundle; no LLM).
+process.stdout.write("• multi-tab HTML smoke script ... ");
+const tabSmoke = spawnSync(process.execPath, ["scripts/smoke-tab-inventory.mjs"], {
+  cwd: root,
+  encoding: "utf8",
+  env,
+});
+const okTab = tabSmoke.status === 0;
+console.log(okTab ? "ok" : "FAIL");
+if (!okTab) {
+  if (tabSmoke.stdout) console.log(tabSmoke.stdout.slice(-2000));
+  if (tabSmoke.stderr) console.log(tabSmoke.stderr.slice(-1500));
+}
 
-if (!okServer || !okShared) {
+console.log("\nManual (live) still recommended:");
+console.log("  - Panel-heavy / multi-tab HTML blackboard or council run on current main");
+console.log("  - Compare applyIntegrity.missByKind vs eee6718f baseline");
+console.log("  - Confirm literature noise near zero; catalog/keys for true research");
+console.log("  - Confirm [tab-inventory] system lines and no covered-topic replan thrash\n");
+
+if (!okServer || !okShared || !okTab) {
   console.error("❌ Grounding validation failed");
   process.exit(1);
 }
