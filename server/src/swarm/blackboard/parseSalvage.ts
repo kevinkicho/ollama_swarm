@@ -6,6 +6,10 @@ import type { ProfileName } from "../../tools/ToolDispatcher.js";
 import { stripForJsonParse } from "@ollama-swarm/shared/stripAgentText";
 import { formatParseTier, parseJsonEnvelope } from "@ollama-swarm/shared/parseAgentJson";
 import {
+  formatUnparseableSalvageMessage,
+  isUnparseableSalvageJson,
+} from "@ollama-swarm/shared/unparseableSalvage";
+import {
   SCHEMA_DESCRIPTIONS,
 } from "./prompts/brainParser.js";
 
@@ -116,10 +120,17 @@ export async function runParseSalvage(
   );
   if (deps.getStopping()) return null;
 
-  deps.appendAgent(agentUsed, response, { assistKind: "auditor-salvage" });
-
   const envelope = parseJsonEnvelope(response);
   if (!envelope.ok) {
+    // Still surface a readable agent bubble (not raw garbage).
+    deps.appendAgent(
+      agentUsed,
+      formatUnparseableSalvageMessage({
+        kind: input.kind,
+        parseError: envelope.reason,
+      }),
+      { assistKind: "auditor-salvage" },
+    );
     deps.appendSystem(
       `[${salvageAgent.id}] auditor salvage failed to parse (${envelope.reason}).`,
     );
@@ -127,14 +138,26 @@ export async function runParseSalvage(
   }
 
   if (
-    typeof envelope.value === "object"
-    && envelope.value !== null
-    && "_unparseable" in (envelope.value as Record<string, unknown>)
+    isUnparseableSalvageJson(response)
+    || (
+      typeof envelope.value === "object"
+      && envelope.value !== null
+      && (envelope.value as { _unparseable?: unknown })._unparseable === true
+    )
   ) {
+    deps.appendAgent(
+      agentUsed,
+      formatUnparseableSalvageMessage({
+        kind: input.kind,
+        parseError: input.parseError,
+      }),
+      { assistKind: "auditor-salvage" },
+    );
     deps.appendSystem(`[${salvageAgent.id}] auditor salvage: output marked unparseable.`);
     return null;
   }
 
+  deps.appendAgent(agentUsed, response, { assistKind: "auditor-salvage" });
   deps.appendSystem(
     `[${salvageAgent.id}] auditor salvage succeeded (tier: ${formatParseTier(envelope.tier)}).`,
   );

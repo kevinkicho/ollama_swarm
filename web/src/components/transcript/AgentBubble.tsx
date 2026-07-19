@@ -30,6 +30,71 @@ import { CouncilSynthesisBubble } from "./CouncilSynthesisBubble";
 import { PlannerBriefBubble } from "./PlannerBriefBubble";
 import { DecoratedSynthesisBlock, StigmergyAnnotationBubble } from "./SynthesisBubbles";
 import { BuildResultBubble, tryParseBuildResult } from "./BuildResultBubble";
+import {
+  formatUnparseableSalvageMessage,
+  isUnparseableSalvageJson,
+} from "@ollama-swarm/shared/unparseableSalvage";
+import {
+  BubbleToggleRow,
+  PromptContentPanel,
+  ThinkingContentPanel,
+  ToolTraceContentPanel,
+} from "./AgentThinking";
+
+/** Readable card for salvage sentinel / historical {"_unparseable":true} bubbles. */
+function UnparseableSalvageBubble({
+  entry,
+  header,
+  className,
+  style,
+  thinking,
+  prompt,
+  toolTrace,
+}: {
+  entry: TranscriptEntry;
+  header: React.ReactNode;
+  className: string;
+  style: React.CSSProperties;
+  thinking: ReturnType<typeof resolveEntryThinking>;
+  prompt: ReturnType<typeof resolveEntryPrompt>;
+  toolTrace: ResolvedToolTraceEntry[] | null;
+}) {
+  const [showPrompt, setShowPrompt] = useState(false);
+  const [showThinking, setShowThinking] = useState(false);
+  const [showToolTrace, setShowToolTrace] = useState(false);
+  const body = isUnparseableSalvageJson(entry.text)
+    ? formatUnparseableSalvageMessage({
+        kind: entry.assistKind === "auditor-salvage" ? "JSON salvage" : "agent",
+      })
+    : entry.text;
+  return (
+    <div className={className} style={style}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">{header}</div>
+        <BubbleToggleRow
+          thinking={thinking}
+          prompt={prompt}
+          toolTrace={toolTrace}
+          showThinking={showThinking}
+          showPrompt={showPrompt}
+          showToolTrace={showToolTrace}
+          onToggleThinking={() => setShowThinking((v) => !v)}
+          onTogglePrompt={() => setShowPrompt((v) => !v)}
+          onToggleToolTrace={() => setShowToolTrace((v) => !v)}
+        />
+      </div>
+      <div className="rounded border border-rose-800/50 bg-rose-950/30 px-2.5 py-2 text-[12px] text-rose-100/90 leading-relaxed whitespace-pre-wrap">
+        <div className="text-[10px] uppercase tracking-wider font-semibold text-rose-300/90 mb-1">
+          Unparseable output
+        </div>
+        {body}
+      </div>
+      {showPrompt && prompt ? <PromptContentPanel prompt={prompt} /> : null}
+      {showToolTrace && toolTrace?.length ? <ToolTraceContentPanel trace={toolTrace} /> : null}
+      {showThinking && thinking ? <ThinkingContentPanel thinking={thinking} /> : null}
+    </div>
+  );
+}
 
 export function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string }) {
   const thinking = useMemo(() => resolveEntryThinking(entry), [entry]);
@@ -63,6 +128,21 @@ export function AgentBubble({ entry, ts }: { entry: TranscriptEntry; ts: string 
   );
   const style = { borderColor: palette.border, background: palette.background };
   const className = "rounded-md p-3 border text-sm";
+
+  // Historical + live: salvage sentinel used to render as raw JSON only.
+  if (isUnparseableSalvageJson(entry.text)) {
+    return (
+      <UnparseableSalvageBubble
+        entry={entry}
+        header={header}
+        className={className}
+        style={style}
+        thinking={thinking}
+        prompt={prompt}
+        toolTrace={toolTrace}
+      />
+    );
+  }
 
   // Unit 54: prefer the server-computed structured summary when present
   // (workers' parsed envelope). The server has the authoritative parser

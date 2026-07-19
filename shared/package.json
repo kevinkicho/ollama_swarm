@@ -8,6 +8,7 @@
     "./extractThinkTags": "./src/extractThinkTags.ts",
     "./extractToolCallMarkers": "./src/extractToolCallMarkers.ts",
     "./formatServerSummary": "./src/formatServerSummary.ts",
+    "./unparseableSalvage": "./src/unparseableSalvage.ts",
     "./modelConfig": "./src/modelConfig.ts",
     "./providers": "./src/providers.ts",
     "./runStateMachine": "./src/runStateMachine.ts",
