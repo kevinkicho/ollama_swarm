@@ -584,6 +584,35 @@ This is a lightweight map to help with systemic planning without full repo dump.
     // best-effort
   }
 
+  let tabInventoryBlock: string | undefined;
+  try {
+    const {
+      seedLikelyNeedsTabInventory,
+      selectPathsForTabInventory,
+      loadTabInventoryBlock,
+    } = await import("./tabInventory.js");
+    const directive = effectiveDirective ?? cfg.userDirective;
+    if (seedLikelyNeedsTabInventory(directive, repoFiles)) {
+      const paths = selectPathsForTabInventory(repoFiles, directive, 8);
+      const { readFile } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      tabInventoryBlock = await loadTabInventoryBlock(paths, async (rel) => {
+        try {
+          return await readFile(join(clonePath, rel), "utf8");
+        } catch {
+          return null;
+        }
+      });
+      if (tabInventoryBlock && cfg.suppressSeedMessages !== true) {
+        ctx.appendSystem(
+          `[tab-inventory] Surfaced disk tabs for ${paths.length} HTML file(s) into planner/contract seed.`,
+        );
+      }
+    }
+  } catch {
+    // best-effort
+  }
+
   return {
     repoUrl: cfg.repoUrl,
     clonePath,
@@ -603,6 +632,7 @@ This is a lightweight map to help with systemic planning without full repo dump.
     webToolsEnabled: isWebToolsEnabled(cfg),
     ...(endpointCatalogBlock ? { endpointCatalogBlock } : {}),
     ...(projectGraphSlice ? { projectGraphSlice } : {}),
+    ...(tabInventoryBlock ? { tabInventoryBlock } : {}),
   };
 }
 

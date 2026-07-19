@@ -50,11 +50,13 @@ export function buildSeedFirstToolGuidance(seed: PlannerSeed): string {
   const hasExcerpts = !!(seed.codeContextExcerpts && seed.codeContextExcerpts.length > 0);
   const hasGraph = !!(seed.projectGraphSlice && seed.projectGraphSlice.trim().length > 0);
   const hasExploreCache = !!(seed.explorationCache && seed.explorationCache.length > 0);
+  const hasTabs = !!(seed.tabInventoryBlock && seed.tabInventoryBlock.trim().length > 0);
   if (
     !hasCatalog
     && !hasExcerpts
     && !hasGraph
     && !hasExploreCache
+    && !hasTabs
     && !seed.priorMemoryRendered
     && !seed.priorDesignMemoryRendered
   ) {
@@ -67,6 +69,11 @@ export function buildSeedFirstToolGuidance(seed: PlannerSeed): string {
   if (hasCatalog) lines.push("- ENDPOINT CATALOG is authoritative for API routes — do NOT web_search for routes already listed.");
   if (hasExcerpts) lines.push("- PRE-FETCHED EXCERPTS show real file heads — cite these before opening more files.");
   if (hasGraph) lines.push("- PROJECT MAP summarizes cross-run structure — use it before broad directory walks.");
+  if (hasTabs) {
+    lines.push(
+      "- DISK TAB INVENTORY lists existing tab titles — do NOT invent todos for topics already listed; only new topics.",
+    );
+  }
   if (hasExploreCache) {
     lines.push("- PRIOR EXPLORE BRIEF captures an earlier repo tour — reuse it; do NOT repeat broad scans.");
   }
@@ -130,6 +137,11 @@ export function buildPlannerGroundingBlocks(seed: PlannerSeed, model?: string): 
     : "";
 
   const explorationCacheBlock = buildExplorationCacheBlock(seed.explorationCache);
+  const tabInventoryBlock =
+    seed.tabInventoryBlock && seed.tabInventoryBlock.trim().length > 0
+      ? `${seed.tabInventoryBlock.trim()}\n\n` +
+        "GUIDANCE: only plan NEW tab topics not already listed; skip or mark met work that is already on disk.\n\n"
+      : "";
 
   const prefix =
     designBlock +
@@ -138,6 +150,7 @@ export function buildPlannerGroundingBlocks(seed: PlannerSeed, model?: string): 
     priorBlock +
     userChatBlock +
     endpointCatalogBlock +
+    tabInventoryBlock +
     explorationCacheBlock +
     systemMapBlock +
     buildSeedFirstToolGuidance(seed);

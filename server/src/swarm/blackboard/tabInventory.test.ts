@@ -7,6 +7,8 @@ import {
   extractRequestedTabTopics,
   tabSkipContradictsInventory,
   todoLikelyNeedsTabInventory,
+  selectPathsForTabInventory,
+  seedLikelyNeedsTabInventory,
 } from "./tabInventory.js";
 
 const SAMPLE_HTML = `
@@ -74,6 +76,27 @@ describe("tabInventory", () => {
       inv,
     );
     assert.equal(r.contradicts, false);
+  });
+
+  it("selectPathsForTabInventory prefers directive keyword hits", () => {
+    const paths = selectPathsForTabInventory(
+      ["a/foo.html", "b/diff_geometry.html", "c/other.md", "d/gr.html"],
+      "add tabs to 14_diff_geometry and general relativity",
+      4,
+    );
+    assert.ok(paths.some((p) => /diff_geometry/i.test(p)));
+    assert.ok(!paths.includes("c/other.md"));
+  });
+
+  it("seedLikelyNeedsTabInventory detects HTML education repos", () => {
+    assert.equal(
+      seedLikelyNeedsTabInventory("Add 5 new tabs with canvas", ["1.html", "2.html"]),
+      true,
+    );
+    assert.equal(
+      seedLikelyNeedsTabInventory("fix typo in utils", ["src/utils.ts"]),
+      false,
+    );
   });
 
   it("replan auto-skip signal: covered topics do not contradict", () => {

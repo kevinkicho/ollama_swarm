@@ -91,6 +91,21 @@ describe("dual-path cascade — 926054b0 emit-only repair", () => {
     assert.ok(REPLAN_MGR_SRC.includes("todoLikelyNeedsTabInventory"));
   });
 
+  it("council primary uses worker tools (git-native); repair stays emit-only", () => {
+    assert.ok(COUNCIL_ATTEMPT.includes('resolveToolProfile("worker"') || COUNCIL_ATTEMPT.includes("resolveToolProfile(\"worker\""));
+    assert.ok(COUNCIL_ATTEMPT.includes("primaryMaxTools") || COUNCIL_ATTEMPT.includes("maxToolTurns: primaryMaxTools"));
+    // Grounded repair / opts.repairFrom still emit-only
+    assert.ok(COUNCIL_ATTEMPT.includes("EMIT_ONLY_PROFILE_ID"));
+    const primaryIdx = COUNCIL_ATTEMPT.indexOf("resolveToolProfile(\"worker\"");
+    const repairIdx = COUNCIL_ATTEMPT.indexOf("agentName: EMIT_ONLY_PROFILE_ID");
+    assert.ok(primaryIdx > 0, "primary must resolve worker profile");
+    assert.ok(repairIdx > primaryIdx, "emit-only remains for repair path");
+  });
+
+  it("BB parse cascade records cycleIntegrity on exhaustion", () => {
+    assert.ok(CASCADE.includes("recordCycleFail"));
+  });
+
   it("planner + replanner soft-repair before extra emit", () => {
     assert.ok(PLANNER_REC.includes("repairAndParseJson"));
     assert.ok(PLANNER_REC.includes("soft-repair"));

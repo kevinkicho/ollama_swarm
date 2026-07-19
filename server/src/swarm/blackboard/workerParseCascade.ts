@@ -449,6 +449,16 @@ export async function runWorkerParseCascade(
       "repair",
     );
     ctx.bumpRejectedAttempts(agent.id);
+    // RR-D: surface parse thrash in cycleIntegrity (council already records).
+    try {
+      const runId = ctx.getActive()?.runId;
+      if (runId) {
+        const { recordCycleFail } = await import("../cycleIntegrityStats.js");
+        recordCycleFail(parsed.reason, runId, todo.id);
+      }
+    } catch {
+      /* best-effort metrics */
+    }
     return { ok: false, outcome: "stale" };
   }
 

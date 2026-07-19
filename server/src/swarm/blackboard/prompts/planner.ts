@@ -583,6 +583,11 @@ export interface PlannerSeed {
   projectGraphSlice?: string;
   /** Prior explore turns from contract/todos/council — injected to skip repo re-tours. */
   explorationCache?: import("@ollama-swarm/shared/explorationCache").ExplorationCacheEntry[];
+  /**
+   * Disk tab inventory for multi-tab HTML (1963ce25). Planner/first-pass must
+   * not mint "add tabs that already exist" without this ground truth.
+   */
+  tabInventoryBlock?: string;
 }
 
 /** Shared research-tools guidance for planner/worker prompts. */

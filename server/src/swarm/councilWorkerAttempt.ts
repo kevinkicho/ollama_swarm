@@ -21,7 +21,7 @@ import { mergeAnchorsForTodo } from "./grounding/mergeAnchors.js";
 import { repairAndParseJson } from "./repairJson.js";
 import { promptWithFailoverAuto } from "./promptWithFailoverAuto.js";
 import { extractProviderText } from "./councilUtils.js";
-import { isWebToolsEnabled } from "./toolProfiles.js";
+import { isWebToolsEnabled, resolveToolProfile } from "./toolProfiles.js";
 import { EMIT_ONLY_PROFILE_ID } from "../../../shared/src/toolProfiles.js";
 import { makeBufferedToolHandler, peekPendingToolTrace } from "./toolCallTranscript.js";
 import { wrapProgressContextForPrompt } from "./councilProgressLedger.js";
@@ -214,15 +214,19 @@ export async function tryWorkerPrompt(
     ctx.promptSignal?.addEventListener("abort", onPromptAbort, { once: true });
     ctx.registerTodoAbort?.(agent.id, controller);
     try {
-    // Live eee6718f/9f449937: workers with tool budgets emitted <think>-only
-    // blobs and failed JSON parse 10–50×. Literature already ran separately;
-    // file windows are in the prompt — emit-only + ollamaFormat json forces
-    // an envelope. formatExpect still arms the stream sniff.
+    // Git-native primary: write/edit tools so workers can mutate disk then
+    // finish with {workingTree:true} (disk-first recovers missing envelopes).
+    // Repair/grounded paths stay EMIT_ONLY (926054b0 tool-coach thrash).
+    // formatExpect + ollamaFormat json still force a finish envelope.
+    const primaryProfile = opts.repairFrom
+      ? (EMIT_ONLY_PROFILE_ID as ReturnType<typeof resolveToolProfile>)
+      : resolveToolProfile("worker", state.cfg);
+    const primaryMaxTools = opts.repairFrom ? 1 : 16;
     const raw = await promptWithFailoverAuto(agent, basePrompt, {
       manager: state.manager as any,
-      agentName: EMIT_ONLY_PROFILE_ID,
+      agentName: primaryProfile,
       signal: controller.signal,
-      maxToolTurns: 1,
+      maxToolTurns: primaryMaxTools,
       formatExpect: "json",
       ollamaFormat: "json" as const,
       activity: { kind: "worker", label: `todo ${todo.id.slice(0, 8)}` },

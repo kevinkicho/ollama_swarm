@@ -118,6 +118,75 @@ export function todoLikelyNeedsTabInventory(
   return expectedFiles.some((f) => /\.html?$/i.test(f));
 }
 
+/**
+ * Pick HTML (and similar) paths most relevant to a directive for inventory.
+ * Prefer basename keyword hits; fall back to first N html files.
+ */
+export function selectPathsForTabInventory(
+  repoFiles: readonly string[],
+  directive?: string,
+  maxFiles: number = 8,
+): string[] {
+  const html = repoFiles.filter((f) => /\.html?$/i.test(f));
+  if (html.length === 0) return [];
+  const d = (directive ?? "").toLowerCase();
+  const tokens = d
+    .split(/[^a-z0-9_]+/i)
+    .filter((t) => t.length >= 4 && !/^(html|file|page|with|from|that|this|into|tabs?)$/i.test(t));
+  if (tokens.length === 0 || !d.trim()) {
+    return html.slice(0, maxFiles);
+  }
+  const scored = html.map((p) => {
+    const base = p.toLowerCase();
+    let score = 0;
+    for (const t of tokens) {
+      if (base.includes(t)) score += 3;
+    }
+    if (/\btab\b|switchtab|role=.tab/i.test(base)) score += 1;
+    return { p, score };
+  });
+  scored.sort((a, b) => b.score - a.score || a.p.localeCompare(b.p));
+  const hits = scored.filter((s) => s.score > 0).map((s) => s.p);
+  if (hits.length > 0) return hits.slice(0, maxFiles);
+  return html.slice(0, maxFiles);
+}
+
+/** Whether planner/first-pass should load tab inventory for this directive/repo. */
+export function seedLikelyNeedsTabInventory(
+  directive: string | undefined,
+  repoFiles: readonly string[],
+): boolean {
+  const d = (directive ?? "").toLowerCase();
+  if (/\btabs?\b|\btab bar\b|\btablist\b|switchtab|canvas animation|\.html\b/i.test(d)) {
+    return true;
+  }
+  // Many multi-page HTML education/demo repos without "tab" in the directive.
+  const htmlCount = repoFiles.filter((f) => /\.html?$/i.test(f)).length;
+  return htmlCount >= 3 && (/\badd\b|\bnew\b|\bexpand\b|\banimation/i.test(d) || htmlCount >= 8);
+}
+
+/**
+ * Read selected paths and build a renderable inventory block.
+ * `readFile` returns null when missing.
+ */
+export async function loadTabInventoryBlock(
+  paths: readonly string[],
+  readFile: (path: string) => Promise<string | null>,
+): Promise<string | undefined> {
+  if (paths.length === 0) return undefined;
+  const contents: Record<string, string | null> = {};
+  for (const p of paths) {
+    try {
+      contents[p] = await readFile(p);
+    } catch {
+      contents[p] = null;
+    }
+  }
+  const inventories = buildTabInventories(contents, paths);
+  const block = renderTabInventoryBlock(inventories);
+  return block || undefined;
+}
+
 export function buildTabInventories(
   fileContents: Record<string, string | null | undefined>,
   paths?: readonly string[],
